@@ -164,3 +164,66 @@ fix the four measured causes. AC-PER-2, AC-PER-3, AC-PER-8 and AC-PER-11 are ame
       ids of `no_capture` locations). This covers a hint that names only the parent module, e.g. "Node 2" from
       inside crew quarters. Data from a lab window whose summary mentions "toilet" is lost; that over-privacy is
       accepted.
+
+## Amendments: omni output budget and truncation salvage (cluster integration 2026-10-17)
+
+Measured on the cluster (vLLM-Omni, Qwen2.5-Omni-7B fp16 TP2 on T4, real NASA ISS tour video, 53 window
+requests): about 2,200 prompt tokens and about **1,000 generated tokens** per request at about 28 tok/s, so about
+36 s per window against a 4 s stride. **18 of 53 (34 %) finished with `length`** at `max_tokens` = 1500: the JSON
+was cut off, failed validation, was retried (another ~55 s) and then dropped. AC-PER-24 to AC-PER-28 amend AC-PER-3
+(and AC-PER-4 for the shared prompt and reply handling).
+
+- AC-PER-24 **Output budget in the prompt** (amends AC-PER-3, AC-PER-20). The system prompt (shared by the chat and
+  realtime clients) states an explicit budget:
+  - at most `omni_max_objects` objects (default 12), the most salient or inventory-relevant first;
+  - each `description` 12 words or fewer; `attributes` only when they add identifying information (label text,
+    serial, colour that tells two items apart), otherwise omitted;
+  - at most 8 people and at most 8 events; `scene_summary` one short sentence;
+  - `transcript`: when the deployment has an ASR endpoint (`ASR_URL`; ASR is the transcript of record, see
+    replay), the prompt says `transcript` must be `""`; without ASR it asks for the intelligible speech verbatim
+    and `""` when nothing intelligible is said (never a placeholder such as "No speech detected");
+  - the reply is ONE compact JSON object on a single line (no indentation, no line breaks, no code fences) with no
+    prose before or after it;
+  - keys in schema order `scene_summary, location_hint, objects, people, events, transcript, audio_events`, and
+    `location_hint` always present (`null` when unknown), so a cut-off reply still carries the location first
+    (AC-PER-26 relies on this).
+- AC-PER-25 **Config** (env, validated like the other numbers; ConfigError otherwise):
+  - `OMNI_MAX_TOKENS` (default 700, integer 1..32768) is the request's `max_tokens`;
+  - `OMNI_MAX_OBJECTS` (default 12, integer 1..40, the schema's `maxItems`) is the prompt cap and the client cap
+    (AC-PER-27);
+  - `OMNI_REPETITION_PENALTY` (default 1.05, > 0 and <= 2; temperature 0 loops on repeated objects) is sent as
+    `repetition_penalty` only when it is not 1.0;
+  - `OMNI_TRUNCATED_CONFIDENCE` (default 0.5, <= 1) caps the sighting confidence of a salvaged window.
+  `create_omni_client` passes these to the chat client (and the prompt settings to the realtime client).
+- AC-PER-26 **Truncation salvage.** When a reply's top-level JSON object is not complete (finish_reason `length`,
+  or the JSON stops parsing part-way), the client recovers an observation from the complete prefix:
+  - parsing uses the JSON decoder itself, value by value, so braces, brackets, escaped quotes and `\u` escapes
+    inside strings never count as structure;
+  - `objects`, `people`, `events` and `audio_events` keep only array elements that are fully closed; a partial
+    element is dropped whole (a cut-off `moved` event is never reported);
+  - top-level strings (`scene_summary`, `location_hint`, `transcript`) are kept only when closed; a cut-off
+    `transcript` becomes `""`;
+  - missing required fields are filled with schema-valid empties;
+  - *privacy (fail closed):* salvage requires a complete `scene_summary` **and** a complete `location_hint` (string
+    or null). A reply cut before or inside `location_hint` might have named crew quarters or the WHC, so it is not
+    salvaged;
+  - the result must validate against `observation.schema.json` and must carry something (a non-empty
+    `scene_summary`, or at least one object, person or event); otherwise the existing invalid path applies
+    (repair retry, then `invalid`);
+  - a salvaged reply is **not retried**. `OmniResult.truncated` is True (a sidecar flag; the schema-validated
+    observation is unchanged, its schema has `additionalProperties: false`).
+  A complete JSON object that is schema-invalid is not salvaged (repair retry, as before). The reconciler logs a
+  truncated window, caps its sighting confidence at `omni_truncated_confidence`, and writes no `stock_updates`
+  for it (AC-PER-9 counts from an incomplete list would overwrite the stock with an undercount).
+- AC-PER-27 **Client-side object cap.** After parsing (full or salvaged), at most `omni_max_objects` objects are
+  kept. Selection is label-diverse: first the highest-confidence listing of each distinct (normalised) label, by
+  confidence, then the remaining listings by confidence; kept objects stay in reply order. So the only listing of
+  any label, including an unknown object that NASA should review, is dropped only when the window has more than
+  `omni_max_objects` distinct labels each listed with higher confidence. The number dropped is
+  `OmniResult.dropped_objects`; a window with dropped objects writes no `stock_updates` (same reason as above).
+  The cap is applied before schema validation, so a reply with more than 40 objects is capped rather than
+  rejected.
+- AC-PER-28 **Usage logging.** Every omni request logs one `omni usage` record with `window`, `attempt`,
+  `prompt_tokens`, `completion_tokens`, `finish_reason`, `latency_ms`, `truncated` and `dropped_objects`
+  (`usage` from the OpenAI-compatible response; null when the server sends none). `OmniResult` carries
+  `finish_reason`, `prompt_tokens` and `completion_tokens` (summed over attempts).

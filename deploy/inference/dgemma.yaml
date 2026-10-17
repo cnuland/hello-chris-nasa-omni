@@ -153,6 +153,7 @@ spec:
         - --tokenizer=$(MODEL_ID)
         - --model=dgemma
         - --canvas=64
+        - --no-constrained   # label-only 'diffusion_constrained' reads need TP1; on TP4 they raise and kill the EngineCore
         - --host=0.0.0.0
         - --port=8011
         env:

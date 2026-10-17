@@ -106,3 +106,13 @@ I need from you.
 22. **DiffusionGemma memory.** It hit OOM at 0.80 GPU utilisation under perception's bursty decision traffic, so it now
     runs at 0.72. While it was down, every same-or-new decision fell back to NEW, which is the safe default
     (duplicates are flagged for review instead of wrongly merged).
+23. **DiffusionGemma `--no-constrained`.** The decision sidecar's default "constrained" label-only reads require
+    tensor parallel 1. On our TP4 deployment a request raised `diffusion_constrained needs tensor parallel 1`, and that
+    error killed the whole vLLM EngineCore, which looks like an upstream robustness bug worth reporting. It is now
+    disabled, at about 25% more GPU time per decision. Final memory settings: 0.78 utilisation, max-model-len 4096,
+    max-num-seqs 1.
+24. **Queued: event dedup within a window.** One window produced three identical `used` events for the same drill and
+    actor at the same timestamp, with confidence 0.7/0.5/0.4. AC-PER-10 dedups across windows (10 s), but not
+    repeats inside one omni reply. Queued for perception after the omni-budget work.
+25. **Dashboard polish (not blocking):** recent events show the item ID (`item 550f3b9d`) rather than its label.
+    Screenshots of the live dashboard are in docs/screenshots/.

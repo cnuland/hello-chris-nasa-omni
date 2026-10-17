@@ -127,8 +127,18 @@ class NameArgs(_Args):
     name: str = Field(..., min_length=1, max_length=200, description="Item label or catalog name, e.g. 'drill'")
 
 
+#: Event types that count as someone handling an item (contract event.event_type minus plain `seen` sightings).
+HANDLING_EVENT_TYPES: tuple[str, ...] = (
+    "moved", "used", "handed_over", "added", "removed", "stowed", "unstowed", "consumed",
+)
+HandlingEventType = Literal["moved", "used", "handed_over", "added", "removed", "stowed", "unstowed", "consumed"]
+
+
 class WhoMovedArgs(NameArgs):
-    since: AwareDatetime | None = Field(None, description="Only moves at or after this ISO-8601 time")
+    since: AwareDatetime | None = Field(None, description="Only events at or after this ISO-8601 time")
+    event_types: list[HandlingEventType] | None = Field(
+        None, min_length=1, max_length=8, description="Only these handling event types (default: all of them)"
+    )
 
 
 class ListUnknownsArgs(_Args):
@@ -382,8 +392,9 @@ class Toolbox:
             ),
             _ToolDef(
                 "who_moved",
-                "Who moved an item (actor described by role/appearance), from where to where and "
-                "when; optionally only since a given time.",
+                "Who moved, used, handed over, stowed or otherwise handled an item (actor described by "
+                "role/appearance), what they did, from where to where and when; optionally only since a given "
+                "time or only some event_types.",
                 WhoMovedArgs,
                 self._who_moved,
             ),
@@ -643,10 +654,14 @@ class Toolbox:
         data = []
         citations = []
         for item in items:
-            params: dict[str, Any] = {"entity_id": item["entity_id"], "type": "moved", "limit": 20}
+            wanted = set(a.event_types or HANDLING_EVENT_TYPES)
+            # GET /events takes one `type`: ask for it when only one is wanted, else filter here.
+            params: dict[str, Any] = {"entity_id": item["entity_id"], "limit": 50}
+            if len(wanted) == 1:
+                params["type"] = next(iter(wanted))
             if a.since is not None:
                 params["after"] = _iso(a.since)
-            events = await self.inventory.list_events(params)
+            events = [e for e in await self.inventory.list_events(params) if e.get("event_type") in wanted][:20]
             if not events:
                 continue
             moves = [
@@ -654,6 +669,7 @@ class Toolbox:
                     k: e.get(k)
                     for k in (
                         "event_id",
+                        "event_type",
                         "actor_desc",
                         "from_location",
                         "to_location",

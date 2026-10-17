@@ -284,3 +284,19 @@ which the `CatalogItem` schema in `inventory-api.yaml` does not list; propose ad
 server-side `q`/`category`/`is_fungible` filters to `GET /catalog` if the catalog grows beyond a few hundred rows (the
 agent filters client-side over a 300 s cache today). Propose an e2e contract test for `lookup_catalog` in
 `tests/e2e/test_e2e_pipeline.py::test_e2e_09` (not added: outside this task's scope).
+
+## who_moved covers handling events (cluster integration finding, 2026-10-17)
+
+**Found live:** "Who was using the drill?" got "I don't have a record of that." The pipeline had recorded three
+`used` events for that drill, by "Astronaut in blue space suit", but `who_moved` only requested `/events?type=moved`.
+
+- **Spec (AC-AGT-2 amendment):** `who_moved` covers every handling event type by default (moved, used, handed_over,
+  added, removed, stowed, unstowed, consumed), but not plain `seen` sightings. The optional `event_types` (enum)
+  narrows the set. Each returned entry includes its `event_type`. `GET /events` takes a single `type`, so the type is
+  sent only when exactly one is wanted; otherwise results are filtered client-side (limit 50, keep 20).
+- **Red:** 3 of 4 new tests failed (tests/test_ac_agt_02_who_handled.py). The fourth, which rejects unknown types,
+  already passed because extra arguments are forbidden; it now checks enum validation.
+- **Green:** 340 passed, ruff clean.
+- **Test change:** `test_ac_agt_02_who_moved_returns_actor_and_time` asserted `type == ["moved"]` on the default
+  request. That pinned the bug. It now asserts that no type restriction is sent by default. The entity_id assertion
+  is unchanged.

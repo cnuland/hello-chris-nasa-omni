@@ -196,7 +196,9 @@ async def test_ac_agt_02_who_moved_returns_actor_and_time(toolbox, fake_inventor
     assert "crew member, red shirt" in b and "2026-10-01T11:00" in b
     assert any(c.get("entity_id") == E_CAMERA for c in r.citations)
     ev_params = fake_inventory.params(fake_inventory.calls("/events")[-1])
-    assert ev_params.get("type") == ["moved"]
+    # default covers every handling type (moved, used, handed_over, ...), filtered client-side: see
+    # test_ac_agt_02_who_handled.py and docs/tdd-log/agent.md "who_moved covers handling events"
+    assert ev_params.get("type") is None
     assert ev_params.get("entity_id") == [E_CAMERA]
 
 
