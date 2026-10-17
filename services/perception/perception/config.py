@@ -11,7 +11,10 @@ Environment variables (all optional unless noted):
   PERCEPTION_DETECT_LONG_SIDE (AC-PER-21, default 1280, 0 = detect on the omni image, max 4096),
   PERCEPTION_MIN_CROP_PX (AC-PER-22, default 32), PERCEPTION_NO_EXEMPLAR_MATCH_S (AC-PER-22, default 600),
   PERCEPTION_CONSOLIDATE_IOU (AC-PER-19, default 0.5, <= 1),
-  PERCEPTION_HINT_CONFLICT_CONFIDENCE (AC-PER-23, default 0.5, <= 1).
+  PERCEPTION_HINT_CONFLICT_CONFIDENCE (AC-PER-23, default 0.5, <= 1),
+  OMNI_MAX_TOKENS (AC-PER-25, default 700, 1..32768), OMNI_MAX_OBJECTS (AC-PER-25/27, default 12, 1..40),
+  OMNI_REPETITION_PENALTY (AC-PER-25, default 1.05, > 0 and <= 2; not sent when 1.0),
+  OMNI_TRUNCATED_CONFIDENCE (AC-PER-26, default 0.5, <= 1).
 
 A camera that has no entry in the camera -> location map is treated as no_capture (fail closed), and the CLI refuses
 to start for it.
@@ -42,6 +45,11 @@ class PerceptionConfig:
     omni_url: str | None = None
     omni_model: str = "Qwen/Qwen2.5-Omni-7B"
     omni_realtime: bool = False
+    # AC-PER-24..27 omni output budget and truncation salvage
+    omni_max_tokens: int = 700
+    omni_max_objects: int = 12
+    omni_repetition_penalty: float = 1.05
+    omni_truncated_confidence: float = 0.5  # sighting confidence cap for a salvaged (truncated) window
     decision_url: str | None = None
     decision_model: str = "google/diffusiongemma-26B-A4B-it"
     asr_url: str | None = None
@@ -108,6 +116,8 @@ class PerceptionConfig:
                 kwargs[name] = _parse_number(var, value, kind)
                 if name in _MAX_VALUES and kwargs[name] > _MAX_VALUES[name]:
                     raise ConfigError(f"{var} must be <= {_MAX_VALUES[name]:g}, got {value!r}")
+                if name in _POSITIVE and kwargs[name] <= 0:
+                    raise ConfigError(f"{var} must be > 0, got {value!r}")
         if env.get("PERCEPTION_DEVICE", "").strip():
             kwargs["device"] = _parse_device(env["PERCEPTION_DEVICE"])
         if env.get("OMNI_REALTIME", "").strip():
@@ -154,6 +164,10 @@ _NUMBER_VARS: dict[str, tuple[str, type]] = {
     "no_exemplar_match_s": ("PERCEPTION_NO_EXEMPLAR_MATCH_S", float),
     "consolidate_iou": ("PERCEPTION_CONSOLIDATE_IOU", float),
     "hint_conflict_confidence": ("PERCEPTION_HINT_CONFLICT_CONFIDENCE", float),
+    "omni_max_tokens": ("OMNI_MAX_TOKENS", int),
+    "omni_max_objects": ("OMNI_MAX_OBJECTS", int),
+    "omni_repetition_penalty": ("OMNI_REPETITION_PENALTY", float),
+    "omni_truncated_confidence": ("OMNI_TRUNCATED_CONFIDENCE", float),
 }
 
 # Upper bounds checked by from_env (inclusive).
@@ -162,7 +176,13 @@ _MAX_VALUES: dict[str, float] = {
     "detect_long_side": MAX_DETECT_LONG_SIDE,
     "consolidate_iou": 1.0,
     "hint_conflict_confidence": 1.0,
+    "omni_max_tokens": 32768,
+    "omni_max_objects": 40,  # observation.schema.json objects.maxItems
+    "omni_repetition_penalty": 2.0,
+    "omni_truncated_confidence": 1.0,
 }
+# Must be strictly positive (checked by from_env).
+_POSITIVE = {"omni_max_tokens", "omni_max_objects", "omni_repetition_penalty"}
 
 _DEVICE_RE = re.compile(r"^(cpu|auto|cuda(:[0-9]+)?)$")
 

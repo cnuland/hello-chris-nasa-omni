@@ -18,8 +18,7 @@ from typing import Any
 import numpy as np
 
 from .media import resample_pcm16
-from .omni import build_system_prompt, frame_data_uri
-from .schema import parse_observation
+from .omni import DEFAULT_MAX_OBJECTS, build_system_prompt, frame_data_uri, interpret_reply
 from .types import OmniResult, Window
 
 logger = logging.getLogger(__name__)
@@ -30,13 +29,24 @@ _TEXT_DELTAS = ("response.output_text.delta", "response.text.delta")
 
 
 class RealtimeOmniClient:
-    def __init__(self, ws_url: str, *, model: str, catalog_names: Sequence[str] = (), timeout_s: float = 60.0):
+    def __init__(
+        self,
+        ws_url: str,
+        *,
+        model: str,
+        catalog_names: Sequence[str] = (),
+        timeout_s: float = 60.0,
+        max_objects: int = DEFAULT_MAX_OBJECTS,
+        asr_transcript: bool = False,
+    ):
         """``ws_url`` is the server root (``ws://host:port``); the client connects to ``/v1/realtime?duplex=0``.
-        An ``http(s)://`` root is converted to ``ws(s)://``."""
+        An ``http(s)://`` root is converted to ``ws(s)://``. ``max_objects`` / ``asr_transcript``: AC-PER-24/27."""
         self.ws_url = ws_url
         self.model = model
         self.catalog_names = list(catalog_names)
         self.timeout_s = timeout_s
+        self.max_objects = max_objects
+        self.asr_transcript = asr_transcript
 
     @property
     def endpoint(self) -> str:
@@ -53,7 +63,9 @@ class RealtimeOmniClient:
             "model": self.model,
             "modalities": ["text"],
             "output_modalities": ["text"],
-            "instructions": build_system_prompt(self.catalog_names, context),
+            "instructions": build_system_prompt(
+                self.catalog_names, context, max_objects=self.max_objects, asr_transcript=self.asr_transcript
+            ),
         }
         content: list[dict[str, Any]] = [
             {
@@ -92,7 +104,7 @@ class RealtimeOmniClient:
         final_text: str | None = None
 
         def result(
-            status: str, raw: str = "", error: str | None = None, observation: dict[str, Any] | None = None
+            status: str, raw: str = "", error: str | None = None, observation: dict[str, Any] | None = None, **kw: Any
         ) -> OmniResult:
             return OmniResult(
                 status=status,
@@ -101,6 +113,7 @@ class RealtimeOmniClient:
                 model=self.model,
                 latency_ms=int((time.monotonic() - started) * 1000),
                 error=error,
+                **kw,
             )
 
         try:
@@ -131,7 +144,9 @@ class RealtimeOmniClient:
             )
             return result("error", "".join(text_parts), f"{type(exc).__name__}: {exc}")
         raw = "".join(text_parts) or (final_text or "")
-        observation, errors = parse_observation(raw)
-        if observation is None:
-            return result("invalid", raw, "; ".join(errors[:5]))
-        return result("ok", raw, observation=observation)
+        reply = interpret_reply(raw, max_objects=self.max_objects)
+        if reply.observation is None:
+            return result("invalid", raw, "; ".join(reply.errors[:5]))
+        return result(
+            "ok", raw, observation=reply.observation, truncated=reply.truncated, dropped_objects=reply.dropped_objects
+        )

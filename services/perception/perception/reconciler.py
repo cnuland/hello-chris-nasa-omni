@@ -279,6 +279,7 @@ class _WindowContext:
         self.location = location
         self.no_capture = no_capture
         self.hint_conflict = hint_conflict
+        self.truncated = False  # AC-PER-26: the omni observation was salvaged from a cut-off reply
         self._frame_uris: dict[int, str | None] = {}
         self._crops: dict[int, str | None] = {}
         self.decisions: list[dict[str, Any]] = []
@@ -453,7 +454,14 @@ class Reconciler:
                 "location hint names another module than the fixed camera; sightings get low confidence",
                 extra={"camera_id": self.camera_id, "camera_location": camera_location, "location": location},
             )
+        if omni.truncated:
+            logger.warning(
+                "omni reply truncated and salvaged; sightings get low confidence and no stock updates",
+                extra={"camera_id": self.camera_id, "window": window.index,
+                       "objects": len(obs.get("objects") or []), "finish_reason": omni.finish_reason},
+            )
         ctx = _WindowContext(self, window, location, no_capture, scope.hint_conflict)
+        ctx.truncated = omni.truncated
         dets = [list(detections[i]) if i < len(detections) else [] for i in range(len(window.frames))]
 
         observed = self._link(window, obs.get("objects") or [], dets)
@@ -490,13 +498,22 @@ class Reconciler:
             window_doc["raw_uri"] = self.storage.put(
                 raw_key(self.camera_id, window.t_end), raw.encode("utf-8"), "application/json"
             )
+        stock_updates = self._stock_updates(ctx, fungible, dets)
+        if stock_updates and omni.incomplete:
+            # AC-PER-26/27: counts from a cut-off or capped object list are lower bounds; stock is overwritten
+            # with est_count, so an incomplete window writes no stock update rather than an undercount
+            logger.info(
+                "incomplete omni observation; stock updates skipped",
+                extra={"window": window.index, "truncated": omni.truncated, "dropped_objects": omni.dropped_objects},
+            )
+            stock_updates = []
         payload: dict[str, Any] = {
             "window": window_doc,
             "assignments": assignments,
             "events": events,
             "reviews": reviews,
             "decisions": ctx.decisions,
-            "stock_updates": self._stock_updates(ctx, fungible, dets),
+            "stock_updates": stock_updates,
         }
         return payload, instances, claims
 
@@ -921,6 +938,8 @@ class Reconciler:
         confidence = _clamp01(o.obj.get("confidence"), 0.5)
         if ctx.hint_conflict:
             confidence = min(confidence, _clamp01(self.config.hint_conflict_confidence, 0.5))
+        if ctx.truncated:  # AC-PER-26 salvaged window
+            confidence = min(confidence, _clamp01(self.config.omni_truncated_confidence, 0.5))
         sighting: dict[str, Any] = {
             "location_id": o.location,
             "seen_at": _iso(seen_at),

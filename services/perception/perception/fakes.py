@@ -17,7 +17,8 @@ import numpy as np
 
 from . import NEW
 from .detector import DEFAULT_MIN_SCORE, filter_detections
-from .schema import empty_observation, parse_observation, validate_observation
+from .omni import interpret_reply
+from .schema import empty_observation, validate_observation
 from .types import AsrResult, AudioChunk, DecisionResult, Detection, OmniResult, Window
 
 DEFAULT_BACKGROUND = (40, 40, 40)
@@ -62,7 +63,7 @@ def make_frame(
 
 class FakeOmni:
     """Scripted omni model: call i returns ``observations[i]``: dict -> validated observation (status ok, or
-    "invalid" if schema-invalid); str -> raw reply parsed like the real client; None -> status "error". Calls past
+    "invalid" if schema-invalid); str -> raw reply parsed like the real client (salvage + cap, AC-PER-26/27); None -> status "error". Calls past
     the end return a valid empty observation. ``calls`` records the windows received."""
 
     def __init__(self, observations: Sequence[dict[str, Any] | str | None] = (), *, model: str = "fake-omni"):
@@ -80,10 +81,11 @@ class FakeOmni:
         if scripted is None:
             return OmniResult(status="error", model=self.model, error="scripted omni failure")
         if isinstance(scripted, str):
-            obs, errors = parse_observation(scripted)
-            if obs is None:
-                return OmniResult(status="invalid", raw=scripted, model=self.model, error="; ".join(errors))
-            return OmniResult(status="ok", observation=obs, raw=scripted, model=self.model)
+            reply = interpret_reply(scripted)  # AC-PER-26/27: salvage + cap like the real client
+            if reply.observation is None:
+                return OmniResult(status="invalid", raw=scripted, model=self.model, error="; ".join(reply.errors))
+            return OmniResult(status="ok", observation=reply.observation, raw=scripted, model=self.model,
+                              truncated=reply.truncated, dropped_objects=reply.dropped_objects)
         raw = json.dumps(scripted)
         errors = validate_observation(scripted)
         if errors:

@@ -12,21 +12,35 @@ from pathlib import Path
 
 import httpx
 import pytest
-from support import obj, observation
+from support import detections_for, obj, observation, scene_window
 from test_ac_per_03_omni_client import CLASS_NAMES, VALID, Recorder, system_text, window
 from test_ac_per_08_reconciler import BOX_A, process
 from test_ac_per_09_10_fungible_events import food_frames, food_objects
 
+from perception import omni as omni_mod
 from perception.config import ConfigError, PerceptionConfig
 from perception.fakes import FakeOmni
-from perception.omni import OmniClient, build_system_prompt, cap_objects, create_omni_client, interpret_reply
+from perception.omni import OmniClient, build_system_prompt, create_omni_client
 from perception.realtime import RealtimeOmniClient
-from perception.salvage import salvage_observation
 from perception.schema import validate_observation
 from perception.types import OmniResult
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "omni_iss_tour_window0.json"
 REAL = json.loads(FIXTURE.read_text())
+
+
+def salvage_observation(text: str):
+    from perception.salvage import salvage_observation as salvage
+
+    return salvage(text)
+
+
+def cap_objects(objects, max_objects):
+    return omni_mod.cap_objects(objects, max_objects)
+
+
+def interpret_reply(raw, **kw):
+    return omni_mod.interpret_reply(raw, **kw)
 
 
 def compact(o) -> str:
@@ -265,7 +279,7 @@ def test_ac_per_26_salvage_in_people_events_and_transcript():
 def test_ac_per_26_salvage_with_prose_and_code_fence_before_the_json():
     text = "Here is the observation:\n```json\n" + REAL_TEXT[: REAL_SPANS[2][1] + 1]
     s = salvage_observation(text)
-    assert s is not None and s["objects"] == REAL["objects"][:2]
+    assert s is not None and s["objects"] == REAL["objects"][:3]
 
 
 def test_ac_per_26_salvage_pretty_printed_reply():
@@ -339,7 +353,7 @@ def test_ac_per_26_complete_reply_is_not_truncated():
 
 def test_ac_per_26_fake_omni_salvages_scripted_cut_replies():
     res = FakeOmni([REAL_TEXT[: REAL_SPANS[2][1]]]).analyze(window())
-    assert res.ok and res.truncated and len(res.observation["objects"]) == 2
+    assert res.ok and res.truncated and len(res.observation["objects"]) == 3
 
 
 # ---- adversarial: strings that look like structure, escapes, unicode
@@ -393,7 +407,8 @@ def test_ac_per_26_privacy_cut_inside_private_location_hint_is_not_salvaged():
     o = observation([obj("laptop", [0.1, 0.1, 0.3, 0.3])], location_hint="Node 2 crew quarters")
     text = compact(o)
     start = text.index('"location_hint"')
-    for offset in range(start, text.index('"objects"')):
+    closing_quote = text.index('"Node 2 crew quarters"') + len('"Node 2 crew quarters"') - 1
+    for offset in range(start, closing_quote + 1):
         assert salvage_observation(text[:offset]) is None, offset
 
 
@@ -403,9 +418,6 @@ def _truncated(objects, **kw) -> OmniResult:
 
 
 def test_ac_per_26_reconciler_caps_confidence_of_a_truncated_window(make_reconciler, inv, caplog):
-    from support import scene_window
-    from test_ac_per_08_reconciler import detections_for
-
     frames = [[("laptop-A", BOX_A)]]
     w = scene_window(frames)
     caplog.set_level(logging.INFO, logger="perception.reconciler")
@@ -426,9 +438,6 @@ def test_ac_per_26_reconciler_untruncated_window_keeps_confidence(make_reconcile
 
 @pytest.mark.parametrize("flags", [{"truncated": True}, {"dropped_objects": 3}])
 def test_ac_per_26_27_incomplete_window_writes_no_stock_updates(make_reconciler, inv, flags):
-    from support import scene_window
-    from test_ac_per_08_reconciler import detections_for
-
     counts = [3, 5]
     frames = food_frames(counts)
     labels = {f"food-{j}": "food package" for j in range(6)}
@@ -489,7 +498,7 @@ def test_ac_per_27_more_than_schema_max_is_capped_not_rejected():
 def test_ac_per_27_interpret_reply_caps_salvaged_objects():
     r = interpret_reply(REAL_TEXT[: REAL_SPANS[10][1]], finish_reason="length", max_objects=4)
     assert r.observation is not None and r.truncated
-    assert len(r.observation["objects"]) == 4 and r.dropped_objects == 6
+    assert len(r.observation["objects"]) == 4 and r.dropped_objects == 7
 
 
 # ================================================================================ AC-PER-28 usage logging
@@ -534,3 +543,84 @@ def test_ac_per_28_missing_usage_is_logged_as_null(caplog):
     (r,) = [r for r in caplog.records if r.getMessage() == "omni usage"]
     assert r.prompt_tokens is None and r.completion_tokens is None
     assert res.prompt_tokens is None and res.completion_tokens is None
+
+
+# ================================================================================ adversarial review round
+def test_review_salvage_skips_prose_that_looks_like_a_json_key():
+    cut = REAL_TEXT[: REAL_SPANS[1][1] + 1]
+    s = salvage_observation('Note: {"a" is how keys start}. ' + cut)
+    assert s is not None and s["objects"] == REAL["objects"][:2]
+
+
+def test_review_salvage_skips_a_complete_non_observation_object_before_the_reply():
+    s = salvage_observation('{"note": "draft"} ' + REAL_TEXT[: REAL_SPANS[0][1] + 1])
+    assert s is not None and s["objects"] == REAL["objects"][:1]
+
+
+def test_review_cap_keeps_objects_referenced_by_events():
+    """Dropping the only listing of an object an event names would make the reconciler drop a real movement."""
+    objs = [obj(f"thing {i}", None, confidence=0.9) for i in range(12)]
+    objs.append(obj("Drill", None, confidence=0.2))
+    o = observation(objs, events=[{"type": "moved", "object_label": "drill", "to_location_hint": "NOD2",
+                                   "confidence": 0.9}])
+    r = interpret_reply(compact(o), max_objects=12)
+    assert "Drill" in [x["label"] for x in r.observation["objects"]]
+    assert r.dropped_objects == 1
+
+
+def test_review_cap_keeps_held_objects():
+    objs = [obj(f"thing {i}", None, confidence=0.9) for i in range(12)]
+    objs.append(obj("wrench", None, confidence=0.2, held_by="P1"))
+    kept, _ = cap_objects(objs, 12)
+    assert "wrench" in [x["label"] for x in kept]
+
+
+def test_review_cap_with_event_labels_argument():
+    objs = [obj("a", confidence=0.9), obj("b", confidence=0.8), obj("c", confidence=0.1)]
+    kept, dropped = omni_mod.cap_objects(objs, 2, keep_labels={"c"})
+    assert [x["label"] for x in kept] == ["a", "c"] and dropped == 1
+
+
+@pytest.mark.parametrize("hint", ["Node 2 crew quarters", "Node 3 WHC module"])
+def test_review_salvaged_private_window_stores_nothing(make_reconciler, inv, storage, hint):
+    """A cut-off reply whose (complete) hint names a no_capture place stays private end to end."""
+    o = observation([obj("laptop", BOX_A), obj("glowing orb", (0.55, 0.5, 0.85, 0.8))], location_hint=hint,
+                    transcript="talking in my quarters")
+    cut = compact(o)
+    cut = cut[: cut.index('"people"') - 1]  # objects complete, everything after cut off
+    res = budget_client(Recorder(envelope(cut, finish_reason="length"))).analyze(window())
+    assert res.ok and res.truncated and res.observation["location_hint"] == hint
+    frames = [[("laptop-A", BOX_A), ("orb-1", (0.55, 0.5, 0.85, 0.8))]]
+    make_reconciler(camera_id="cam-handheld").process(
+        scene_window(frames), res, detections_for(frames, {"laptop-A": "laptop", "orb-1": "glowing orb"}),
+        transcript="talking in my quarters")
+    assert storage.objects == {}
+    p = inv.last
+    assert p.get("reviews", []) == [] and p["window"].get("raw_uri") is None and p["window"]["transcript"] == ""
+
+
+def test_review_cap_keeps_every_distinct_instance_before_repeats():
+    """Found by the eval's truncated profile: label diversity alone let 8 repeats of one laptop crowd out a second,
+    physically different laptop (pairwise_f1 0.34). Distinct instances (label + box, AC-PER-19 IoU) come first."""
+    a, b = [0.1, 0.1, 0.3, 0.3], [0.6, 0.6, 0.8, 0.8]
+    others = [obj(f"tool {i}", [0.4, 0.05 * i, 0.45, 0.05 * i + 0.04]) for i in range(4)]
+    objs = ([obj("laptop", a, frame_index=k % 6) for k in range(8)] + others
+            + [obj("laptop", b, frame_index=k % 6) for k in range(8)])
+    kept, dropped = cap_objects(objs, 12)
+    assert dropped == 8
+    assert {tuple(o["bbox"]) for o in kept if o["label"] == "laptop"} == {tuple(a), tuple(b)}
+    assert all(o in kept for o in others)
+
+
+def test_review_cap_overlapping_boxes_are_one_instance():
+    a, a2, c = [0.1, 0.1, 0.3, 0.3], [0.11, 0.1, 0.31, 0.3], [0.6, 0.6, 0.8, 0.8]
+    objs = [obj("laptop", a, confidence=0.9), obj("laptop", a2, confidence=0.8), obj("drill", c, confidence=0.1)]
+    kept, _ = cap_objects(objs, 2)
+    assert [o["label"] for o in kept] == ["laptop", "drill"]
+
+
+def test_review_cap_boxless_repeats_of_a_label_are_one_instance():
+    objs = [obj("laptop", None, frame_index=k, confidence=0.9) for k in range(3)] + [obj("drill", None,
+                                                                                         confidence=0.2)]
+    kept, _ = cap_objects(objs, 2)
+    assert [o["label"] for o in kept] == ["laptop", "drill"]

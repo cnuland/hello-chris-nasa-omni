@@ -535,3 +535,151 @@ None. No existing test was changed or weakened.
   `PERCEPTION_NO_EXEMPLAR_MATCH_S` (600) and `PERCEPTION_HINT_CONFLICT_CONFIDENCE` (0.5).
 - Entities already duplicated in the cluster DB are not merged by this change. They need operator merges or a DB
   reset.
+
+## Omni output budget and truncation salvage (cluster integration 2026-10-17)
+
+### Measured on the cluster
+
+vLLM-Omni serving Qwen2.5-Omni-7B (fp16, TP2, T4 GPUs) on a real NASA ISS tour video. vLLM metrics over 53 window
+requests:
+
+- **Prompt:** about 2,200 tokens per request.
+- **Output:** about **1,000 generated tokens** per request at about 28 tok/s, so a mean latency of about 36 s per
+  window, against a 4 s stride.
+- **Truncation:** **18 of 53 (34 %) finished with `length`** at `max_tokens` = 1500. The cut-off JSON failed
+  validation ("omni reply invalid"), was retried (another ~55 s) and then dropped.
+- **Cause:** a verbose model. The real reply (`tests/fixtures/omni_iss_tour_window0.json`) is pretty-printed, lists
+  each object six times and echoes "No speech detected." as its transcript. That is 3,888 characters
+  pretty-printed (≈ 1,100 tokens, matching the metric), 2,467 compact.
+
+Spec: AC-PER-24 to AC-PER-28 in `docs/spec/20-perception.md` cover the prompt budget, config, truncation salvage,
+the client-side object cap and usage logging.
+
+### Red
+
+New file: `tests/test_ac_per_24_28_output_budget.py`. The new names are imported lazily, so each test fails on its
+own rather than the whole module failing at collection.
+
+- **Result:** **76 failed, 1 passed** (the guard that an untruncated window keeps its confidence).
+- **Failure reasons:**
+  - `perception.salvage` missing (25);
+  - ConfigError not raised for the new vars (14);
+  - `cap_objects` / `interpret_reply` missing;
+  - unexpected keyword arguments (`max_objects`, `asr_transcript`, `repetition_penalty`, `truncated`,
+    `omni_max_tokens`);
+  - 2 requests where 1 was expected (salvaged replies were still retried);
+  - no `omni usage` log record.
+
+  Every failure was a missing feature, not a test bug.
+
+Cases covered:
+
+- **Prompt:** caps, salience order, the 12-word description limit, attributes, 8 people and 8 events, compact
+  single-line JSON with no prose or fences, key order with `location_hint` always present, and the ASR-dependent
+  transcript rule. The realtime client shares the same prompt.
+- **Config:** defaults, env parsing, and 14 bad values.
+- **Request body:** `max_tokens` and `repetition_penalty`, which is absent when it is 1.0.
+- **Salvage on real data:** the fixture serialised compactly and cut at 7 named offsets:
+  - mid-string;
+  - mid-object;
+  - mid-bbox array;
+  - just after a closing brace;
+  - just after the following comma;
+  - just before a closing brace;
+  - inside the first object.
+
+  Each salvaged result validates and keeps exactly the complete objects. An exhaustive test also cuts at every
+  byte offset of the real reply.
+- **Other salvage cases:** cuts in people, events, transcript and audio_events; prose and code fences before the
+  JSON; a pretty-printed reply.
+- **No salvage:** 8 cases with nothing usable or a private hint; a complete schema-invalid object.
+- **`length` envelope:** salvaged with **no retry**. An unterminated reply with `stop` is also salvaged. An
+  unsalvageable `length` reply keeps the repair path. Salvage also works on the repair attempt.
+- **Reconciler:** the truncated flag caps confidence and logs a warning. Truncated or capped windows write no
+  stock updates.
+- **Usage logging:** one record per attempt, token sums, the truncated flag, and null usage.
+
+### Green
+
+New module `perception/salvage.py`:
+
+- It walks the top-level object and decodes each value with `json.JSONDecoder.raw_decode`.
+- Arrays keep only the elements that decode whole.
+- A top-level number at the end of the text is treated as cut off.
+- It requires a complete `scene_summary` and `location_hint`.
+- It fills the empty fields, validates, and rejects a result with nothing useful in it.
+
+Changes to `perception/omni.py`:
+
+- `build_system_prompt(..., max_objects, asr_transcript)`.
+- `cap_objects` and `interpret_reply`: the first complete object, capped and validated, else the salvaged prefix
+  with `truncated` set.
+- The client sends `max_tokens` = 700 and `repetition_penalty` (only when it is not 1.0), logs `omni usage`
+  (window, attempt, prompt and completion tokens, finish_reason, latency_ms, truncated, dropped_objects) and
+  never retries a salvaged reply.
+- `create_omni_client` passes the config values; `asr_transcript` = `bool(ASR_URL)`.
+
+Other changes:
+
+- `OmniResult` gains the sidecar fields `truncated`, `dropped_objects`, `finish_reason`, `prompt_tokens`,
+  `completion_tokens` and the `incomplete` property.
+- `PerceptionConfig` gains `OMNI_MAX_TOKENS`, `OMNI_MAX_OBJECTS`, `OMNI_REPETITION_PENALTY` and
+  `OMNI_TRUNCATED_CONFIDENCE`, with upper bounds and strictly positive checks.
+- The realtime client uses the same prompt budget and `interpret_reply`. `FakeOmni` interprets scripted strings
+  through `interpret_reply`.
+- The reconciler logs a truncated window, caps its sighting confidence at `omni_truncated_confidence`, and skips
+  stock updates for incomplete windows.
+
+Green: **703 passed, 2 deselected**. ruff clean.
+
+### Adversarial review: findings and fixes (test first)
+
+Review red: **5 failed** (4 in the first round, 1 after the eval finding) **and 3 guards passed**. Two privacy
+guards were also added and passed. Final: **713 passed, 2 deselected**.
+
+| # | Question | Finding | Resolution |
+|---|---|---|---|
+| R1 | Can braces in strings, escaped quotes or unicode fool the salvage parser? | No. Only the JSON decoder decides where a value ends. Tests cover every byte cut of a reply whose strings hold `"{weird}" [label] }],{`, escaped quotes, backslashes, `Ü`, `✓` and an emoji, with `ensure_ascii` both True and False. A cut inside `Ü` drops that element. **Gap:** prose before the reply that looks like a key (`Note: {"a" is ...}`) made salvage give up at the first candidate. | **Fixed.** The parser tries the next `{"` candidate, and complete non-observation objects are stepped over (`test_review_salvage_skips_prose_...`, plus a guard). Residual: a raw control character inside a string stops parsing at that element (strict JSON), the same as the existing parser. |
+| R2 | Can a cut-off `moved` event produce a wrong movement? | No. An element is kept only if it decodes whole. A test cuts at every offset inside a `moved` event, including just before its closing brace, and the event never appears. Events come after objects, so an event's object is always complete. **Gap:** the object *cap* could drop the only listing of an object that an event names. The reconciler then drops the event ("event for an object not observed"), so a real movement is lost. | **Fixed.** Instances named by events, or held by a person, are kept first (`test_review_cap_keeps_objects_referenced_by_events`, `..._held_objects`, `..._with_event_labels_argument`). |
+| R3 | Does the cap drop the only instance of an unknown object? | The first version was label-diverse, so a lone unknown survived. **Gap found by the new eval profile:** a second, physically different object with the *same* label (two laptops) was crowded out by eight per-frame repeats of the first. The eval scored pairwise_f1 0.34 and sighting_recall 0.82. | **Fixed.** Diversity is per *instance*: same label with IoU ≥ 0.5, or a boxless listing, counts as one instance, as in AC-PER-19. Repeats are dropped first (`test_review_cap_keeps_every_distinct_instance_before_repeats`, plus overlap and boxless guards). The eval returned to 1.0 on every gated metric. **Choice:** unknowns get no extra priority over catalog labels. The client cannot run the AC-PER-7 mapping, and non-catalog labels are often clutter. An unknown's only listing is dropped only when the window holds more than 12 distinct instances. Documented in AC-PER-27. |
+| R4 | Is any privacy path affected (no_capture: crew quarters, WHC)? | **Designed in, fail closed.** A reply cut before or inside `location_hint` is never salvaged, because it might have been about to name crew quarters (test: every cut inside "Node 2 crew quarters" gives None). The prompt orders the keys so that the hint comes second. The `scene_summary` privacy check needs a complete summary, which salvage requires. Guard: a salvaged reply with the hint "Node 2 crew quarters" or "Node 3 WHC module" on `cam-handheld` stores nothing (no frames, crops, raw or reviews; empty transcript). | No further change. |
+| R5 | Found while reviewing R3: do truncated or capped windows corrupt stock? | **Yes, as first designed.** `stock` is overwritten with `est_count`, and a cut-off or capped list undercounts fungible items. | Incomplete windows write no `stock_updates` (tests for both flags). Residual (documented in the spec): a model that obeys the prompt budget in a cluttered scene can still under-list without any visible cap. |
+
+### Eval (AC-EVAL-5 scenario "omni reply cut off at max_tokens")
+
+- **New profile.** `GoldOmni` has a new profile `truncated` (`EVAL_OMNI_PROFILE=truncated`). It produces the
+  `repeat_per_frame` reply plus a long transcript echo, serialised compactly and cut inside the transcript. The
+  reply goes through perception's own `interpret_reply` with `finish_reason` `length`, so salvage and the cap are
+  exercised by the real perception code.
+- **Tests.** 4 new tests: profile known, reply cut and salvaged, profile from the environment, and an integration
+  run against the strict gate that also asserts `invalid == 0`. Red: 4 failed (unknown profile).
+- **The gate's catch.** The integration run then failed the gate (pairwise_f1 0.34). The cause was R3 above, fixed
+  test-first. An ad-hoc diagnosis isolated it: without the cap every metric was 1.0, and the truncated flag alone
+  made no difference.
+- **Final runs.**
+  - `make eval`, default profile: gate PASSED, every gated metric 1.0 / 0.0.
+  - `EVAL_OMNI_PROFILE=truncated make eval`: gate PASSED, every gated metric 1.0 / 0.0.
+  - `make test`: all suites passed: inventory-api 336, perception 713, agent 340, eval 340 + 1 skipped + gates,
+    dashboard 190, e2e 19.
+
+### Test changes
+
+None of the existing tests was changed or weakened.
+
+### Expected effect and deployment notes
+
+- **Expected effect.** The measured ~1,000 tokens came from pretty-printing (≈ 35 % of the characters), six-fold
+  object repeats and the transcript echo. The same window under the budget (compact, each object once, short
+  descriptions, `transcript` "") is 938 characters, ≈ 250–300 tokens against ≈ 1,100.
+  - **Worst case:** a reply that uses the full budget (12 objects with 12-word descriptions, 8 people, 8 events)
+    stays under the 700-token cap.
+  - **Typical case:** 2–6 objects per window should average well below 400 generated tokens, about 9–14 s at
+    28 tok/s against about 36 s.
+  - **Cut-off replies:** a reply that still hits the cap is salvaged instead of being retried and then dropped.
+
+  These numbers are estimates until re-measured with vLLM metrics. Watch the `omni usage` log records.
+- **Env vars.** `OMNI_MAX_TOKENS` (700), `OMNI_MAX_OBJECTS` (12), `OMNI_REPETITION_PENALTY` (1.05; `1.0` disables
+  it) and `OMNI_TRUNCATED_CONFIDENCE` (0.5). All have working defaults, and no deploy change is required.
+  `repetition_penalty` is a vLLM extension parameter; if a server rejects it, set `OMNI_REPETITION_PENALTY=1.0`.
+- **Real time is still out of reach.** Even at ≈ 300 tokens a window takes ≈ 11 s against the 4 s stride.
+  Matching the stride needs a longer stride, fewer frames, or more throughput.

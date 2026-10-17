@@ -67,7 +67,12 @@ class Detection:
 @dataclass
 class OmniResult:
     """Result of one omni call. ``status`` is "ok" (``observation`` validated against the schema), "invalid"
-    (unparseable / schema-invalid after one repair retry) or "error" (transport / HTTP failure)."""
+    (unparseable / schema-invalid after one repair retry) or "error" (transport / HTTP failure).
+
+    Sidecar metadata (never part of the schema-validated observation): ``truncated`` (AC-PER-26, the observation
+    was salvaged from the complete prefix of a cut-off reply), ``dropped_objects`` (AC-PER-27, objects removed by
+    the client-side cap), ``finish_reason`` of the last request and token ``usage`` summed over attempts (AC-PER-28;
+    None when the server reports none)."""
 
     status: str
     observation: dict[str, Any] | None = None
@@ -76,6 +81,16 @@ class OmniResult:
     attempts: int = 1
     latency_ms: int = 0
     error: str | None = None
+    truncated: bool = False
+    dropped_objects: int = 0
+    finish_reason: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+
+    @property
+    def incomplete(self) -> bool:
+        """True when the observation may list fewer objects than the model saw (salvaged or capped)."""
+        return self.truncated or self.dropped_objects > 0
 
     @property
     def ok(self) -> bool:

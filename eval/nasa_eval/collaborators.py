@@ -13,7 +13,10 @@
     scripted transcript lines spoken in the window. Profile (``EVAL_OMNI_PROFILE``, default ``repeat_per_frame``):
     ``repeat_per_frame`` lists each object once per frame it appears in, every entry with the same box (its latest
     in the window), exactly like Qwen2.5-Omni-7B did on real ISS footage (cluster integration 2026-10-17: 6 laptops
-    + 6 headsets in one window); ``once`` lists each object once at its latest frame.
+    + 6 headsets in one window); ``once`` lists each object once at its latest frame; ``truncated`` is
+    ``repeat_per_frame`` with a long transcript echo, cut off inside the transcript with finish_reason "length"
+    (34 % of cluster replies hit max_tokens, perception AC-PER-26) and interpreted by perception's own
+    ``interpret_reply`` (salvage + object cap), so the gate covers salvage.
   - ``gold_asr``: a FakeASR that returns the scripted lines overlapping an audio chunk (each line once); the dataset
     synthesises a tone while a line is spoken so perception's VAD passes it to ASR.
   - ``ThumbnailEmbedder`` (appearance-based, weight-free) / ``MemoryStorage``; the decision model is the real client when ``DECISION_URL`` is set,
@@ -48,7 +51,8 @@ UNKNOWN_LABEL = "unidentified gizmo"  # deliberately far from every catalog name
 THUMB_SIZE = (64, 36)
 DETECTION_SCORE = 0.9
 OMNI_EVENT_TYPES = ("moved", "added", "removed", "used", "handed_over")  # observation.schema.json events.type
-OMNI_PROFILES = ("repeat_per_frame", "once")
+OMNI_PROFILES = ("repeat_per_frame", "once", "truncated")
+TRUNCATED_ECHO = "the transcript echo goes on and on " * 40  # verbose model: cut off at max_tokens inside it
 DEFAULT_OMNI_PROFILE = "repeat_per_frame"  # how the real omni model answered on ISS footage
 
 
@@ -188,7 +192,7 @@ class GoldOmni:
                     "held_by": None,
                 }
         listed = list(objects.values())
-        if self.profile == "repeat_per_frame":
+        if self.profile in ("repeat_per_frame", "truncated"):
             # one entry per frame the object is visible in, all with the same (latest) box: no per-frame localisation
             listed = [
                 {**objects[gid], "frame_index": k} for gid in objects for k in frames_of[gid]
@@ -236,11 +240,31 @@ class GoldOmni:
             "transcript": " ".join(spoken),
             "audio_events": [],
         }
+        if self.profile == "truncated":
+            return self._truncated(observation)
         raw = json.dumps(observation)
         errors = validate_observation(observation)
         if errors:  # pragma: no cover - a bug in this fake, surfaced like an invalid model reply
             return OmniResult(status="invalid", raw=raw, model=self.model, error="; ".join(errors))
         return OmniResult(status="ok", observation=observation, raw=raw, model=self.model)
+
+
+    def _truncated(self, observation: dict[str, Any]) -> Any:
+        """The reply a verbose model cut off at max_tokens: compact JSON ending inside the transcript echo."""
+        import json
+
+        from perception.omni import interpret_reply
+        from perception.types import OmniResult
+
+        verbose = {**observation, "transcript": (observation["transcript"] + " " + TRUNCATED_ECHO).strip()}
+        text = json.dumps(verbose, separators=(",", ":"))
+        raw = text[: text.index('"transcript":"') + len('"transcript":"') + 40]
+        reply = interpret_reply(raw, finish_reason="length")
+        if reply.observation is None:  # pragma: no cover - a bug in this fake, surfaced like an invalid model reply
+            return OmniResult(status="invalid", raw=raw, model=self.model, error="; ".join(reply.errors),
+                              finish_reason="length")
+        return OmniResult(status="ok", observation=reply.observation, raw=raw, model=self.model,
+                          truncated=reply.truncated, dropped_objects=reply.dropped_objects, finish_reason="length")
 
 
 # ------------------------------------------------------------------------------------------------------- embedder

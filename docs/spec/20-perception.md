@@ -210,20 +210,43 @@ was cut off, failed validation, was retried (another ~55 s) and then dropped. AC
   - the result must validate against `observation.schema.json` and must carry something (a non-empty
     `scene_summary`, or at least one object, person or event); otherwise the existing invalid path applies
     (repair retry, then `invalid`);
+  - prose before the reply that looks like a key (`{"a" is ...`) is skipped: the next `{"` is tried, and a
+    complete non-observation object before the reply is stepped over;
   - a salvaged reply is **not retried**. `OmniResult.truncated` is True (a sidecar flag; the schema-validated
     observation is unchanged, its schema has `additionalProperties: false`).
   A complete JSON object that is schema-invalid is not salvaged (repair retry, as before). The reconciler logs a
   truncated window, caps its sighting confidence at `omni_truncated_confidence`, and writes no `stock_updates`
   for it (AC-PER-9 counts from an incomplete list would overwrite the stock with an undercount).
 - AC-PER-27 **Client-side object cap.** After parsing (full or salvaged), at most `omni_max_objects` objects are
-  kept. Selection is label-diverse: first the highest-confidence listing of each distinct (normalised) label, by
-  confidence, then the remaining listings by confidence; kept objects stay in reply order. So the only listing of
-  any label, including an unknown object that NASA should review, is dropped only when the window has more than
-  `omni_max_objects` distinct labels each listed with higher confidence. The number dropped is
-  `OmniResult.dropped_objects`; a window with dropped objects writes no `stock_updates` (same reason as above).
-  The cap is applied before schema validation, so a reply with more than 40 objects is capped rather than
-  rejected.
-- AC-PER-28 **Usage logging.** Every omni request logs one `omni usage` record with `window`, `attempt`,
+  kept, in reply order. Selection priority:
+  1. the best listing of each distinct instance that an event names (`events[].object_label`) or a person holds
+     (`held_by`): the reconciler drops an event whose object is not observed, so capping it away would lose a real
+     movement or hand-over;
+  2. the highest-confidence listing of each other distinct instance. Two listings are one instance when they have
+     the same normalised label and boxes at IoU >= 0.5, or one of them has no box (as AC-PER-19 consolidates
+     them);
+  3. the remaining listings (per-frame repeats) by confidence.
+  Per-frame repeats are dropped first. The only listing of anything (an unknown object for NASA review, or a second
+  laptop) is dropped only when the window has more distinct instances than `omni_max_objects`. *Choice:* unknown
+  labels get no priority over catalog labels. The client cannot run the AC-PER-7 mapping, and non-catalog labels
+  are often clutter ("handrail", "cable"), which the prompt already deprioritises. "Anything you cannot identify"
+  is named among the salient objects in the prompt instead.
+  The number dropped is `OmniResult.dropped_objects`. A window with dropped objects writes no `stock_updates`, for
+  the same reason as a truncated one. The cap is applied before schema validation, so a reply with more than 40
+  objects is capped rather than rejected.
+- AC-PER-28 **Usage logging.** Every chat-completions omni request logs one `omni usage` record with `window`, `attempt`,
   `prompt_tokens`, `completion_tokens`, `finish_reason`, `latency_ms`, `truncated` and `dropped_objects`
   (`usage` from the OpenAI-compatible response; null when the server sends none). `OmniResult` carries
   `finish_reason`, `prompt_tokens` and `completion_tokens` (summed over attempts).
+
+### Review round (AC-PER-24..28): residual risks accepted
+
+- *Fungible counts.* Stock is overwritten with `est_count`. Truncated or capped windows write no stock update, but a
+  model that obeys the prompt's object budget in a cluttered scene (for example 20 food packages) can under-list
+  without any visible cap. Detector counts still feed the max (AC-PER-9). Fungible classes are therefore updated
+  reliably only by windows with at most `omni_max_objects` listings.
+- *ASR fallback.* With `ASR_URL` set, omni is told to leave `transcript` empty. If ASR fails for a window, replay's
+  fallback to the omni transcript now finds "" and that window's speech is lost. ASR is the transcript of record,
+  and the saving (the transcript echo was a large share of the output) is worth it.
+- *Raw control characters.* A string with a raw newline is invalid JSON for the decoder. A complete reply with one
+  goes to repair, as before. In a cut-off reply, salvage stops at that element.
