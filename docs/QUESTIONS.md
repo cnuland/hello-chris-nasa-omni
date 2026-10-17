@@ -111,7 +111,7 @@ I need from you.
     error killed the whole vLLM EngineCore, which looks like an upstream robustness bug worth reporting. It is now
     disabled, at about 25% more GPU time per decision. Final memory settings: 0.78 utilisation, max-model-len 4096,
     max-num-seqs 1.
-24. **Queued: event dedup within a window.** One window produced three identical `used` events for the same drill and
+24. **Fixed: event dedup within a window.** One window produced three identical `used` events for the same drill and
     actor at the same timestamp, with confidence 0.7/0.5/0.4. AC-PER-10 dedups across windows (10 s), but not
     repeats inside one omni reply. Queued for perception after the omni-budget work.
 25. **Dashboard polish (not blocking):** recent events show the item ID (`item 550f3b9d`) rather than its label.

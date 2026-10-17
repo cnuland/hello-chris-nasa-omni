@@ -250,3 +250,9 @@ was cut off, failed validation, was retried (another ~55 s) and then dropped. AC
   and the saving (the transcript echo was a large share of the output) is worth it.
 - *Raw control characters.* A string with a raw newline is invalid JSON for the decoder. A complete reply with one
   goes to repair, as before. In a cut-off reply, salvage stops at that element.
+
+### AC-PER-10 amendment: within-window event repeats (cluster integration 2026-10-17)
+- Inside one window, events with the same target (entity_id or entity_ref), event_type, to_location and actor_desc
+  collapse to the single most confident event, keeping the order of first appearance. Events with a different actor,
+  type or destination stay separate. This complements the cross-window `event_dedup_s` check. Tests:
+  tests/test_ac_per_10_within_window_event_dedup.py.

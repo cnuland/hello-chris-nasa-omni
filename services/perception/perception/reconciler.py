@@ -1111,7 +1111,7 @@ class Reconciler:
                     "source": "pipeline",
                 }
             )
-        return events
+        return _collapse_window_repeats(events)
 
     def _is_repeat(self, entity_id: str, event_type: str, to_location: str | None, occurred: datetime) -> bool:
         """True when the same event was recorded within ``event_dedup_s`` (overlapping windows show the same
@@ -1314,3 +1314,25 @@ class Reconciler:
         except Exception as exc:  # noqa: BLE001
             logger.warning("patching entity failed", extra={"entity_id": entity_id, "error": str(exc)})
             return False
+
+
+def _collapse_window_repeats(events: list[dict]) -> list[dict]:
+    """AC-PER-10 amendment: one omni reply can list the same action several times (seen live: three identical `used`
+    events for one drill, one actor). Within a window, events with the same target, type, destination and actor
+    collapse to the most confident one; order of first appearance is kept."""
+    best: dict[tuple, dict] = {}
+    order: list[tuple] = []
+    for ev in events:
+        key = (
+            str(ev.get("entity_id") or ""),
+            str(ev.get("entity_ref") or ""),
+            ev.get("event_type"),
+            ev.get("to_location"),
+            ev.get("actor_desc"),
+        )
+        if key not in best:
+            best[key] = ev
+            order.append(key)
+        elif float(ev.get("confidence") or 0.0) > float(best[key].get("confidence") or 0.0):
+            best[key] = ev
+    return [best[k] for k in order]

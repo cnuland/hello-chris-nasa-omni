@@ -683,3 +683,10 @@ None of the existing tests was changed or weakened.
   `repetition_penalty` is a vLLM extension parameter; if a server rejects it, set `OMNI_REPETITION_PENALTY=1.0`.
 - **Real time is still out of reach.** Even at ≈ 300 tokens a window takes ≈ 11 s against the 4 s stride.
   Matching the stride needs a longer stride, fewer frames, or more throughput.
+
+## Within-window event repeats (cluster integration 2026-10-17)
+- **Found live:** one omni reply produced three identical `used` events for one drill, with the same actor and frame
+  and confidence 0.7/0.5/0.4. All three were stored, because `_is_repeat` compares only against previous windows.
+- **Red:** 2 failed (the collapse cases) and 2 guards passed (different actors and different types stay separate).
+- **Green:** `_collapse_window_repeats` post-processes `_visual_events`. The suite is 717 passed; ruff is clean.
+- **Test changes:** none.
