@@ -1,0 +1,62 @@
+# vLLM-Omni serving Qwen2.5-Omni-7B, thinker only (text out; audio + video + image in).
+# RHDP Azure policy allows only T4 GPUs (QUESTIONS #16): T4 (sm75) has no bf16 and 16 GB, so the ~8.9B-param thinker
+# (LLM + audio + vision encoders, ~18 GB fp16) runs float16 with tensor parallel 2 on GPUs 0-1 of the perception node.
+# The nightly image includes PR #8896 (image input on /v1/realtime?duplex=0). The perception service uses stateless
+# windowed /v1/chat/completions (research/01 "path C") and validates JSON itself (omni chat has no guided decoding).
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: omni-deploy-config, namespace: nasa-inference}
+data:
+  deploy.yaml: |
+    pipeline: qwen2_5_omni_thinker_only
+    stages:
+      - stage_id: 0
+        devices: "0,1"
+        engine_args:
+          max_model_len: 16384
+          tensor_parallel_size: 2
+          dtype: float16
+          gpu_memory_utilization: 0.90
+          enforce_eager: true
+          trust_remote_code: true
+          limit_mm_per_prompt: {image: 8, video: 1, audio: 2}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: omni, namespace: nasa-inference, labels: {app: omni}}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: omni}}
+  template:
+    metadata: {labels: {app: omni}}
+    spec:
+      nodeSelector: {nasa-role: perception}
+      tolerations: [{key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}]
+      containers:
+        - name: vllm-omni
+          image: docker.io/vllm/vllm-omni:nightly-6bc3eabd26e6d7fb78601fbbd775e75a50ddd81d
+          command: ["vllm", "serve"]
+          args: ["Qwen/Qwen2.5-Omni-7B", "--omni", "--deploy-config", "/config/deploy.yaml",
+                 "--served-model-name", "omni", "--host", "0.0.0.0", "--port", "8000"]
+          env:
+            - {name: HOME, value: /cache}
+            - {name: HF_HOME, value: /cache/hf}
+            - {name: VLLM_CACHE_ROOT, value: /cache/vllm}
+            - {name: HF_HUB_ENABLE_HF_TRANSFER, value: "1"}
+          ports: [{containerPort: 8000, name: openai}]
+          resources:
+            requests: {cpu: "4", memory: 32Gi, nvidia.com/gpu: "2"}
+            limits: {cpu: "12", memory: 64Gi, nvidia.com/gpu: "2"}
+          volumeMounts: [{name: cache, mountPath: /cache}, {name: config, mountPath: /config}, {name: shm, mountPath: /dev/shm}]
+          startupProbe: {httpGet: {path: /health, port: 8000}, periodSeconds: 15, failureThreshold: 160}
+          readinessProbe: {httpGet: {path: /health, port: 8000}, periodSeconds: 10}
+      volumes:
+        - {name: cache, emptyDir: {sizeLimit: 60Gi}}
+        - {name: config, configMap: {name: omni-deploy-config}}
+        - {name: shm, emptyDir: {medium: Memory, sizeLimit: 16Gi}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: omni, namespace: nasa-inference}
+spec: {selector: {app: omni}, ports: [{name: openai, port: 8000}]}

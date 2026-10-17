@@ -1,0 +1,17 @@
+Metadata-Version: 2.4
+Name: nasa-eval
+Version: 0.1.0
+Summary: Evaluation of the NASA Omni identification pipeline (docs/spec/50-eval.md): datasets, synthetic scenes, metrics, QA, runner, gates
+Requires-Python: <3.12,>=3.11
+Requires-Dist: numpy>=1.26
+Requires-Dist: pillow>=10.3
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: jsonschema>=4.22
+Requires-Dist: psycopg[binary]>=3.2
+Requires-Dist: httpx>=0.27
+Provides-Extra: test
+Requires-Dist: pytest>=8; extra == "test"
+Requires-Dist: ruff>=0.5; extra == "test"
+Provides-Extra: pipeline
+Requires-Dist: perception; extra == "pipeline"
+Requires-Dist: inventory-api; extra == "pipeline"

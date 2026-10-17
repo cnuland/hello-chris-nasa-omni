@@ -1,0 +1,8 @@
+# Regression gates for the identification pipeline (docs/spec/50-eval.md AC-EVAL-6).
+# metric: {min: x} and/or {max: x}; boundaries are inclusive. Checked by `python -m nasa_eval gate`.
+duplicate_rate: {max: 0.10}
+pairwise_f1: {min: 0.85}
+location_acc: {min: 0.8}
+unknown_recall: {min: 0.9}
+# Coverage (review round): without it an empty or sparse run could pass the entity-resolution gates.
+sighting_recall: {min: 0.8}

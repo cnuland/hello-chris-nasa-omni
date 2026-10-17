@@ -1,0 +1,7 @@
+# End-to-end suite (tests/e2e): every Python component installed editable, plus the test runner.
+-e ../../services/inventory-api
+-e ../../services/perception
+-e ../../services/agent
+-e ../../eval
+pytest>=8
+ruff>=0.5

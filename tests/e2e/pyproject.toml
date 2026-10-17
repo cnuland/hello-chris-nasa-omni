@@ -1,0 +1,14 @@
+# End-to-end suite (not a package): pytest + ruff settings. Venv: see requirements.txt / the root Makefile.
+[tool.pytest.ini_options]
+testpaths = ["."]
+addopts = "-ra"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]

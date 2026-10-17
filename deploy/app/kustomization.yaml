@@ -1,0 +1,1 @@
+resources: [namespace.yaml, builds.yaml, inventory-api.yaml, agent.yaml, perception.yaml, dashboard.yaml]

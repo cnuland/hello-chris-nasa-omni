@@ -1,0 +1,25 @@
+name: synth-ci
+description: synthetic ISS lab scene (nasa_eval.synth seed 7)
+seed: 7
+video: frames
+audio: null
+camera: cam-lab1-fwd
+start_time: '2026-10-01T12:00:00Z'
+fps: 1.0
+transcript: transcript.jsonl
+zones:
+  LAB1S2:
+  - 0.03
+  - 0.1
+  - 0.32
+  - 0.9
+  LAB1O3:
+  - 0.355
+  - 0.1
+  - 0.645
+  - 0.9
+  LAB1P3:
+  - 0.68
+  - 0.1
+  - 0.97
+  - 0.9

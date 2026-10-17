@@ -1,0 +1,204 @@
+# ARO variant for T4 (the RHDP Azure policy 'Deny expensive GPU VM SKUs (allow T4)' blocks A10/A100/H100):
+# ONE replica on Standard_NC64as_T4_v3 (4x T4 16GB = 64GB), tensor-parallel 4. T4 (Turing, sm75) has no FP8 and no
+# bfloat16, so this uses the W8A8 INT8 compressed-tensors checkpoint (same arch, router/vision unquantized, 27 GB)
+# with --dtype=half. Fallback if INT8 misbehaves: google/diffusiongemma-26B-A4B-it (51.7 GB) in float16.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dgemma
+  namespace: nasa-inference
+  labels:
+    app: dgemma
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dgemma
+  strategy:
+    type: Recreate     # single 2-GPU node, nothing to surge onto
+  template:
+    metadata:
+      labels:
+        app: dgemma
+    spec:
+      serviceAccountName: dgemma   # anyuid: the start-up sm75 patches rewrite files inside site-packages
+      nodeSelector:
+        nasa-role: decision
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+      terminationGracePeriodSeconds: 60
+      volumes:
+      - name: cache            # HF download + vLLM/torch compile caches
+        emptyDir:
+          sizeLimit: 80Gi
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 16Gi   # NCCL shared memory for TP=2
+      containers:
+      - name: vllm
+        image: vllm/vllm-openai:v0.31.0
+        # T4 (sm75) has 64KB shared memory per block; Triton's default 3-stage pipeline makes the unified attention
+        # kernel ask for 96KB (512-wide heads x 32-token K/V tiles). Patch vLLM at start-up to launch it with 1 stage on pre-Ampere GPUs,
+        # then exec the normal `vllm serve` with the args below. (FLEX_ATTENTION is not an option: its metadata builder
+        # fails on DiffusionGemma's per-request causal tensor.)
+        command:
+        - /bin/bash
+        - -c
+        - |
+          F=/usr/local/lib/python3.12/dist-packages/vllm/v1/attention/ops/triton_unified_attention.py
+          python3 - "$F" <<'PY'
+          import sys
+          p = sys.argv[1]; s = open(p).read()
+          anchor = "        launch_num_stages = 2\n"
+          patch = anchor + "    if not current_platform.has_device_capability(80):  # T4/sm75: 64KB smem per block\n        launch_num_stages = 1\n"
+          anchor2 = "        TILE_SIZE_DECODE = min(TILE_SIZE_DECODE, block_size)\n"
+          patch2 = anchor2 + "    if not current_platform.has_device_capability(80):  # T4/sm75 tile: head_size 512 x 32-token K/V tiles need 96KB\n        TILE_SIZE_PREFILL = min(TILE_SIZE_PREFILL, 16)\n        TILE_SIZE_DECODE = min(TILE_SIZE_DECODE, 16)\n"
+          if "T4/sm75" not in s:
+              if anchor in s and anchor2 in s:
+                  s = s.replace(anchor, patch, 1).replace(anchor2, patch2, 1); open(p, "w").write(s)
+                  print("patched triton_unified_attention for sm75 (1 stage, 16-token tiles)")
+              else:
+                  print("WARNING: sm75 patch anchors not found in this vLLM build - running unpatched")
+          PY
+          # sm75: keep top-k/top-p sampling off Triton. Only the sampling rank runs it, and its JIT warm-up loads kernels
+          # while the other tensor-parallel ranks sit in collectives: the pod hung in triton _init_handles for 77 min.
+          S=/usr/local/lib/python3.12/dist-packages/vllm/v1/sample/ops/topk_topp_sampler.py
+          python3 - "$S" <<'PY'
+          import sys
+          p = sys.argv[1]; s = open(p).read(); a = "    if HAS_TRITON:\n        return apply_top_k_top_p_triton(logits, k, p)\n"
+          if a in s and "sm75 sampler" not in s:
+              s = s.replace(a, "    from vllm.platforms import current_platform  # sm75 sampler: pytorch path\n"
+                               "    if HAS_TRITON and current_platform.has_device_capability(80):\n        return apply_top_k_top_p_triton(logits, k, p)\n", 1)
+              open(p, "w").write(s); print("patched top-k/top-p sampler: pytorch on sm75")
+          else:
+              print("WARNING: sampler patch anchor not found")
+          PY
+          exec vllm serve "$@"
+        - vllm-serve
+        args:
+        - "$(MODEL_ID)"
+        - --served-model-name=dgemma
+        - --host=0.0.0.0
+        - --port=8000
+        - --diffusion-config={"canvas_length":64}
+        - --max-logprobs=32
+        - --max-model-len=4096          # decision prompts are < 2k tokens; 4096 needs 0.19 GiB KV per GPU
+        - --max-num-seqs=1               # sort scratch scales with seqs x canvas x vocab; 2 OOMed under perception bursts
+        - --tensor-parallel-size=4
+        - --dtype=half
+        - --moe-backend=humming      # Triton's INT8 fused-MoE kernel cannot lower int8 dot on sm75 (PassManager::run failed)
+        - --limit-mm-per-prompt={"image":2}
+        - --gpu-memory-utilization=0.78   # 0.80 + 2 seqs OOMed in the sm75 sort scratch; 0.72 left only 0.09 GiB KV
+        env:
+        - name: MODEL_ID
+          value: aidendle94/diffusiongemma-26B-A4B-it-INT8-dynamic
+        - name: HOME
+          value: /cache
+        - name: HF_HOME
+          value: /cache/hf
+        - name: VLLM_CACHE_ROOT
+          value: /cache/vllm
+        - name: TRITON_CACHE_DIR
+          value: /cache/triton
+        - name: CUDA_MODULE_LOADING   # EAGER: lazy first-launch module loads deadlocked behind spinning NCCL kernels
+          value: EAGER                #   (py-spy --native: TP0 in triton loadBinary, TP3 in a first cub sort, all in libcuda)
+        - name: HF_HUB_ENABLE_HF_TRANSFER
+          value: "1"
+        - name: HF_TOKEN            # optional: only needed if you switch to a gated checkpoint
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: token
+              optional: true
+        ports:
+        - name: openai
+          containerPort: 8000
+        resources:
+          requests:
+            cpu: "5"
+            memory: 40Gi
+            nvidia.com/gpu: "4"
+          limits:
+            cpu: "16"
+            memory: 96Gi
+            nvidia.com/gpu: "4"
+        volumeMounts:
+        - name: cache
+          mountPath: /cache
+        - name: shm
+          mountPath: /dev/shm
+        startupProbe:                # 27 GB download + weight load + CUDA graph capture + kernel warm-up
+          httpGet: { path: /health, port: 8000 }
+          periodSeconds: 15
+          failureThreshold: 360      # 90 min: on a FRESH T4 node vLLM's warm-up JIT-compiles the sm75-patched Triton
+                                     # kernels for well over 30 min (py-spy: warmup.py -> triton compiler). Do not skip
+                                     # it (--kernel-config enable_jit_warmup=false): the lazy compiles then stall one
+                                     # tensor-parallel rank per new batch shape and requests time out.
+        readinessProbe:
+          httpGet: { path: /health, port: 8000 }
+          periodSeconds: 10
+        livenessProbe:
+          httpGet: { path: /health, port: 8000 }
+          periodSeconds: 30
+          failureThreshold: 6
+      - name: decision-server
+        image: vllm/vllm-openai:v0.31.0
+        command: ["python3"]
+        args:
+        - /vllm-workspace/examples/features/structured_diffusion/structured_server.py
+        - --upstream=http://127.0.0.1:8000
+        - --tokenizer=$(MODEL_ID)
+        - --model=dgemma
+        - --canvas=64
+        - --host=0.0.0.0
+        - --port=8011
+        env:
+        - name: MODEL_ID
+          value: aidendle94/diffusiongemma-26B-A4B-it-INT8-dynamic
+        - name: HOME
+          value: /cache
+        - name: HF_HOME
+          value: /cache/hf
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: token
+              optional: true
+        ports:
+        - name: decision
+          containerPort: 8011
+        resources:
+          requests: { cpu: "1", memory: 2Gi }
+          limits:   { cpu: "2", memory: 4Gi }
+        volumeMounts:
+        - name: cache
+          mountPath: /cache
+        startupProbe:
+          httpGet: { path: /health, port: 8011 }
+          periodSeconds: 15
+          failureThreshold: 120
+        readinessProbe:
+          httpGet: { path: /health, port: 8011 }
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata: {name: dgemma, namespace: nasa-inference}
+spec:
+  selector: {app: dgemma}
+  ports: [{name: openai, port: 8000}, {name: decision, port: 8011}]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: dgemma, namespace: nasa-inference}
+---
+# The sm75 attention/sampler patches edit vLLM source in the image, which needs root (anyuid SCC).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: dgemma-anyuid, namespace: nasa-inference}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: "system:openshift:scc:anyuid"}
+subjects: [{kind: ServiceAccount, name: dgemma, namespace: nasa-inference}]

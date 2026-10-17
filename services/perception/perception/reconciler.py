@@ -1,0 +1,1297 @@
+"""AC-PER-8..11, 13, 16 reconciler: turns one window (omni observation + detector boxes) into an /ingest/window
+payload and posts it through the InventoryClient.
+
+Per window, the omni objects are first consolidated (AC-PER-19): same class (or same normalised UNKNOWN label),
+not fungible, and omni boxes with IoU >= ``config.consolidate_iou`` (or a missing box, unless both are listed for the
+same frame) are ONE instance. Leader clustering by omni confidence, never transitive. Real models list an object once
+per frame; without this one window created six laptops.
+
+Per observed instance:
+  * link it to a detector box in frame ``frame_index``: first by IoU >= ``config.link_iou`` (all instances), then
+    by mapped label (remaining instances); a consolidated instance tries every member's frame and box and keeps the
+    best link (detector-linked, box agrees, detector score, omni confidence, later frame);
+  * map the label to a catalog class (CatalogMapper); fungible classes -> ``stock_updates`` (count per zone = max
+    over the window's frames); UNKNOWN -> ``unknown`` entity + ``unknown_object`` review (crop image, description,
+    timestamp);
+  * exemplar quality gate (AC-PER-22): only a detector-linked instance whose crop (cut from the full-resolution
+    keyframe, ``Keyframe.hires``, AC-PER-21) has a short side >= ``config.min_crop_px`` is embedded and gets an
+    exemplar and a stored crop. Otherwise the sighting is recorded without exemplar and matched by class and place:
+    the most recently seen live entity of the class (UNKNOWN: unclassified, same normalised label) last seen in the
+    same module within ``config.no_exemplar_match_s``, else a new entity;
+  * embed the crop, retrieve candidates (``api.candidates(embedding, catalog_id=..., location_id=...)``);
+  * hard gates: class mismatch; impossible transit (different module within ``min_transit_s`` for a non-held
+    object); one entity per window (best match keeps it);
+  * score ``p = scorer(CandidateFeatures)``; bands: p >= assign_p assign; ask_p <= p < assign_p ask the decision
+    model (question "same_or_new", options = candidate entity ids + "NEW"), assign if its top probability >=
+    decision_accept, else new provisional entity + ``possible_duplicate`` review; p < ask_p new provisional entity;
+  * a catalog class whose live entity count (api.count_live_entities + new ones in this payload) would exceed
+    ``expected_count`` -> ``possible_duplicate`` review.
+Every decision-model call is logged in ``payload["decisions"]``. Invalid omni results are never written.
+
+Location (AC-PER-11/23, ``LocationResolver.window_policy``): a resolvable hint sets the window location; when a
+fixed camera's hint names another module, sighting confidence is capped at ``config.hint_conflict_confidence``.
+
+Privacy (AC-PER-11/23) fails closed (``LocationResolver.window_policy``): a camera without a configured location, a
+no_capture camera (whatever the untrusted model hint says) or a no_capture hinted location, or a hint naming a private place ("crew quarters", "WHC", ...) makes the window
+private.
+In a private window nothing is uploaded (no frames, crops or raw response), no review is created (a review needs an
+image), unknown objects are skipped (they could only be resolved from an image), the transcript is not stored, the
+utterances are not copied into the decision log and people get no appearance exemplar. Known objects are still
+sighted, without image URIs, so inventory locations stay correct.
+
+Speech claims (AC-PER-10/16): placement statements in the transcript that name a catalog item and a destination become
+``moved`` events with source ``speech`` (confidence <= ``speech_max_confidence``) on an existing entity, and the
+entity is flagged ``needs_review`` (PATCH). The claim state lives in inventory, not in this process, so any camera
+process (or a restarted one) can confirm it: when a window sights an entity that is flagged without a
+``review_reason`` (i.e. by a speech claim, not by an open review item), its latest speech ``moved`` event is read
+from ``GET /events``. A sighting inside the claimed location within ``speech_confirm_s`` clears the flag; a sighting
+after that horizon adds a ``conflict`` review (with the sighting's image) so an operator has something to resolve.
+
+Omni events are deduplicated across overlapping windows: the same (entity, event type, destination) within
+``event_dedup_s`` is recorded once.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import math
+import time
+from collections import Counter
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+import numpy as np
+
+from . import NEW, UNKNOWN
+from .config import PerceptionConfig
+from .labels import CatalogMapper, normalise_label
+from .locations import LocationResolver
+from .media import crop as crop_image
+from .media import encode_jpeg
+from .speech import classify_utterance_logged, parse_speech_claim, split_utterances
+from .storage import crop_key, frame_key, raw_key
+from .types import DecisionResult, Detection, LabelMatch, OmniResult, Window
+
+logger = logging.getLogger(__name__)
+
+SAME_OR_NEW = "same_or_new"
+SPEECH_ACT = "speech_act"
+MAX_DECISION_OPTIONS = 4  # candidates offered to the decision model (+ NEW)
+# Candidates whose match score is within this of the best one are a near tie (identical twins: the same appearance
+# against both entities); among them the candidate last seen in the observation's own location ranks first.
+NEAR_TIE_P = 0.02
+
+
+@dataclass(frozen=True)
+class CandidateFeatures:
+    similarity: float
+    class_match: bool
+    zone_match: bool
+    recency_s: float | None  # seconds between the candidate's last_seen_at and this observation (None = unknown)
+
+
+# Weights of the match score. Appearance dominates; class/zone/recency move a candidate between bands.
+W_SIMILARITY = 0.70
+W_CLASS = 0.15
+W_ZONE = 0.10
+W_RECENCY = 0.05
+RECENCY_SCALE_S = 3600.0
+
+
+def score_candidate(features: CandidateFeatures) -> float:
+    """p = f(similarity, class match, zone match, recency) in [0, 1]; monotonic non-decreasing in similarity, class
+    match, zone match and recency (more recent -> not lower)."""
+    sim = features.similarity
+    sim = 0.0 if sim is None or not math.isfinite(sim) else min(max(float(sim), 0.0), 1.0)
+    recency = 0.0
+    if features.recency_s is not None and math.isfinite(features.recency_s):
+        recency = math.exp(-max(float(features.recency_s), 0.0) / RECENCY_SCALE_S)
+    p = (
+        W_SIMILARITY * sim
+        + W_CLASS * float(bool(features.class_match))
+        + W_ZONE * float(bool(features.zone_match))
+        + W_RECENCY * recency
+    )
+    return min(max(p, 0.0), 1.0)
+
+
+def _rank(scored: list[_Scored], location: str | None) -> list[_Scored]:
+    """Best first: by score, but candidates within NEAR_TIE_P of the best score are ordered location-first (last
+    seen at ``location``), so identical twins keep their zones; remaining ties by entity id (deterministic)."""
+    by_p = sorted(scored, key=lambda s: (-s.p, s.entity_id))
+    if not by_p or location is None:
+        return by_p
+    best = by_p[0].p
+    near = [s for s in by_p if best - s.p <= NEAR_TIE_P]
+    rest = by_p[len(near) :]
+    near.sort(key=lambda s: (s.candidate.get("last_location") != location, -s.p, s.entity_id))
+    return near + rest
+
+
+def band(p: float, assign_p: float = 0.85, ask_p: float = 0.5) -> str:
+    """ "assign" (p >= assign_p), "ask" (ask_p <= p < assign_p) or "new" (p < ask_p)."""
+    if p >= assign_p:
+        return "assign"
+    if p >= ask_p:
+        return "ask"
+    return "new"
+
+
+def iou(a: Sequence[float], b: Sequence[float]) -> float:
+    """Intersection over union of two (x1, y1, x2, y2) boxes; 0.0 for degenerate boxes."""
+    ax1, ay1, ax2, ay2 = (float(v) for v in a)
+    bx1, by1, bx2, by2 = (float(v) for v in b)
+    area_a = max(ax2 - ax1, 0.0) * max(ay2 - ay1, 0.0)
+    area_b = max(bx2 - bx1, 0.0) * max(by2 - by1, 0.0)
+    if area_a <= 0.0 or area_b <= 0.0:
+        return 0.0
+    inter = max(min(ax2, bx2) - max(ax1, bx1), 0.0) * max(min(ay2, by2) - max(ay1, by1), 0.0)
+    union = area_a + area_b - inter
+    return inter / union if union > 0 else 0.0
+
+
+@dataclass
+class WindowOutcome:
+    """``status``: "posted", "invalid" (omni result invalid/error: nothing written) or "error" (post failed)."""
+
+    status: str
+    payload: dict[str, Any] | None = None
+    response: dict[str, Any] | None = None
+    error: str | None = None
+
+
+# ---------------------------------------------------------------------------------------------- internals
+def _iso(ts: datetime) -> str:
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    return ts.isoformat()
+
+
+def _parse_ts(value: Any) -> datetime | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
+    try:
+        ts = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
+
+
+def _clamp01(value: Any, default: float = 0.5) -> float:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(v):
+        return default
+    return min(max(v, 0.0), 1.0)
+
+
+@dataclass
+class _Scored:
+    candidate: dict[str, Any]
+    p: float
+
+    @property
+    def entity_id(self) -> str:
+        return str(self.candidate["entity_id"])
+
+
+@dataclass
+class _Observed:
+    """One omni object of the window, after linking and label mapping."""
+
+    index: int
+    obj: dict[str, Any]
+    match: LabelMatch
+    frame_idx: int
+    bbox: tuple[float, float, float, float] | None
+    detection: Detection | None
+    held: bool
+    ref: str
+    location: str | None = None  # camera zone containing the box centre, else the window location
+    embedding: np.ndarray | None = None
+    scored: list[_Scored] = field(default_factory=list)
+    # decision outcome
+    entity_id: str | None = None
+    previous_location: str | None = None
+    reviews: list[dict[str, Any]] = field(default_factory=list)
+    clear_claim: str | None = None  # claimed location confirmed by this sighting -> clear the speech flag
+    members: list[int] = field(default_factory=list)  # omni object indexes consolidated into this instance
+    candidate_ids: set[str] = field(default_factory=set)  # entities compared by appearance (have exemplars)
+
+    @property
+    def catalog_id(self) -> str | None:
+        return None if self.match.catalog_id == UNKNOWN else self.match.catalog_id
+
+    @property
+    def is_unknown(self) -> bool:
+        return self.match.catalog_id == UNKNOWN
+
+
+@dataclass
+class _Entry:
+    """One omni object of the window before consolidation."""
+
+    index: int
+    obj: dict[str, Any]
+    match: LabelMatch
+    frame_index: int | None
+    box: tuple[float, float, float, float] | None
+
+    @property
+    def confidence(self) -> float:
+        return _clamp01(self.obj.get("confidence"), 0.5)
+
+
+@dataclass
+class _Link:
+    entry: _Entry
+    frame_idx: int
+    det: tuple[int, int] | None = None  # (frame, detection index)
+    detection: Detection | None = None
+    agrees: bool = False  # linked by IoU with omni's box
+
+    @property
+    def rank(self) -> tuple:
+        return (
+            self.detection is not None,
+            self.agrees,
+            self.detection.score if self.detection else 0.0,
+            self.entry.confidence,
+            self.frame_idx,
+        )
+
+
+class _WindowContext:
+    """Per-window state: location, privacy, storage uploads (cached), decision log."""
+
+    def __init__(
+        self, reconciler: Reconciler, window: Window, location: str | None, no_capture: bool, hint_conflict=False
+    ):
+        self.r = reconciler
+        self.window = window
+        self.location = location
+        self.no_capture = no_capture
+        self.hint_conflict = hint_conflict
+        self._frame_uris: dict[int, str | None] = {}
+        self._crops: dict[int, str | None] = {}
+        self.decisions: list[dict[str, Any]] = []
+
+    def frame_ts(self, idx: int) -> datetime:
+        return self.window.frames[idx].timestamp
+
+    def frame_uri(self, idx: int) -> str | None:
+        if self.no_capture or not self.window.frames:
+            return None
+        if idx not in self._frame_uris:
+            frame = self.window.frames[idx]
+            key = frame_key(self.r.camera_id, frame.timestamp)
+            self._frame_uris[idx] = self.r.storage.put(key, encode_jpeg(frame.hires), "image/jpeg")
+        return self._frame_uris[idx]
+
+    def crop_uri(self, observed: _Observed, image: np.ndarray) -> str | None:
+        if self.no_capture:
+            return None
+        if observed.index not in self._crops:
+            key = crop_key(self.r.camera_id, self.frame_ts(observed.frame_idx), self.r.next_crop_number())
+            self._crops[observed.index] = self.r.storage.put(key, encode_jpeg(image), "image/jpeg")
+        return self._crops[observed.index]
+
+    def log_decision(self, question: str, subject: dict[str, Any], result: DecisionResult) -> None:
+        model = result.model or getattr(self.r.decision, "model", "") or "unknown"
+        self.decisions.append(
+            {
+                "question": question,
+                "subject": subject,
+                "choice": result.choice or NEW,
+                "probabilities": {str(k): float(v) for k, v in result.probabilities.items()},
+                "model": str(model),
+                "latency_ms": max(int(result.latency_ms or 0), 0),
+            }
+        )
+
+
+class Reconciler:
+    def __init__(
+        self,
+        *,
+        api: Any,
+        embedder: Any,
+        decision: Any,
+        storage: Any,
+        config: PerceptionConfig,
+        camera_id: str,
+        catalog: Sequence[dict[str, Any]] | None = None,
+        locations: Sequence[dict[str, Any]] | None = None,
+        text_embedder: Any = None,
+        scorer: Callable[[CandidateFeatures], float] | None = None,
+        clock: Callable[[], float] | None = None,
+    ):
+        """``catalog``/``locations`` default to ``api.get_catalog()`` / ``api.get_locations()``; both are reloaded
+        from the API every ``config.catalog_refresh_s`` seconds of ``clock`` (default ``time.monotonic``), so review
+        resolutions that add catalog classes are used without a restart. ``scorer`` defaults to
+        ``score_candidate``. Cross-window state kept here: recently recorded events (dedup) only."""
+        self.api = api
+        self.embedder = embedder
+        self.decision = decision
+        self.storage = storage
+        self.config = config
+        self.camera_id = camera_id
+        self.text_embedder = text_embedder
+        self.scorer = scorer or score_candidate
+        self.clock = clock or time.monotonic
+        self.catalog_version = 0
+        self._set_catalog(
+            list(catalog) if catalog is not None else list(api.get_catalog()),
+            list(locations) if locations is not None else list(api.get_locations()),
+        )
+        self._crop_seq = 0
+        # (entity_id, event_type, to_location) -> occurred_at of the last recorded omni event (overlap dedup)
+        self._recent_events: dict[tuple[str, str, str | None], datetime] = {}
+
+    def _set_catalog(self, catalog: list[dict[str, Any]], locations: list[dict[str, Any]]) -> None:
+        self.catalog = catalog
+        self.locations = locations
+        self.mapper = CatalogMapper(self.catalog, text_embedder=self.text_embedder, floor=self.config.label_floor)
+        self.resolver = LocationResolver(self.locations)
+        self._loaded_at = self.clock()
+        self.catalog_version += 1
+
+    def refresh_if_stale(self) -> bool:
+        """Reload catalog and locations when older than ``config.catalog_refresh_s``; True when reloaded. A failed
+        reload keeps the current copy (and retries after the next interval)."""
+        ttl = self.config.catalog_refresh_s
+        if not ttl or self.clock() - self._loaded_at < ttl:
+            return False
+        try:
+            catalog, locations = list(self.api.get_catalog()), list(self.api.get_locations())
+        except Exception as exc:  # noqa: BLE001 - inventory-api is a remote dependency
+            logger.warning("catalog refresh failed; keeping the current catalog", extra={"error": str(exc)})
+            self._loaded_at = self.clock()
+            return False
+        if not catalog or not locations:
+            self._loaded_at = self.clock()
+            return False
+        self._set_catalog(catalog, locations)
+        logger.info("catalog refreshed", extra={"classes": len(catalog), "locations": len(locations)})
+        return True
+
+    def next_crop_number(self) -> int:
+        self._crop_seq += 1
+        return self._crop_seq
+
+    # ------------------------------------------------------------------ public
+    def process(
+        self,
+        window: Window,
+        omni: OmniResult,
+        detections: Sequence[Sequence[Detection]],
+        *,
+        transcript: str | None = None,
+        model: str | None = None,
+    ) -> WindowOutcome:
+        """Reconcile and post one window. ``detections[i]`` are the detector boxes of ``window.frames[i]``.
+        ``transcript`` is the final (cleaned) transcript to store and mine for speech claims; None -> the omni
+        transcript."""
+        self.refresh_if_stale()
+        if not omni.ok or not isinstance(omni.observation, dict):
+            logger.info(
+                "omni result not usable; window not written",
+                extra={"window": window.index, "status": omni.status, "error": omni.error},
+            )
+            return WindowOutcome(status="invalid", error=omni.error or f"omni status {omni.status}")
+        try:
+            payload, observed, claims = self._build(window, omni, detections, transcript, model)
+        except Exception as exc:
+            logger.exception("reconciliation failed", extra={"window": window.index})
+            return WindowOutcome(status="error", error=f"{type(exc).__name__}: {exc}")
+        try:
+            response = self.api.post_window(payload) or {}
+        except Exception as exc:  # noqa: BLE001 - InventoryError, transport errors, ...
+            logger.warning("posting window failed", extra={"window": window.index, "error": str(exc)})
+            return WindowOutcome(status="error", payload=payload, error=f"{type(exc).__name__}: {exc}")
+        self._after_post(window, payload, response, observed, claims)
+        logger.info(
+            "window posted",
+            extra={
+                "window": window.index,
+                "assignments": len(payload["assignments"]),
+                "events": len(payload.get("events", [])),
+                "reviews": len(payload.get("reviews", [])),
+            },
+        )
+        return WindowOutcome(status="posted", payload=payload, response=response)
+
+    # ------------------------------------------------------------------ building the payload
+    def _build(
+        self,
+        window: Window,
+        omni: OmniResult,
+        detections: Sequence[Sequence[Detection]],
+        transcript: str | None,
+        model: str | None,
+    ):
+        obs = omni.observation or {}
+        if transcript is None:
+            transcript = str(obs.get("transcript") or "")
+        camera_location = self.config.camera_locations.get(self.camera_id)
+        scope = self.resolver.window_policy(camera_location, obs.get("location_hint"))
+        location, no_capture = scope.location, scope.no_capture
+        if not no_capture and self.resolver.names_private_place(str(obs.get("scene_summary") or "")):
+            # AC-PER-23 review: the hint may name only the parent module while the summary says crew quarters
+            logger.info("scene summary names a private place; window treated as no_capture",
+                        extra={"camera_id": self.camera_id, "window": window.index})
+            no_capture = True
+        if scope.hint_conflict and not no_capture:
+            logger.warning(
+                "location hint names another module than the fixed camera; sightings get low confidence",
+                extra={"camera_id": self.camera_id, "camera_location": camera_location, "location": location},
+            )
+        ctx = _WindowContext(self, window, location, no_capture, scope.hint_conflict)
+        dets = [list(detections[i]) if i < len(detections) else [] for i in range(len(window.frames))]
+
+        observed = self._link(window, obs.get("objects") or [], dets)
+        for o in observed:
+            o.location = self._object_location(ctx, o)
+        fungible = [o for o in observed if self._is_fungible(o)]
+        instances = [o for o in observed if not self._is_fungible(o) and not (o.is_unknown and no_capture)]
+
+        reviews: list[dict[str, Any]] = []
+        self._match_instances(ctx, instances)
+        self._check_speech_flags(ctx, instances)
+        assignments = [self._assignment(ctx, o) for o in instances]
+        self._expected_count_reviews(ctx, instances)
+        for o in instances:
+            reviews.extend(o.reviews)
+        if no_capture:
+            reviews = []
+
+        events = self._visual_events(ctx, obs, instances)
+        speech_events, claims = self._speech_events(ctx, transcript, instances)
+        events.extend(speech_events)
+
+        window_doc: dict[str, Any] = {
+            "camera_id": self.camera_id,
+            "t_start": _iso(window.t_start),
+            "t_end": _iso(window.t_end),
+            "scene_summary": str(obs.get("scene_summary") or ""),
+            "transcript": "" if no_capture else (transcript or ""),
+            "audio_events": list(obs.get("audio_events") or []),
+            "model": model or omni.model or "unknown",
+        }
+        if not no_capture:
+            raw = omni.raw or json.dumps(obs)
+            window_doc["raw_uri"] = self.storage.put(
+                raw_key(self.camera_id, window.t_end), raw.encode("utf-8"), "application/json"
+            )
+        payload: dict[str, Any] = {
+            "window": window_doc,
+            "assignments": assignments,
+            "events": events,
+            "reviews": reviews,
+            "decisions": ctx.decisions,
+            "stock_updates": self._stock_updates(ctx, fungible, dets),
+        }
+        return payload, instances, claims
+
+    def _object_location(self, ctx: _WindowContext, o: _Observed) -> str | None:
+        """Camera-configured zone (config.camera_zones) containing the centre of the object's box, when it is a
+        known, capturable location inside the window location; else the window location. Smallest zone wins."""
+        zones = self.config.camera_zones.get(self.camera_id) or {}
+        if not zones or o.bbox is None or ctx.location is None:
+            return ctx.location
+        cx, cy = (o.bbox[0] + o.bbox[2]) / 2.0, (o.bbox[1] + o.bbox[3]) / 2.0
+        best: tuple[float, str] | None = None
+        for zone_id, (x1, y1, x2, y2) in zones.items():
+            if not (x1 <= cx <= x2 and y1 <= cy <= y2):
+                continue
+            if not self.resolver.exists(zone_id) or self.resolver.is_no_capture(zone_id):
+                continue
+            if not self.resolver.within(zone_id, ctx.location):
+                continue
+            area = (x2 - x1) * (y2 - y1)
+            if best is None or area < best[0]:
+                best = (area, zone_id)
+        return best[1] if best else ctx.location
+
+    def _is_fungible(self, o: _Observed) -> bool:
+        item = self.mapper.item(o.catalog_id)
+        return bool(item and item.get("is_fungible"))
+
+    def _link(self, window: Window, objects: Sequence[dict[str, Any]], dets: list[list[Detection]]) -> list[_Observed]:
+        """Consolidate the omni objects (AC-PER-19), then link each instance to a detector box: IoU links for all
+        instances first, then label links for the rest; each box is used once."""
+        n_frames = len(window.frames)
+        entries = []
+        for index, obj in enumerate(objects):
+            fi = obj.get("frame_index")
+            fi = fi if isinstance(fi, int) and not isinstance(fi, bool) and 0 <= fi < n_frames else None
+            box = obj.get("bbox")
+            box = tuple(float(v) for v in box) if isinstance(box, list) and len(box) == 4 else None
+            entries.append(_Entry(index, obj, self.mapper.map(str(obj.get("label") or "")), fi, box))
+        groups = self._consolidate(entries, dets)
+        if len(groups) < len(entries):
+            logger.info(
+                "omni objects consolidated within the window",
+                extra={"window": window.index, "objects": len(entries), "instances": len(groups)},
+            )
+        used: set[tuple[int, int]] = set()
+        links: list[_Link | None] = [None] * len(groups)
+        for gi, group in enumerate(groups):  # pass 1: detector boxes that agree with omni's box
+            best = None
+            for e in group:
+                hit = self._iou_link(e, dets, used, n_frames)
+                if hit is not None and (best is None or hit.rank > best.rank):
+                    best = hit
+            if best is not None:
+                used.add(best.det)
+                links[gi] = best
+        for gi, group in enumerate(groups):  # pass 2: same label in the requested / latest frame
+            if links[gi] is not None:
+                continue
+            best = None
+            for e in group:
+                frames = [e.frame_index] if e.frame_index is not None else list(range(n_frames - 1, -1, -1))
+                det = self._link_by_label(e.match, e.obj, frames, dets, used)
+                if det is not None:
+                    hit = _Link(e, det[0], det, dets[det[0]][det[1]])
+                else:
+                    hit = _Link(e, e.frame_index if e.frame_index is not None else max(n_frames - 1, 0))
+                if best is None or hit.rank > best.rank:
+                    best = hit
+            if best is not None and best.det is not None:
+                used.add(best.det)
+            links[gi] = best
+        out: list[_Observed] = []
+        for group, link in zip(groups, links, strict=True):
+            assert link is not None
+            rep, detection = link.entry, link.detection
+            obj = dict(rep.obj)
+            holder = next((e.obj.get("held_by") for e in group if e.obj.get("held_by")), None)
+            if holder and not obj.get("held_by"):
+                obj["held_by"] = holder
+            out.append(
+                _Observed(
+                    index=rep.index,
+                    obj=obj,
+                    match=rep.match,
+                    frame_idx=link.frame_idx,
+                    bbox=tuple(float(v) for v in detection.bbox) if detection else rep.box,
+                    detection=detection,
+                    held=holder is not None,
+                    ref=f"o{rep.index}",
+                    members=sorted(e.index for e in group),
+                )
+            )
+        return out
+
+    def _consolidation_key(self, e: _Entry) -> tuple[str, str] | None:
+        """Instances of the same key may be consolidated; None = never (fungible, or an empty UNKNOWN label)."""
+        if e.match.catalog_id == UNKNOWN:
+            label = normalise_label(str(e.obj.get("label") or ""))
+            return ("unknown", label) if label else None
+        item = self.mapper.item(e.match.catalog_id)
+        if item and item.get("is_fungible"):
+            return None  # AC-PER-9 counts per frame
+        return ("class", e.match.catalog_id)
+
+    def _same_instance(self, a: _Entry, b: _Entry, dets: list[list[Detection]]) -> bool:
+        same_frame = a.frame_index is not None and a.frame_index == b.frame_index
+        if a.box is None or b.box is None:
+            return not same_frame
+        if iou(a.box, b.box) < self.config.consolidate_iou:
+            return False
+        if same_frame:
+            # Listed twice in one frame with overlapping boxes: a repeat, unless the detector sees two distinct
+            # objects of the class there (stacked laptops).
+            da, db = self._frame_detection(a, dets), self._frame_detection(b, dets)
+            if da is not None and db is not None and da != db:
+                return False
+        return True
+
+    def _frame_detection(self, e: _Entry, dets: list[list[Detection]]) -> int | None:
+        """Index of the same-class detection in ``e``'s frame that best overlaps its box (IoU >= link_iou)."""
+        if e.frame_index is None or e.box is None or e.frame_index >= len(dets):
+            return None
+        best, found = 0.0, None
+        for d_i, det in enumerate(dets[e.frame_index]):
+            det_match = self.mapper.map(det.label)
+            if e.match.catalog_id != UNKNOWN and det_match.catalog_id != e.match.catalog_id:
+                continue
+            overlap = iou(e.box, det.bbox)
+            if overlap >= self.config.link_iou and overlap > best:
+                best, found = overlap, d_i
+        return found
+
+    def _consolidate(self, entries: list[_Entry], dets: list[list[Detection]]) -> list[list[_Entry]]:
+        """Leader clustering (AC-PER-19): visit by omni confidence (then window order); join the first cluster whose
+        leader has the same key and is the same instance. Not transitive. Clusters in window order."""
+        clusters: list[list[_Entry]] = []
+        for e in sorted(entries, key=lambda x: (-x.confidence, x.index)):
+            key = self._consolidation_key(e)
+            target = None
+            if key is not None:
+                target = next(
+                    (
+                        c
+                        for c in clusters
+                        if self._consolidation_key(c[0]) == key and self._same_instance(c[0], e, dets)
+                    ),
+                    None,
+                )
+            if target is None:
+                clusters.append([e])
+            else:
+                target.append(e)
+        return sorted(clusters, key=lambda c: min(x.index for x in c))
+
+    def _iou_link(self, e: _Entry, dets: list[list[Detection]], used: set[tuple[int, int]], n_frames: int):
+        if e.box is None:
+            return None
+        frames = [e.frame_index] if e.frame_index is not None else list(range(n_frames - 1, -1, -1))
+        best, linked = 0.0, None
+        for f in frames:
+            for d_i, det in enumerate(dets[f]):
+                if (f, d_i) in used:
+                    continue
+                overlap = iou(e.box, det.bbox)
+                if overlap >= self.config.link_iou and overlap > best:
+                    best, linked = overlap, (f, d_i)
+        if linked is None:
+            return None
+        return _Link(e, linked[0], linked, dets[linked[0]][linked[1]], agrees=True)
+
+    def _link_by_label(
+        self,
+        match: LabelMatch,
+        obj: dict[str, Any],
+        frames: list[int],
+        dets: list[list[Detection]],
+        used: set[tuple[int, int]],
+    ) -> tuple[int, int] | None:
+        label = normalise_label(str(obj.get("label") or ""))
+        best: tuple[float, tuple[int, int]] | None = None
+        for f in frames:
+            for d_i, det in enumerate(dets[f]):
+                if (f, d_i) in used:
+                    continue
+                det_match = self.mapper.map(det.label)
+                same = (
+                    det_match.catalog_id == match.catalog_id
+                    if match.catalog_id != UNKNOWN
+                    else normalise_label(det.label) == label
+                )
+                if same and (best is None or det.score > best[0]):
+                    best = (det.score, (f, d_i))
+            if best is not None:
+                break  # prefer the requested / latest frame
+        return best[1] if best else None
+
+    # ------------------------------------------------------------------ matching
+    def _features(self, ctx: _WindowContext, o: _Observed, cand: dict[str, Any]) -> CandidateFeatures | None:
+        """Hard gates (None = gated) and score features for one candidate."""
+        cand_catalog = cand.get("catalog_id") or None
+        if o.is_unknown:
+            # An UNKNOWN label is not a class: it may be an unclassified entity (class match) or an entity NASA has
+            # classified since (review resolution) that the model still describes in free text (no class match).
+            class_match = cand_catalog is None
+        elif cand_catalog != o.catalog_id:
+            return None  # class mismatch
+        else:
+            class_match = True
+        seen_at = ctx.frame_ts(o.frame_idx)
+        last_seen = _parse_ts(cand.get("last_seen_at"))
+        recency = abs((seen_at - last_seen).total_seconds()) if last_seen else None
+        last_loc = cand.get("last_location")
+        if not o.held and recency is not None and recency < self.config.min_transit_s:
+            m_now, m_then = self.resolver.module_of(o.location), self.resolver.module_of(last_loc)
+            if m_now and m_then and m_now != m_then:
+                return None  # impossible transit for an object nobody is carrying
+        sim = cand.get("similarity")
+        return CandidateFeatures(
+            similarity=float(sim) if sim is not None else 0.0,
+            class_match=class_match,
+            zone_match=self.resolver.same_module(last_loc, o.location),
+            recency_s=recency,
+        )
+
+    def _exemplar_ok(self, o: _Observed, image: np.ndarray) -> bool:
+        """AC-PER-22: only a detector-localised crop of at least ``min_crop_px`` (short side) is an exemplar."""
+        return o.detection is not None and o.bbox is not None and min(image.shape[:2]) >= self.config.min_crop_px
+
+    def _match_instances(self, ctx: _WindowContext, instances: list[_Observed]) -> None:
+        embedded: list[_Observed] = []
+        gated: list[_Observed] = []
+        for o in instances:
+            image = self._crop(ctx, o)
+            if not self._exemplar_ok(o, image):
+                gated.append(o)
+                continue
+            embedded.append(o)
+            o.embedding = np.asarray(self.embedder.embed(image), dtype=np.float32).reshape(-1)
+            candidates = (
+                self.api.candidates(
+                    [float(v) for v in o.embedding],
+                    catalog_id=o.catalog_id,
+                    location_id=o.location,
+                    k=max(self.config.candidates_k, self.config.unknown_candidates_k)
+                    if o.is_unknown
+                    else self.config.candidates_k,
+                )
+                or []
+            )
+            o.candidate_ids = {str(c.get("entity_id")) for c in candidates}
+            scored = []
+            for cand in candidates:
+                features = self._features(ctx, o, cand)
+                if features is not None:
+                    scored.append(_Scored(cand, _clamp01(self.scorer(features), 0.0)))
+            o.scored = _rank(scored, o.location)
+        # One entity per window: the object with the strongest match chooses first (ties: window order); instances
+        # without an exemplar (AC-PER-22) come last and match by class and place only.
+        taken: set[str] = set()
+        for o in sorted(embedded, key=lambda x: (-(x.scored[0].p if x.scored else -1.0), x.index)):
+            self._decide(ctx, o, [s for s in o.scored if s.entity_id not in taken])
+            if o.entity_id:
+                taken.add(o.entity_id)
+        # An embedded instance that matched nothing may be an entity created from exemplar-less sightings (never a
+        # candidate, it has no exemplar): adopt it by class and place, never an entity already judged different by
+        # appearance. Its exemplar then becomes that entity's first one.
+        for o in embedded:
+            if o.entity_id is None and not o.reviews:
+                self._match_without_exemplar(ctx, o, taken | o.candidate_ids)
+                if o.entity_id:
+                    taken.add(o.entity_id)
+        for o in gated:
+            self._match_without_exemplar(ctx, o, taken)
+            if o.entity_id:
+                taken.add(o.entity_id)
+
+    def _match_without_exemplar(self, ctx: _WindowContext, o: _Observed, taken: set[str]) -> None:
+        """AC-PER-22 class-and-place match: the most recently seen live entity of the same class (UNKNOWN: an
+        unclassified entity with the same normalised label) last seen in the same module (or the same location
+        outside modules) within ``no_exemplar_match_s`` and not taken in this window; else stays new."""
+        try:
+            if o.is_unknown:
+                label = normalise_label(str(o.obj.get("label") or ""))
+                if not label:
+                    return
+                items = self.api.list_items(q=label, sort="-last_seen_at", limit=50) or []
+                items = [
+                    i for i in items if not i.get("catalog_id") and normalise_label(str(i.get("label") or "")) == label
+                ]
+            else:
+                items = self.api.list_items(catalog_id=o.catalog_id, sort="-last_seen_at", limit=50) or []
+                items = [i for i in items if i.get("catalog_id") == o.catalog_id]
+        except Exception as exc:  # noqa: BLE001 - inventory-api is a remote dependency; fall back to a new entity
+            logger.warning("listing entities for a sighting without exemplar failed", extra={"error": str(exc)})
+            return
+        seen_at = ctx.frame_ts(o.frame_idx)
+        best: tuple[datetime, dict[str, Any]] | None = None
+        for item in items:
+            eid = str(item.get("entity_id") or "")
+            last_seen = _parse_ts(item.get("last_seen_at"))
+            if not eid or eid in taken or item.get("status") in ("merged", "dismissed") or last_seen is None:
+                continue
+            if abs((seen_at - last_seen).total_seconds()) > self.config.no_exemplar_match_s:
+                continue
+            if not self._same_place(item.get("last_location"), o.location):
+                continue
+            if best is None or last_seen > best[0]:
+                best = (last_seen, item)
+        if best is not None:
+            o.entity_id = str(best[1]["entity_id"])
+            o.previous_location = best[1].get("last_location")
+
+    def _same_place(self, last_location: str | None, location: str | None) -> bool:
+        if last_location is None or location is None:
+            return False
+        module = self.resolver.module_of(location)
+        if module is None:
+            return last_location == location
+        return self.resolver.module_of(last_location) == module
+
+    def _decide(self, ctx: _WindowContext, o: _Observed, valid: list[_Scored]) -> None:
+        cfg = self.config
+        if not valid:
+            return
+        top = valid[0]
+        decision_band = band(top.p, cfg.assign_p, cfg.ask_p)
+        if decision_band == "assign":
+            self._assign(o, top)
+            return
+        if decision_band == "new":
+            return
+        options_sc = [s for s in valid if s.p >= cfg.ask_p][:MAX_DECISION_OPTIONS]
+        options = {s.entity_id: self._describe_candidate(s) for s in options_sc}
+        options[NEW] = f"a different {o.match.class_name or o.obj.get('label') or 'object'} not listed here"
+        subject = {
+            "camera_id": self.camera_id,
+            "observed_at": _iso(ctx.frame_ts(o.frame_idx)),
+            "label": o.obj.get("label"),
+            "catalog_id": o.catalog_id,
+            "location_id": o.location,
+            "candidates": [
+                {"entity_id": s.entity_id, "p": round(s.p, 4), "similarity": s.candidate.get("similarity")}
+                for s in options_sc
+            ],
+        }
+        state = {
+            "observation": {
+                "label": o.obj.get("label"),
+                "description": o.obj.get("description"),
+                "location": o.location,
+                "observed_at": subject["observed_at"],
+                "held": o.held,
+            },
+            "candidates": {
+                s.entity_id: {
+                    "label": s.candidate.get("label"),
+                    "last_location": s.candidate.get("last_location"),
+                    "last_seen_at": str(s.candidate.get("last_seen_at")),
+                    "score": round(s.p, 4),
+                }
+                for s in options_sc
+            },
+        }
+        try:
+            result = self.decision.choose(
+                SAME_OR_NEW,
+                options,
+                state=state,
+                instructions="Is the observed object one of the listed entities, or NEW?",
+            )
+        except Exception as exc:  # noqa: BLE001 - decision model is a remote dependency
+            result = DecisionResult(
+                choice=NEW,
+                probabilities={},
+                needs_review=True,
+                error=str(exc),
+                model=getattr(self.decision, "model", "") or "unknown",
+            )
+        ctx.log_decision(SAME_OR_NEW, subject, result)
+        candidate_ids = [s.entity_id for s in options_sc]
+        choice_p = float(result.probabilities.get(result.choice, 0.0)) if result.probabilities else 0.0
+        if not result.needs_review and result.choice in candidate_ids and choice_p >= cfg.decision_accept:
+            self._assign(o, next(s for s in options_sc if s.entity_id == result.choice))
+            return
+        if not result.needs_review and result.choice == NEW and choice_p >= cfg.decision_accept:
+            return  # confidently a different object
+        o.reviews.append(
+            {
+                "kind": "possible_duplicate",
+                "candidate_ids": candidate_ids,
+                "probabilities": dict(result.probabilities),
+                "description": self._review_description(o, "possible duplicate of an existing entity"),
+            }
+        )
+
+    def _describe_candidate(self, s: _Scored) -> str:
+        c = s.candidate
+        return (
+            f"{c.get('label') or 'entity'} last seen in {c.get('last_location') or 'unknown location'} at "
+            f"{c.get('last_seen_at') or 'unknown time'} (appearance similarity {float(c.get('similarity') or 0):.2f})"
+        )
+
+    def _assign(self, o: _Observed, s: _Scored) -> None:
+        o.entity_id = s.entity_id
+        o.previous_location = s.candidate.get("last_location")
+
+    def _crop(self, ctx: _WindowContext, o: _Observed) -> np.ndarray:
+        """Crop from the full-resolution keyframe (AC-PER-21); boxes are normalised, so they scale exactly."""
+        image = ctx.window.frames[o.frame_idx].hires
+        return crop_image(image, o.bbox) if o.bbox is not None else image
+
+    def _review_description(self, o: _Observed, reason: str) -> str:
+        desc = str(o.obj.get("description") or "").strip()
+        label = str(o.obj.get("label") or "object").strip()
+        return f"{label}: {desc} ({reason})" if desc else f"{label} ({reason})"
+
+    # ------------------------------------------------------------------ payload parts
+    def _assignment(self, ctx: _WindowContext, o: _Observed) -> dict[str, Any]:
+        has_exemplar = o.embedding is not None
+        crop_uri = ctx.crop_uri(o, self._crop(ctx, o)) if has_exemplar else None
+        seen_at = ctx.frame_ts(o.frame_idx)
+        confidence = _clamp01(o.obj.get("confidence"), 0.5)
+        if ctx.hint_conflict:
+            confidence = min(confidence, _clamp01(self.config.hint_conflict_confidence, 0.5))
+        sighting: dict[str, Any] = {
+            "location_id": o.location,
+            "seen_at": _iso(seen_at),
+            "bbox": [round(float(v), 6) for v in o.bbox] if o.bbox is not None else None,
+            "confidence": confidence,
+            "description": str(o.obj.get("description") or "")[:400],
+        }
+        frame_uri = ctx.frame_uri(o.frame_idx)
+        if frame_uri:
+            sighting["frame_uri"] = frame_uri
+        exemplar: dict[str, Any] | None = None
+        if has_exemplar:
+            exemplar = {
+                "embedding": [float(v) for v in o.embedding],
+                "quality": _clamp01(o.detection.score if o.detection else o.obj.get("confidence"), 0.5),
+            }
+            if crop_uri:
+                exemplar["crop_uri"] = crop_uri
+        item = self.mapper.item(o.catalog_id)
+        is_person = bool(item and item.get("category") == "person")
+        a: dict[str, Any] = {
+            "ref": o.ref,
+            "entity_id": o.entity_id,
+            "sighting": sighting,
+            # no appearance (biometric-like) data about people from private zones
+            "exemplar": None if (is_person and ctx.no_capture) else exemplar,
+        }
+        if o.entity_id is None:
+            attributes = o.obj.get("attributes") if isinstance(o.obj.get("attributes"), dict) else {}
+            a["new_entity"] = {
+                "catalog_id": o.catalog_id,
+                "kind": "person" if is_person else "object",
+                "status": "unknown" if o.is_unknown else "provisional",
+                "label": (item.get("class_name") if item else None) or str(o.obj.get("label") or "unknown object"),
+                "description": str(o.obj.get("description") or ""),
+                "attributes": attributes,
+            }
+            if o.is_unknown:
+                o.reviews.append(
+                    {
+                        "kind": "unknown_object",
+                        "candidate_ids": [],
+                        "probabilities": {},
+                        "description": self._review_description(o, "not in the catalog"),
+                    }
+                )
+        for review in o.reviews:
+            review.update(
+                {
+                    "entity_ref": o.ref,
+                    "image_uri": crop_uri or frame_uri,
+                    "observed_at": _iso(seen_at),
+                    "location_id": o.location,
+                    "model_guess": str(o.obj.get("label") or "") or None,
+                }
+            )
+        return a
+
+    def _expected_count_reviews(self, ctx: _WindowContext, instances: list[_Observed]) -> None:
+        live_counts: dict[str, int] = {}
+        new_in_window: Counter[str] = Counter()
+        for o in instances:
+            if o.entity_id is not None or o.catalog_id is None:
+                continue
+            item = self.mapper.item(o.catalog_id)
+            expected = item.get("expected_count") if item else None
+            if expected is None:
+                continue
+            if o.catalog_id not in live_counts:
+                live_counts[o.catalog_id] = int(self.api.count_live_entities(o.catalog_id))
+            new_in_window[o.catalog_id] += 1
+            total = live_counts[o.catalog_id] + new_in_window[o.catalog_id]
+            if total > int(expected) and not any(r["kind"] == "possible_duplicate" for r in o.reviews):
+                review = {
+                    "kind": "possible_duplicate",
+                    "candidate_ids": [s.entity_id for s in o.scored[:5]],
+                    "probabilities": {},
+                    "description": self._review_description(
+                        o, f"{total} live '{o.match.class_name}' entities would exceed the expected count of {expected}"
+                    ),
+                }
+                seen_at = ctx.frame_ts(o.frame_idx)
+                existing_image = next((r.get("image_uri") for r in o.reviews if r.get("image_uri")), None)
+                crop = ctx.crop_uri(o, self._crop(ctx, o)) if o.embedding is not None else None
+                image = existing_image or crop or ctx.frame_uri(o.frame_idx)
+                review.update(
+                    {
+                        "entity_ref": o.ref,
+                        "image_uri": image,
+                        "observed_at": _iso(seen_at),
+                        "location_id": o.location,
+                        "model_guess": str(o.obj.get("label") or "") or None,
+                    }
+                )
+                o.reviews.append(review)
+
+    def _stock_updates(
+        self, ctx: _WindowContext, fungible: list[_Observed], dets: list[list[Detection]]
+    ) -> list[dict[str, Any]]:
+        if not fungible or ctx.location is None:
+            return []
+        omni_counts: Counter[tuple[str, int]] = Counter((o.catalog_id, o.frame_idx) for o in fungible)
+        classes = list(dict.fromkeys(o.catalog_id for o in fungible))
+        det_counts: Counter[tuple[str, int]] = Counter()
+        for f, frame_dets in enumerate(dets):
+            for det in frame_dets:
+                cid = self.mapper.map(det.label).catalog_id
+                if cid in classes:
+                    det_counts[(cid, f)] += 1
+        out = []
+        for cid in classes:
+            per_frame = [n for (c, _f), n in omni_counts.items() if c == cid]
+            per_frame += [n for (c, _f), n in det_counts.items() if c == cid]
+            out.append(
+                {
+                    "catalog_id": cid,
+                    "location_id": ctx.location,
+                    "est_count": int(max(per_frame)),
+                    "seen_at": _iso(ctx.window.t_end),
+                }
+            )
+        return out
+
+    def _visual_events(self, ctx: _WindowContext, obs: dict[str, Any], instances: list[_Observed]) -> list[dict]:
+        people = {p.get("ref"): p for p in obs.get("people") or [] if isinstance(p, dict)}
+        n_frames = len(ctx.window.frames)
+        events = []
+        for ev in obs.get("events") or []:
+            label = str(ev.get("object_label") or "")
+            match = self.mapper.map(label)
+            pool = [
+                o
+                for o in instances
+                if (
+                    o.match.catalog_id == match.catalog_id
+                    if match.catalog_id != UNKNOWN
+                    else o.is_unknown and normalise_label(o.obj.get("label") or "") == normalise_label(label)
+                )
+            ]
+            if not pool:
+                logger.info(
+                    "omni event for an object not observed in the window dropped",
+                    extra={"window": ctx.window.index, "label": label, "type": ev.get("type")},
+                )
+                continue
+            actor_ref = ev.get("actor_ref")
+            target = next((o for o in pool if actor_ref and o.obj.get("held_by") == actor_ref), pool[0])
+            fi = ev.get("frame_index")
+            fi = fi if isinstance(fi, int) and 0 <= fi < n_frames else n_frames - 1
+            actor = people.get(actor_ref) if actor_ref else None
+            to_location = self.resolver.resolve(ev.get("to_location_hint"))
+            occurred = ctx.frame_ts(fi)
+            if target.entity_id and self._is_repeat(target.entity_id, str(ev.get("type")), to_location, occurred):
+                logger.info(
+                    "omni event already recorded from an overlapping window; dropped",
+                    extra={"window": ctx.window.index, "entity_id": target.entity_id, "type": ev.get("type")},
+                )
+                continue
+            events.append(
+                {
+                    "event_type": ev.get("type"),
+                    "entity_ref": target.ref,
+                    "actor_desc": str(actor.get("appearance")) if actor and actor.get("appearance") else None,
+                    "from_location": target.previous_location if target.entity_id else None,
+                    "to_location": to_location,
+                    "occurred_at": _iso(occurred),
+                    "confidence": _clamp01(ev.get("confidence"), 0.5),
+                    "evidence_uri": ctx.frame_uri(fi),
+                    "source": "pipeline",
+                }
+            )
+        return events
+
+    def _is_repeat(self, entity_id: str, event_type: str, to_location: str | None, occurred: datetime) -> bool:
+        """True when the same event was recorded within ``event_dedup_s`` (overlapping windows show the same
+        action). A repeat extends the dedup horizon, so an event reported by a chain of windows is recorded once."""
+        key = (str(entity_id), event_type, to_location)
+        previous = self._recent_events.get(key)
+        if previous is None or abs((occurred - previous).total_seconds()) > self.config.event_dedup_s:
+            return False
+        self._recent_events[key] = max(previous, occurred)
+        return True
+
+    def _speech_events(
+        self, ctx: _WindowContext, transcript: str, instances: list[_Observed]
+    ) -> tuple[list[dict], list[dict]]:
+        events: list[dict] = []
+        claims: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        for utterance in split_utterances(transcript):
+            act, result = classify_utterance_logged(utterance, self.decision)
+            if result is not None:
+                subject = {"camera_id": self.camera_id, "t_end": _iso(ctx.window.t_end)}
+                if not ctx.no_capture:
+                    subject["utterance"] = utterance  # speech from private zones is not stored verbatim
+                ctx.log_decision(SPEECH_ACT, subject, result)
+            if act != "statement":
+                continue
+            claim = parse_speech_claim(utterance, self.catalog, self.resolver)
+            if claim is None:
+                continue
+            target = self._claim_target(ctx, claim.catalog_id, instances)
+            if target is None:
+                logger.info(
+                    "speech claim without a known entity ignored",
+                    extra={"catalog_id": claim.catalog_id, "location": claim.location_id},
+                )
+                continue
+            key = (target.get("entity_ref") or target["entity_id"], claim.location_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            p_statement = result.probabilities.get("statement") if result and not result.needs_review else None
+            cap = self.config.speech_max_confidence
+            confidence = cap * (_clamp01(p_statement, 0.75) if p_statement is not None else 0.75)
+            event = {
+                "event_type": claim.event_type,
+                "from_location": target.get("last_location"),
+                "to_location": claim.location_id,
+                "occurred_at": _iso(ctx.window.t_end),
+                "confidence": round(min(max(confidence, 0.01), cap), 4),
+                "actor_desc": None,
+                "evidence_uri": None,
+                "source": "speech",
+            }
+            if target.get("entity_ref"):
+                event["entity_ref"] = target["entity_ref"]
+            else:
+                event["entity_id"] = target["entity_id"]
+            events.append(event)
+            confirmed_now = any(
+                o.ref == target.get("entity_ref") and self.resolver.within(o.location, claim.location_id)
+                for o in instances
+            )
+            claims.append(
+                {**target, "location_id": claim.location_id, "at": ctx.window.t_end, "confirmed": confirmed_now}
+            )
+        return events, claims
+
+    def _claim_target(self, ctx: _WindowContext, catalog_id: str, instances: list[_Observed]) -> dict[str, Any] | None:
+        """The entity a spoken claim is about: one sighted in this window, else the most recently seen live one in
+        the camera's module (the speaker is near the camera), else the most recently seen live one. Never a new
+        entity created from the words alone."""
+        for o in instances:
+            if o.catalog_id == catalog_id:
+                return {"entity_ref": o.ref, "entity_id": o.entity_id, "last_location": o.previous_location}
+        try:
+            items = self.api.list_items(catalog_id=catalog_id, sort="-last_seen_at", limit=5)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("list_items failed for a speech claim", extra={"error": str(exc)})
+            return None
+        live = [i for i in items if i.get("status") not in ("merged", "dismissed")]
+        if not live:
+            return None
+        module = self.resolver.module_of(ctx.location)
+        nearby = [i for i in live if module and self.resolver.module_of(i.get("last_location")) == module]
+        chosen = (nearby or live)[0]
+        return {
+            "entity_ref": None,
+            "entity_id": str(chosen["entity_id"]),
+            "last_location": chosen.get("last_location"),
+        }
+
+    def _check_speech_flags(self, ctx: _WindowContext, instances: list[_Observed]) -> None:
+        """Confirm or escalate earlier speech claims on the existing entities sighted in this window. The claim
+        state is read from inventory (flag + latest speech ``moved`` event), so it works across camera processes
+        and restarts. Only flags without a ``review_reason`` are speech flags: a flag set by an open review item is
+        never touched."""
+        existing = {o.entity_id: o for o in instances if o.entity_id}
+        list_events = getattr(self.api, "list_events", None)
+        if not existing or list_events is None:
+            return
+        try:
+            flagged = self.api.list_items(needs_review=True, limit=500)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("listing flagged entities failed", extra={"error": str(exc)})
+            return
+        horizon_s = self.config.speech_confirm_s
+        for item in flagged:
+            o = existing.get(str(item.get("entity_id")))
+            if o is None or item.get("review_reason"):
+                continue
+            try:
+                events = list_events(entity_id=o.entity_id, type="moved", limit=20) or []
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("listing events failed", extra={"entity_id": o.entity_id, "error": str(exc)})
+                continue
+            claims = [
+                (at, e) for e in events if e.get("source") == "speech" and (at := _parse_ts(e.get("occurred_at")))
+            ]
+            if not claims:
+                continue  # flagged by an operator or for another reason: leave it alone
+            claimed_at, claim = max(claims, key=lambda c: c[0])
+            claimed_loc = claim.get("to_location")
+            seen_at = ctx.frame_ts(o.frame_idx)
+            age_s = (seen_at - claimed_at).total_seconds()
+            if age_s < 0:
+                continue
+            if age_s <= horizon_s:
+                if self.resolver.within(o.location, claimed_loc):
+                    o.clear_claim = claimed_loc
+            elif not ctx.no_capture:
+                o.reviews.append(
+                    {
+                        "kind": "conflict",
+                        "candidate_ids": [],
+                        "probabilities": {},
+                        "description": self._review_description(
+                            o,
+                            f"speech claim 'moved to {claimed_loc}' at {_iso(claimed_at)} was not confirmed by a "
+                            f"sighting within {int(horizon_s // 60)} min; now seen in {o.location or 'unknown'}",
+                        ),
+                    }
+                )
+
+    # ------------------------------------------------------------------ after posting
+    def _after_post(
+        self,
+        window: Window,
+        payload: dict[str, Any],
+        response: dict[str, Any],
+        observed: list[_Observed],
+        claims: list[dict[str, Any]],
+    ) -> None:
+        refs = {str(k): str(v) for k, v in (response.get("entities") or {}).items()}
+
+        def resolve(entity_id: str | None, ref: str | None) -> str | None:
+            return str(entity_id) if entity_id else refs.get(ref or "")
+
+        # 1. remember recorded omni events (overlap dedup)
+        for ev in payload.get("events", []):
+            if ev.get("source") != "pipeline":
+                continue
+            eid = resolve(ev.get("entity_id"), ev.get("entity_ref"))
+            occurred = _parse_ts(ev.get("occurred_at"))
+            if eid and occurred:
+                key = (eid, str(ev.get("event_type")), ev.get("to_location"))
+                self._recent_events[key] = max(self._recent_events.get(key, occurred), occurred)
+        horizon = timedelta(seconds=max(self.config.event_dedup_s, 0.0) * 6 + 60)
+        for key, at in list(self._recent_events.items()):
+            if window.t_end - at > horizon:
+                del self._recent_events[key]
+        # 2. visual confirmations of earlier speech claims (decided in _check_speech_flags)
+        for o in observed:
+            if o.entity_id and o.clear_claim:
+                self._patch(
+                    o.entity_id,
+                    {
+                        "needs_review": False,
+                        "operator": "perception",
+                        "note": f"speech claim confirmed by a sighting in {o.clear_claim}",
+                    },
+                )
+        # 3. new speech-only claims: flag until a sighting confirms them
+        for claim in claims:
+            eid = resolve(claim.get("entity_id"), claim.get("entity_ref"))
+            if not eid or claim.get("confirmed"):
+                continue
+            self._patch(
+                eid,
+                {
+                    "needs_review": True,
+                    "operator": "perception",
+                    "note": f"speech claim: moved to {claim['location_id']} (unconfirmed)",
+                },
+            )
+
+    def _patch(self, entity_id: str, fields: dict[str, Any]) -> bool:
+        try:
+            self.api.patch_item(entity_id, fields)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("patching entity failed", extra={"entity_id": entity_id, "error": str(exc)})
+            return False

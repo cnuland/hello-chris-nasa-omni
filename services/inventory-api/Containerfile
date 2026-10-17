@@ -1,0 +1,16 @@
+# inventory-api - UBI9 Python 3.11 image.
+# Build from the REPO ROOT so the DB contracts can be bundled for the migrations runner:
+#   podman build -f services/inventory-api/Containerfile -t inventory-api .
+FROM registry.access.redhat.com/ubi9/python-311:latest
+
+WORKDIR /opt/app-root/src
+COPY services/inventory-api/pyproject.toml ./
+COPY services/inventory-api/inventory_api ./inventory_api
+COPY contracts/db ./migrations
+RUN pip install --no-cache-dir .
+
+ENV MIGRATIONS_DIR=/opt/app-root/src/migrations \
+    PORT=8080
+EXPOSE 8080
+USER 1001
+CMD ["sh", "-c", "python -m inventory_api.migrations && exec uvicorn inventory_api.main:app --host 0.0.0.0 --port ${PORT}"]

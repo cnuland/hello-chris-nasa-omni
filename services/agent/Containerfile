@@ -1,0 +1,15 @@
+# agent - UBI9 Python 3.11 image. Serves the chat API (8080). The same image runs the MCP server
+# (`python mcp_server.py`, port 8090) and the dreaming CronJob (`python -m nasa_agent.dreaming --once`).
+#   podman build -f services/agent/Containerfile -t nasa-agent services/agent
+FROM registry.access.redhat.com/ubi9/python-311:latest
+
+WORKDIR /opt/app-root/src
+COPY pyproject.toml mcp_server.py ./
+COPY nasa_agent ./nasa_agent
+RUN pip install --no-cache-dir .
+
+ENV PORT=8080 \
+    MCP_PORT=8090
+EXPOSE 8080 8090
+USER 1001
+CMD ["sh", "-c", "exec uvicorn --factory nasa_agent.main:create_app --host 0.0.0.0 --port ${PORT}"]

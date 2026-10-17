@@ -1,0 +1,38 @@
+# RustFS (Apache-2.0), an S3-compatible object store for frames, crops, audio and transcripts.
+# Secret rustfs-creds is created by scripts/bootstrap.sh with random keys (never committed).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: rustfs-data, namespace: nasa-data}
+spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 100Gi}}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: rustfs, namespace: nasa-data, labels: {app: rustfs}}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: rustfs}}
+  template:
+    metadata: {labels: {app: rustfs}}
+    spec:
+      containers:
+        - name: rustfs
+          image: docker.io/rustfs/rustfs:latest
+          args: ["/data"]
+          env:
+            - {name: RUSTFS_ADDRESS, value: ":9000"}
+            - {name: RUSTFS_CONSOLE_ENABLE, value: "true"}
+            - {name: RUSTFS_ACCESS_KEY, valueFrom: {secretKeyRef: {name: rustfs-creds, key: access-key}}}
+            - {name: RUSTFS_SECRET_KEY, valueFrom: {secretKeyRef: {name: rustfs-creds, key: secret-key}}}
+          ports: [{containerPort: 9000, name: s3}, {containerPort: 9001, name: console}]
+          volumeMounts: [{name: data, mountPath: /data}]
+          readinessProbe: {tcpSocket: {port: 9000}, periodSeconds: 10}
+          resources: {requests: {cpu: 250m, memory: 512Mi}, limits: {memory: 2Gi}}
+      volumes: [{name: data, persistentVolumeClaim: {claimName: rustfs-data}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: rustfs, namespace: nasa-data}
+spec:
+  selector: {app: rustfs}
+  ports: [{name: s3, port: 9000}, {name: console, port: 9001}]

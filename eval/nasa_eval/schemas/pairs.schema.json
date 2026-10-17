@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nasa-omni.local/eval/pairs.schema.json",
+  "title": "Decision-model same-or-new pair (one line of pairs.jsonl)",
+  "description": "AC-EVAL-7. observation/candidate crops are PNG paths relative to the pairs file (must stay inside it); context carries what the pipeline would know (similarity of the two crops, the observation's catalog_id) and is sent to the model; meta is evaluation-only (stratum) and is never sent. A legacy context.hard_negative is moved to meta on load.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "pair_id",
+    "label",
+    "observation",
+    "candidate",
+    "context"
+  ],
+  "properties": {
+    "pair_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "label": {
+      "enum": [
+        "same",
+        "new"
+      ]
+    },
+    "observation": {
+      "type": "object",
+      "required": [
+        "crop"
+      ],
+      "properties": {
+        "crop": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "required": [
+        "crop"
+      ],
+      "properties": {
+        "crop": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "context": {
+      "type": "object",
+      "properties": {
+        "similarity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "catalog_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hard_negative": {
+          "type": "boolean",
+          "description": "legacy: moved to meta on load"
+        }
+      }
+    },
+    "meta": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "positive",
+            "hard_negative",
+            "class_negative"
+          ]
+        },
+        "hard_negative": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

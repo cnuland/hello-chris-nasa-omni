@@ -1,0 +1,532 @@
+"""Internal endpoints for the perception reconciler.
+
+AC-API-17 POST /ingest/candidates, AC-API-18/19/23 POST /ingest/window (atomic, privacy-aware, stock upserts).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+from collections.abc import Iterable
+from dataclasses import dataclass, field
+from typing import Any
+from uuid import UUID, uuid4
+
+import psycopg
+from fastapi import APIRouter
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
+
+from ..deps import Ctx
+from ..errors import Unprocessable
+from ..repo import HIDDEN_STATUSES, jsonb, real, write_audit
+from ..schemas import CandidatesRequest, IngestWindow
+from ..storage import uri_to_key
+
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/ingest", tags=["ingest"])
+
+PIPELINE_ACTOR = "pipeline"
+EXEMPLAR_CAP = 20
+MAX_MERGE_HOPS = 16
+
+
+def _vector_literal(values: Iterable[float]) -> str:
+    return "[" + ",".join(repr(float(v)) for v in values) + "]"
+
+
+# ------------------------------------------------------------------ candidates
+@router.post("/candidates")
+def candidates(body: CandidatesRequest, ctx: Ctx) -> list[dict[str, Any]]:
+    """Top-k live entities by MAX cosine similarity over their exemplars (exact scan; one row per entity)."""
+    sql = """SELECT e.entity_id, e.catalog_id, e.label, e.kind, e.status, e.last_location, e.last_seen_at,
+                    max(1 - (x.embedding <=> %(q)s::halfvec)) AS similarity
+               FROM entity_exemplar x JOIN entity e ON e.entity_id = x.entity_id
+              WHERE e.status <> ALL(%(hidden)s)"""
+    params: dict[str, Any] = {"q": _vector_literal(body.embedding), "hidden": list(HIDDEN_STATUSES), "k": body.k}
+    if body.catalog_id:
+        sql += " AND e.catalog_id = %(catalog_id)s"
+        params["catalog_id"] = body.catalog_id
+    sql += " GROUP BY e.entity_id ORDER BY similarity DESC, e.entity_id LIMIT %(k)s"
+    with ctx.db.connection() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [
+        {
+            "entity_id": r["entity_id"],
+            "catalog_id": r["catalog_id"],
+            "label": r["label"],
+            "kind": r["kind"],
+            "status": r["status"],
+            "similarity": real(r["similarity"]),
+            "last_location": r["last_location"],
+            "last_seen_at": r["last_seen_at"],
+        }
+        for r in rows
+    ]
+
+
+# ------------------------------------------------------------------ window
+@dataclass
+class _Locations:
+    parent: dict[str, str | None]
+    flagged: dict[str, bool]
+    _cache: dict[str, bool] = field(default_factory=dict)
+
+    def exists(self, location_id: str) -> bool:
+        return location_id in self.parent
+
+    def no_capture(self, location_id: str | None) -> bool:
+        """True when the location or any ancestor is flagged no_capture (privacy is inherited)."""
+        if location_id is None or location_id not in self.parent:
+            return False
+        if location_id in self._cache:
+            return self._cache[location_id]
+        seen: set[str] = set()
+        current: str | None = location_id
+        result = False
+        while current is not None and current not in seen:
+            seen.add(current)
+            if self.flagged.get(current):
+                result = True
+                break
+            current = self.parent.get(current)
+        self._cache[location_id] = result
+        return result
+
+
+def _load_locations(conn: psycopg.Connection) -> _Locations:
+    rows = conn.execute("SELECT location_id, parent_id, no_capture FROM location").fetchall()
+    return _Locations(
+        parent={r["location_id"]: r["parent_id"] for r in rows},
+        flagged={r["location_id"]: r["no_capture"] for r in rows},
+    )
+
+
+@dataclass(frozen=True)
+class _Survivor:
+    entity_id: UUID
+    kind: str
+    last_location: str | None
+
+
+def _resolve_existing(conn: psycopg.Connection, ids: set[UUID]) -> dict[UUID, _Survivor]:
+    """Map each referenced existing entity id to its live survivor (following merged_into). 422 if unknown.
+
+    The survivors are locked FOR UPDATE (in entity_id order, like merge_entities) and re-checked after the lock: if a
+    merge committed while we waited, the chain is resolved again. This serializes ingest against merges, so a new
+    sighting can never be attached to an entity that was merged away concurrently.
+    """
+    if not ids:
+        return {}
+    for _attempt in range(MAX_MERGE_HOPS):
+        rows = conn.execute(
+            """WITH RECURSIVE chain(start_id, entity_id, merged_into, status, hops) AS (
+                   SELECT entity_id, entity_id, merged_into, status, 0 FROM entity
+                    WHERE entity_id = ANY(%s::uuid[])
+                   UNION ALL
+                   SELECT c.start_id, e.entity_id, e.merged_into, e.status, c.hops + 1
+                     FROM chain c JOIN entity e ON e.entity_id = c.merged_into
+                    WHERE c.status = 'merged' AND c.hops < %s
+               )
+               SELECT DISTINCT ON (start_id) start_id, entity_id, status FROM chain ORDER BY start_id, hops DESC""",
+            ([str(i) for i in ids], MAX_MERGE_HOPS),
+        ).fetchall()
+        resolved = {r["start_id"]: r["entity_id"] for r in rows if r["status"] != "merged"}
+        missing = ids - set(resolved)
+        if missing:
+            raise Unprocessable(f"unknown entity_id(s): {', '.join(sorted(str(m) for m in missing))}")
+        locked = {
+            r["entity_id"]: r
+            for r in conn.execute(
+                "SELECT entity_id, status, kind, last_location FROM entity WHERE entity_id = ANY(%s::uuid[]) "
+                "ORDER BY entity_id FOR UPDATE",
+                (sorted(str(v) for v in set(resolved.values())),),
+            )
+        }
+        if all(r["status"] != "merged" for r in locked.values()):
+            return {
+                start: _Survivor(sid, locked[sid]["kind"], locked[sid]["last_location"])
+                for start, sid in resolved.items()
+            }
+        logger.info("entity merged while ingest waited for its lock; resolving again")
+    raise Unprocessable("could not resolve referenced entities (merge chain kept changing)")
+
+
+def _validate_references(conn: psycopg.Connection, body: IngestWindow, locs: _Locations) -> None:
+    if conn.execute("SELECT 1 FROM camera WHERE camera_id = %s", (body.window.camera_id,)).fetchone() is None:
+        raise Unprocessable(f"unknown camera_id {body.window.camera_id!r}")
+    location_refs: list[tuple[str, str | None]] = []
+    for i, a in enumerate(body.assignments):
+        location_refs.append((f"assignments[{i}].sighting.location_id", a.sighting.location_id))
+    for i, ev in enumerate(body.events):
+        location_refs += [
+            (f"events[{i}].from_location", ev.from_location),
+            (f"events[{i}].to_location", ev.to_location),
+        ]
+    for i, rv in enumerate(body.reviews):
+        location_refs.append((f"reviews[{i}].location_id", rv.location_id))
+    for i, su in enumerate(body.stock_updates):
+        location_refs.append((f"stock_updates[{i}].location_id", su.location_id))
+    for where, loc in location_refs:
+        if loc is not None and not locs.exists(loc):
+            raise Unprocessable(f"{where}: unknown location {loc!r}")
+
+    catalog_ids = {a.new_entity.catalog_id for a in body.assignments if a.new_entity and a.new_entity.catalog_id}
+    catalog_ids |= {su.catalog_id for su in body.stock_updates}
+    if catalog_ids:
+        found = {
+            r["catalog_id"]
+            for r in conn.execute(
+                "SELECT catalog_id FROM catalog_item WHERE catalog_id = ANY(%s)", (sorted(catalog_ids),)
+            )
+        }
+        if catalog_ids - found:
+            raise Unprocessable(f"unknown catalog_id(s): {', '.join(sorted(catalog_ids - found))}")
+
+
+def _check_uris(body: IngestWindow, bucket: str) -> None:
+    """Every image URI must be ``s3://<our bucket>/<safe key>`` so /media can serve it and nothing else leaks out."""
+    uris: list[tuple[str, str | None]] = []
+    for i, a in enumerate(body.assignments):
+        uris.append((f"assignments[{i}].sighting.frame_uri", a.sighting.frame_uri))
+        if a.exemplar is not None:
+            uris.append((f"assignments[{i}].exemplar.crop_uri", a.exemplar.crop_uri))
+    uris += [(f"events[{i}].evidence_uri", ev.evidence_uri) for i, ev in enumerate(body.events)]
+    uris += [(f"reviews[{i}].image_uri", rv.image_uri) for i, rv in enumerate(body.reviews)]
+    for where, uri in uris:
+        if uri is not None and uri_to_key(uri, bucket) is None:
+            raise Unprocessable(f"{where}: must be an s3://{bucket}/<key> URI with a safe key")
+
+
+@dataclass
+class _Privacy:
+    """AC-API-19 decisions for one payload, made before anything is written."""
+
+    private_assignments: list[bool]
+    private_events: list[bool]
+    dropped_uris: set[str]
+
+
+def _target_key(ref: str | None, entity_id: UUID | None, survivors: dict[UUID, _Survivor]) -> str | None:
+    if ref is not None:
+        return f"ref:{ref}"
+    if entity_id is not None:
+        return f"id:{survivors[entity_id].entity_id}"
+    return None
+
+
+def _decide_privacy(
+    body: IngestWindow, locs: _Locations, camera_location: str | None, survivors: dict[UUID, _Survivor]
+) -> _Privacy:
+    """Work out what must not be stored, and reject reviews that would need a private image (422).
+
+    - A sighting is private when its location (or, without one, the camera's location) is no_capture.
+    - An event is private when from/to, any sighting of its entity in this payload, or (with none of those) the camera
+      location is no_capture.
+    - A review is private when its location, any sighting of its entity in this payload, the existing entity's stored
+      last_location (when this payload does not sight it), or (when it names nothing else) the camera location is
+      no_capture; or when its image is one that this payload drops for privacy.
+    """
+    sightings_by_target: dict[str, list[str | None]] = {}
+    private_assignments: list[bool] = []
+    dropped: set[str] = set()
+    for a in body.assignments:
+        loc = a.sighting.location_id or camera_location
+        private = locs.no_capture(loc)
+        private_assignments.append(private)
+        if private:
+            dropped |= {u for u in (a.sighting.frame_uri, a.exemplar.crop_uri if a.exemplar else None) if u}
+        for key in {_target_key(a.ref, None, survivors), _target_key(None, a.entity_id, survivors)} - {None}:
+            sightings_by_target.setdefault(key, []).append(loc)
+
+    private_events: list[bool] = []
+    for ev in body.events:
+        locations: list[str | None] = [ev.from_location, ev.to_location]
+        locations += sightings_by_target.get(_target_key(ev.entity_ref, ev.entity_id, survivors) or "", [])
+        if not any(locations):
+            locations = [camera_location]
+        private = any(locs.no_capture(loc) for loc in locations) or (ev.evidence_uri in dropped)
+        private_events.append(private)
+        if private and ev.evidence_uri:
+            dropped.add(ev.evidence_uri)
+
+    for i, rv in enumerate(body.reviews):
+        key = _target_key(rv.entity_ref, rv.entity_id, survivors)
+        locations = [rv.location_id] + sightings_by_target.get(key or "", [])
+        if rv.entity_id is not None and not sightings_by_target.get(key or ""):
+            locations.append(survivors[rv.entity_id].last_location)
+        if not any(locations):
+            locations = [camera_location]
+        if any(locs.no_capture(loc) for loc in locations):
+            raise Unprocessable(f"reviews[{i}]: location is no_capture; a review cannot carry an image there")
+        if rv.image_uri in dropped:
+            raise Unprocessable(f"reviews[{i}]: image_uri was captured in a no_capture zone and is not stored")
+    return _Privacy(private_assignments, private_events, dropped)
+
+
+def _request_digest(body: IngestWindow) -> str:
+    canonical = json.dumps(body.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _previous_result(conn: psycopg.Connection, digest: str) -> dict[str, Any] | None:
+    """The response of an identical, already committed ingest (a client retry), if any.
+
+    Serialized per digest with a transaction-scoped advisory lock so two concurrent retries cannot both write.
+    """
+    conn.execute("SELECT pg_advisory_xact_lock(%s)", (int.from_bytes(bytes.fromhex(digest[:16]), "big", signed=True),))
+    row = conn.execute(
+        """SELECT detail FROM audit_log
+            WHERE op = 'update' AND actor = %s AND detail->>'request_sha256' = %s
+            ORDER BY audit_id LIMIT 1""",
+        (PIPELINE_ACTOR, digest),
+    ).fetchone()
+    if row is None:
+        return None
+    return {"window_id": UUID(row["detail"]["window_id"]), "entities": row["detail"].get("entities", {})}
+
+
+@router.post("/window", status_code=201)
+def ingest_window(body: IngestWindow, ctx: Ctx) -> JSONResponse:
+    """Record one reconciled observation window atomically. Any invalid part -> 422 and nothing is written."""
+    _check_uris(body, ctx.bucket)
+    try:
+        with ctx.db.connection() as conn, conn.transaction():
+            result = _record_window(conn, body)
+    except psycopg.IntegrityError as exc:
+        logger.warning("ingest rejected by database constraint", extra={"error": exc.diag.message_primary})
+        raise Unprocessable(f"constraint violation: {exc.diag.message_primary}") from exc
+    except psycopg.DataError as exc:
+        logger.warning("ingest rejected: invalid data", extra={"error": exc.diag.message_primary})
+        raise Unprocessable(f"invalid data: {exc.diag.message_primary}") from exc
+    logger.info(
+        "window ingested",
+        extra={
+            "window_id": str(result["window_id"]),
+            "assignments": len(body.assignments),
+            "events": len(body.events),
+            "reviews": len(body.reviews),
+            "stock_updates": len(body.stock_updates),
+        },
+    )
+    return JSONResponse(jsonable_encoder(result), status_code=201)
+
+
+def _record_window(conn: psycopg.Connection, body: IngestWindow) -> dict[str, Any]:
+    digest = _request_digest(body)
+    previous = _previous_result(conn, digest)
+    if previous is not None:
+        logger.info(
+            "identical ingest already recorded; returning the original result",
+            extra={"window_id": str(previous["window_id"])},
+        )
+        return previous
+
+    locs = _load_locations(conn)
+    _validate_references(conn, body, locs)
+    referenced = {a.entity_id for a in body.assignments if a.entity_id}
+    referenced |= {ev.entity_id for ev in body.events if ev.entity_id}
+    referenced |= {rv.entity_id for rv in body.reviews if rv.entity_id}
+    referenced |= {c for rv in body.reviews for c in rv.candidate_ids}
+    survivors = _resolve_existing(conn, referenced)
+    camera_row = conn.execute(
+        "SELECT location_id FROM camera WHERE camera_id = %s", (body.window.camera_id,)
+    ).fetchone()
+    camera_location = camera_row["location_id"] if camera_row else None
+    privacy = _decide_privacy(body, locs, camera_location, survivors)
+
+    w = body.window
+    window_id = conn.execute(
+        """INSERT INTO observation_window (camera_id, t_start, t_end, scene_summary, transcript, audio_events, model,
+               raw_uri) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING window_id""",
+        (w.camera_id, w.t_start, w.t_end, w.scene_summary, w.transcript, jsonb(w.audio_events), w.model, w.raw_uri),
+    ).fetchone()["window_id"]
+
+    ref_map: dict[str, UUID] = {}
+    created: list[UUID] = []
+    updated: list[UUID] = []
+    for a, private in zip(body.assignments, privacy.private_assignments, strict=True):
+        s = a.sighting
+        frame_uri = None if private else s.frame_uri
+        crop_uri = None if private or a.exemplar is None else a.exemplar.crop_uri
+        snapshot = crop_uri or frame_uri
+        if a.new_entity is not None:
+            ne = a.new_entity
+            entity_id = uuid4()
+            kind = ne.kind
+            conn.execute(
+                """INSERT INTO entity (entity_id, catalog_id, kind, status, label, description, attributes,
+                       last_location, last_seen_at, first_seen_at, confidence, snapshot_uri, created_by)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pipeline')""",
+                (
+                    entity_id,
+                    ne.catalog_id,
+                    ne.kind,
+                    ne.status,
+                    ne.label,
+                    ne.description,
+                    jsonb(ne.attributes),
+                    s.location_id,
+                    s.seen_at,
+                    s.seen_at,
+                    s.confidence,
+                    snapshot,
+                ),
+            )
+            write_audit(
+                conn,
+                "create",
+                [entity_id],
+                PIPELINE_ACTOR,
+                {
+                    "window_id": str(window_id),
+                    "ref": a.ref,
+                    "label": ne.label,
+                    "kind": ne.kind,
+                    "status": ne.status,
+                    "catalog_id": ne.catalog_id,
+                },
+            )
+            created.append(entity_id)
+        else:
+            assert a.entity_id is not None
+            survivor = survivors[a.entity_id]
+            entity_id, kind = survivor.entity_id, survivor.kind
+            # Only a newer sighting moves the entity; first_seen_at can move earlier.
+            conn.execute(
+                """UPDATE entity SET last_location = COALESCE(%(loc)s, last_location), last_seen_at = %(seen)s,
+                       confidence = %(conf)s, snapshot_uri = COALESCE(%(snap)s, snapshot_uri), updated_at = now()
+                    WHERE entity_id = %(id)s AND (last_seen_at IS NULL OR last_seen_at < %(seen)s)""",
+                {"loc": s.location_id, "seen": s.seen_at, "conf": s.confidence, "snap": snapshot, "id": entity_id},
+            )
+            conn.execute(
+                "UPDATE entity SET first_seen_at = LEAST(COALESCE(first_seen_at, %(seen)s), %(seen)s) "
+                "WHERE entity_id = %(id)s",
+                {"seen": s.seen_at, "id": entity_id},
+            )
+            if entity_id not in updated:
+                updated.append(entity_id)
+        if a.ref:
+            ref_map[a.ref] = entity_id
+        conn.execute(
+            """INSERT INTO sighting (entity_id, window_id, location_id, seen_at, bbox, confidence, frame_uri,
+                   description) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+            (entity_id, window_id, s.location_id, s.seen_at, s.bbox, s.confidence, frame_uri, s.description),
+        )
+        # Appearance vectors of people captured in crew quarters / the WHC are not kept (they are derived from
+        # private pixels). Object embeddings are kept without their crop, because dedup needs them.
+        if a.exemplar is not None and not (private and kind == "person"):
+            conn.execute(
+                "INSERT INTO entity_exemplar (entity_id, embedding, quality, crop_uri) "
+                "VALUES (%s, %s::halfvec, %s, %s)",
+                (entity_id, _vector_literal(a.exemplar.embedding), a.exemplar.quality, crop_uri),
+            )
+            conn.execute(
+                """DELETE FROM entity_exemplar WHERE exemplar_id IN (
+                       SELECT exemplar_id FROM entity_exemplar WHERE entity_id = %s
+                        ORDER BY quality DESC, created_at DESC, exemplar_id DESC OFFSET %s)""",
+                (entity_id, EXEMPLAR_CAP),
+            )
+
+    def target(ref: str | None, entity_id: UUID | None) -> UUID | None:
+        if ref is not None:
+            return ref_map[ref]
+        return survivors[entity_id].entity_id if entity_id is not None else None
+
+    touched: list[UUID] = created + updated
+    event_ids: list[str] = []
+    for ev, private in zip(body.events, privacy.private_events, strict=True):
+        ev_entity = target(ev.entity_ref, ev.entity_id)
+        event_ids.append(
+            str(
+                conn.execute(
+                    """INSERT INTO event (event_type, entity_id, actor_desc, from_location, to_location, occurred_at,
+                           confidence, evidence_uri, source) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                       RETURNING event_id""",
+                    (
+                        ev.event_type,
+                        ev_entity,
+                        ev.actor_desc,
+                        ev.from_location,
+                        ev.to_location,
+                        ev.occurred_at,
+                        ev.confidence,
+                        None if private else ev.evidence_uri,
+                        ev.source,
+                    ),
+                ).fetchone()["event_id"]
+            )
+        )
+        if ev_entity is not None and ev_entity not in touched:
+            touched.append(ev_entity)
+
+    review_ids: list[str] = []
+    for rv in body.reviews:
+        review_entity = target(rv.entity_ref, rv.entity_id)
+        review_ids.append(
+            str(
+                conn.execute(
+                    """INSERT INTO review_item (kind, entity_id, candidate_ids, image_uri, description, observed_at,
+                           location_id, model_guess, probabilities)
+                       VALUES (%s, %s, %s::uuid[], %s, %s, %s, %s, %s, %s) RETURNING review_id""",
+                    (
+                        rv.kind,
+                        review_entity,
+                        [str(survivors[c].entity_id) for c in rv.candidate_ids],
+                        rv.image_uri,
+                        rv.description,
+                        rv.observed_at,
+                        rv.location_id,
+                        rv.model_guess,
+                        jsonb(rv.probabilities),
+                    ),
+                ).fetchone()["review_id"]
+            )
+        )
+        if review_entity is not None:
+            conn.execute(
+                "UPDATE entity SET needs_review = TRUE, review_reason = %s WHERE entity_id = %s",
+                (rv.kind, review_entity),
+            )
+            if review_entity not in touched:
+                touched.append(review_entity)
+
+    for d in body.decisions:
+        conn.execute(
+            """INSERT INTO decision_log (question, subject, choice, probabilities, model, latency_ms)
+               VALUES (%s, %s, %s, %s, %s, %s)""",
+            (d.question, jsonb(d.subject), d.choice, jsonb(d.probabilities), d.model, d.latency_ms),
+        )
+
+    for su in body.stock_updates:
+        conn.execute(
+            """INSERT INTO stock (catalog_id, location_id, est_count, last_seen_at) VALUES (%s, %s, %s, %s)
+               ON CONFLICT (catalog_id, location_id) DO UPDATE
+                  SET est_count = EXCLUDED.est_count, last_seen_at = EXCLUDED.last_seen_at
+                WHERE stock.last_seen_at < EXCLUDED.last_seen_at""",
+            (su.catalog_id, su.location_id, su.est_count, su.seen_at),
+        )
+
+    entities = {ref: str(eid) for ref, eid in ref_map.items()}
+    # AC-API-21: every ingest is attributed, also when it only updates existing entities or stock. The digest makes
+    # an identical retry return this result instead of writing everything twice.
+    write_audit(
+        conn,
+        "update",
+        touched,
+        PIPELINE_ACTOR,
+        {
+            "window_id": str(window_id),
+            "request_sha256": digest,
+            "entities": entities,
+            "created_entity_ids": [str(e) for e in created],
+            "updated_entity_ids": [str(e) for e in updated],
+            "event_ids": event_ids,
+            "review_ids": review_ids,
+            "decisions": len(body.decisions),
+            "stock_keys": [{"catalog_id": su.catalog_id, "location_id": su.location_id} for su in body.stock_updates],
+            "privacy_dropped_uris": len(privacy.dropped_uris),
+        },
+    )
+    return {"window_id": window_id, "entities": entities}

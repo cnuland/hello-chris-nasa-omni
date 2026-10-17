@@ -1,0 +1,24 @@
+# ODH 3.x (v2 APIs, research/05 §6.1). KServe RawDeployment only; no serverless or service mesh needed.
+apiVersion: dscinitialization.opendatahub.io/v2
+kind: DSCInitialization
+metadata: {name: default-dsci}
+spec:
+  applicationsNamespace: opendatahub
+  monitoring: {managementState: Removed}
+---
+apiVersion: datasciencecluster.opendatahub.io/v2
+kind: DataScienceCluster
+metadata: {name: default-dsc}
+spec:
+  components:
+    dashboard: {managementState: Managed}
+    kserve:
+      managementState: Managed
+      rawDeploymentServiceConfig: Headed
+    trustyai: {managementState: Managed}
+    modelregistry: {managementState: Managed}
+    aipipelines: {managementState: Removed}
+    workbenches: {managementState: Removed}
+    ray: {managementState: Removed}
+    kueue: {managementState: Removed}
+    trainer: {managementState: Removed}

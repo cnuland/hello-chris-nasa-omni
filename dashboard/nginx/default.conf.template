@@ -1,0 +1,58 @@
+# Rendered at container start by the nginx image's envsubst template step.
+# API_UPSTREAM / AGENT_UPSTREAM are plain service URLs supplied via env (no secrets).
+# Security headers: nginx only inherits add_header from the server level when a location sets none of its own, so
+# the locations below that add Cache-Control repeat the full set.
+server {
+    listen       8080;
+    server_name  _;
+    root   /usr/share/nginx/html;
+    index  index.html;
+    server_tokens off;
+
+    add_header Content-Security-Policy "default-src 'self'; img-src 'self' blob: data:; connect-src 'self'; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "no-referrer" always;
+
+    location /api/ {
+        proxy_pass ${API_UPSTREAM}/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $proxy_host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        client_max_body_size 25m;
+    }
+
+    location /agent/ {
+        proxy_pass ${AGENT_UPSTREAM}/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $proxy_host;
+        proxy_set_header Connection "";
+        # Server-sent events (chat streaming) must not be buffered.
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 300s;
+    }
+
+    # Content-hashed bundles from vite build: safe to cache for a year.
+    location /assets/ {
+        try_files $uri =404;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header Content-Security-Policy "default-src 'self'; img-src 'self' blob: data:; connect-src 'self'; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "no-referrer" always;
+    }
+
+    # The SPA entry point must always be revalidated so a redeploy is picked up immediately.
+    location = /index.html {
+        add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+        add_header Content-Security-Policy "default-src 'self'; img-src 'self' blob: data:; connect-src 'self'; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "no-referrer" always;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

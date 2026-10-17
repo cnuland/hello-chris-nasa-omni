@@ -1,0 +1,21 @@
+# perception - UBI9 Python 3.11 image (one Deployment per camera feed).
+# Build from the REPO ROOT so the observation schema contract is bundled:
+#   podman build -f services/perception/Containerfile -t perception .
+# ffmpeg comes from the imageio-ffmpeg wheel (static binary). The real OWLv2 / DINOv2 models need the [model] extra.
+FROM registry.access.redhat.com/ubi9/python-311:latest
+
+WORKDIR /opt/app-root/src
+COPY services/perception/pyproject.toml ./
+COPY services/perception/perception ./perception
+COPY contracts/schemas/observation.schema.json ./perception/observation.schema.json
+# torch wheel index: cpu (default, small image) or a CUDA one, e.g. --build-arg TORCH_INDEX=cu128 for the T4 fast path
+ARG TORCH_INDEX=cpu
+RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/${TORCH_INDEX} && \
+    pip install --no-cache-dir '.[model]'
+
+ENV OBSERVATION_SCHEMA_PATH=/opt/app-root/src/perception/observation.schema.json \
+    HF_HOME=/opt/app-root/src/.cache/huggingface
+USER 1001
+# Required at runtime: INVENTORY_API_URL, OMNI_URL, DECISION_URL, S3_* ; optional ASR_URL, OMNI_REALTIME, CAMERA_LOCATIONS.
+# VIDEO_SOURCE (file path or stream URL) and CAMERA_ID select the feed.
+CMD ["sh", "-c", "exec python -m perception replay --source \"$VIDEO_SOURCE\" --camera \"$CAMERA_ID\" --loop"]

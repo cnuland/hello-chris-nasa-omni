@@ -1,0 +1,37 @@
+# NASA operator dashboard (React SPA on unprivileged nginx). nginx proxies /api -> inventory-api and
+# /agent -> the agent chat API (8080, SSE unbuffered), so the browser only ever talks to this Route.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard
+  namespace: nasa-app
+  labels: {app: dashboard}
+  annotations: {image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"dashboard:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"nginx\")].image"}]'}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: dashboard}}
+  template:
+    metadata: {labels: {app: dashboard}}
+    spec:
+      containers:
+        - name: nginx
+          image: dashboard:latest
+          env:
+            - {name: API_UPSTREAM, value: "http://inventory-api.nasa-app.svc:8080"}
+            - {name: AGENT_UPSTREAM, value: "http://agent.nasa-app.svc:8080"}
+          ports: [{containerPort: 8080, name: http}]
+          readinessProbe: {httpGet: {path: /, port: 8080}, periodSeconds: 10}
+          resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {memory: 256Mi}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: dashboard, namespace: nasa-app}
+spec: {selector: {app: dashboard}, ports: [{name: http, port: 8080}]}
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata: {name: dashboard, namespace: nasa-app}
+spec:
+  to: {kind: Service, name: dashboard}
+  port: {targetPort: http}
+  tls: {termination: edge, insecureEdgeTerminationPolicy: Redirect}

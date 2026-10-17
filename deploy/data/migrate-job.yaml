@@ -1,0 +1,20 @@
+# Applies contracts/db/*.sql (mounted from ConfigMap inventory-migrations, created by bootstrap.sh) in order.
+apiVersion: batch/v1
+kind: Job
+metadata: {name: inventory-migrate, namespace: nasa-data}
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: psql
+          image: ghcr.io/cloudnative-pg/postgresql:16-standard-bookworm
+          command: ["/bin/bash", "-ec"]
+          args:
+            - |
+              for f in $(ls /migrations/*.sql | sort); do echo "applying $f"; psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"; done
+          env:
+            - {name: DATABASE_URL, valueFrom: {secretKeyRef: {name: inventory-db-app, key: uri}}}
+          volumeMounts: [{name: m, mountPath: /migrations}]
+      volumes: [{name: m, configMap: {name: inventory-migrations}}]

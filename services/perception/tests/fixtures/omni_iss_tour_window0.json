@@ -1,0 +1,133 @@
+{
+  "scene_summary": "A person is working on a laptop in the Columbus Laboratory Module of the International Space Station.",
+  "location_hint": "Columbus Laboratory Module",
+  "objects": [
+    {
+      "label": "laptop",
+      "description": "A black laptop being used by the person.",
+      "confidence": 0.9,
+      "bbox": [0.21, 0.38, 0.31, 0.52],
+      "frame_index": 0,
+      "held_by": "P1"
+    },
+    {
+      "label": "headset",
+      "description": "A black headset worn by the person.",
+      "confidence": 0.8,
+      "bbox": [0.24, 0.38, 0.31, 0.45],
+      "frame_index": 0,
+      "held_by": "P1"
+    },
+    {
+      "label": "laptop",
+      "description": "A black laptop being used by the person.",
+      "confidence": 0.9,
+      "bbox": [0.21, 0.38, 0.31, 0.52],
+      "frame_index": 1,
+      "held_by": "P1"
+    },
+    {
+      "label": "headset",
+      "description": "A black headset worn by the person.",
+      "confidence": 0.8,
+      "bbox": [0.24, 0.38, 0.31, 0.45],
+      "frame_index": 1,
+      "held_by": "P1"
+    },
+    {
+      "label": "laptop",
+      "description": "A black laptop being used by the person.",
+      "confidence": 0.9,
+      "bbox": [0.21, 0.38, 0.31, 0.52],
+      "frame_index": 2,
+      "held_by": "P1"
+    },
+    {
+      "label": "headset",
+      "description": "A black headset worn by the person.",
+      "confidence": 0.8,
+      "bbox": [0.24, 0.38, 0.31, 0.45],
+      "frame_index": 2,
+      "held_by": "P1"
+    },
+    {
+      "label": "laptop",
+      "description": "A black laptop being used by the person.",
+      "confidence": 0.9,
+      "bbox": [0.21, 0.38, 0.31, 0.52],
+      "frame_index": 3,
+      "held_by": "P1"
+    },
+    {
+      "label": "headset",
+      "description": "A black headset worn by the person.",
+      "confidence": 0.8,
+      "bbox": [0.24, 0.38, 0.31, 0.45],
+      "frame_index": 3,
+      "held_by": "P1"
+    },
+    {
+      "label": "laptop",
+      "description": "A black laptop being used by the person.",
+      "confidence": 0.9,
+      "bbox": [0.21, 0.38, 0.31, 0.52],
+      "frame_index": 4,
+      "held_by": "P1"
+    },
+    {
+      "label": "headset",
+      "description": "A black headset worn by the person.",
+      "confidence": 0.8,
+      "bbox": [0.24, 0.38, 0.31, 0.45],
+      "frame_index": 4,
+      "held_by": "P1"
+    },
+    {
+      "label": "laptop",
+      "description": "A black laptop being used by the person.",
+      "confidence": 0.9,
+      "bbox": [0.21, 0.38, 0.31, 0.52],
+      "frame_index": 5,
+      "held_by": "P1"
+    },
+    {
+      "label": "headset",
+      "description": "A black headset worn by the person.",
+      "confidence": 0.8,
+      "bbox": [0.24, 0.38, 0.31, 0.45],
+      "frame_index": 5,
+      "held_by": "P1"
+    }
+  ],
+  "people": [
+    {
+      "ref": "P1",
+      "appearance": "man wearing black shirt and gray shorts",
+      "activity": "using laptop",
+      "is_speaking": false
+    }
+  ],
+  "events": [
+    {
+      "type": "used",
+      "object_label": "laptop",
+      "actor_ref": "P1",
+      "evidence": "The person is holding and using the laptop.",
+      "confidence": 0.9
+    },
+    {
+      "type": "used",
+      "object_label": "headset",
+      "actor_ref": "P1",
+      "evidence": "The person is wearing the headset.",
+      "confidence": 0.8
+    }
+  ],
+  "transcript": "No speech detected.",
+  "audio_events": [
+    {
+      "label": "music",
+      "confidence": 0.9
+    }
+  ]
+}

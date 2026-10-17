@@ -1,0 +1,65 @@
+# Chatbot / inventory agent (chat API 8080) + inventory MCP server (8090) + nightly "dreaming" memory compaction.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent
+  namespace: nasa-app
+  labels: {app: agent}
+  annotations: {image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"agent:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"agent\")].image"},{"from":{"kind":"ImageStreamTag","name":"agent:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"mcp\")].image"}]'}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: agent}}
+  template:
+    metadata: {labels: {app: agent}}
+    spec:
+      containers:
+        - name: agent
+          image: agent:latest
+          env:
+            - {name: AGENT_LLM_URL, value: "http://agent-llm.nasa-inference.svc:8000/v1"}
+            - {name: AGENT_LLM_MODEL, value: agent}
+            - {name: AGENT_HTTP_TIMEOUT_S, value: "120"}
+            - {name: INVENTORY_API_URL, value: "http://inventory-api.nasa-app.svc:8080"}
+            - {name: DATABASE_URL, valueFrom: {secretKeyRef: {name: inventory-db-app, key: uri}}}
+          ports: [{containerPort: 8080, name: http}]
+          readinessProbe: {httpGet: {path: /healthz, port: 8080}, periodSeconds: 10}
+          resources: {requests: {cpu: 200m, memory: 512Mi}, limits: {memory: 1Gi}}
+        - name: mcp
+          image: agent:latest
+          command: ["python", "mcp_server.py"]
+          env:   # mcp_server loads the agent Settings, so it needs the same required variables
+            - {name: AGENT_LLM_URL, value: "http://agent-llm.nasa-inference.svc:8000/v1"}
+            - {name: INVENTORY_API_URL, value: "http://inventory-api.nasa-app.svc:8080"}
+            - {name: DATABASE_URL, valueFrom: {secretKeyRef: {name: inventory-db-app, key: uri}}}
+            - {name: MCP_HOST, value: "0.0.0.0"}
+            - {name: MCP_PORT, value: "8090"}
+            - {name: MCP_ALLOWED_HOSTS, value: "agent.nasa-app.svc:8090,agent.nasa-app.svc.cluster.local:8090,agent:8090"}
+            - {name: MCP_AUTH_TOKEN, valueFrom: {secretKeyRef: {name: mcp-token, key: token}}}
+          ports: [{containerPort: 8090, name: mcp}]
+          resources: {requests: {cpu: 50m, memory: 128Mi}, limits: {memory: 512Mi}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: agent, namespace: nasa-app}
+spec: {selector: {app: agent}, ports: [{name: http, port: 8080}, {name: mcp, port: 8090}]}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: agent-dreaming, namespace: nasa-app}
+spec:
+  schedule: "17 */6 * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: dream
+              image: image-registry.openshift-image-registry.svc:5000/nasa-app/agent:latest
+              command: ["python", "-m", "nasa_agent.dreaming", "--once"]
+              env:
+                - {name: AGENT_LLM_URL, value: "http://agent-llm.nasa-inference.svc:8000/v1"}
+                - {name: AGENT_LLM_MODEL, value: agent}
+                - {name: INVENTORY_API_URL, value: "http://inventory-api.nasa-app.svc:8080"}
+                - {name: DATABASE_URL, valueFrom: {secretKeyRef: {name: inventory-db-app, key: uri}}}

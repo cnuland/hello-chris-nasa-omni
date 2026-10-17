@@ -1,0 +1,54 @@
+[project]
+name = "nasa-eval"
+version = "0.1.0"
+description = "Evaluation of the NASA Omni identification pipeline (docs/spec/50-eval.md): datasets, synthetic scenes, metrics, QA, runner, gates"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "numpy>=1.26",
+    "pillow>=10.3",
+    "pyyaml>=6.0",
+    "jsonschema>=4.22",
+    "psycopg[binary]>=3.2",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8",
+    "ruff>=0.5",
+]
+# The real replay path of `nasa_eval run` (perception.replay.run + an in-process inventory-api on the fresh DB).
+pipeline = [
+    "perception",
+    "inventory-api",
+]
+
+[tool.uv.sources]
+perception = { path = "../services/perception", editable = true }
+inventory-api = { path = "../services/inventory-api", editable = true }
+
+[project.scripts]
+nasa-eval = "nasa_eval.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["nasa_eval"]
+
+[tool.setuptools.package-data]
+nasa_eval = ["schemas/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -m 'not model'"
+markers = [
+    "model: needs real model weights (skipped by default)",
+    "integration: needs other components (services/perception, inventory-api); completed in the Integration phase",
+    "db: needs the local Postgres at TEST_PG_ADMIN_URL (default postgresql://postgres:test@localhost:55432/postgres)",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"

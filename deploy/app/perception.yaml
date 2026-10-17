@@ -1,0 +1,48 @@
+# One perception worker per camera feed. VIDEO_SOURCE points at a sample clip in RustFS (scripts/load-sample-video.sh)
+# until a live ISS feed is connected. Fast path (OWLv2 + DINOv2) on its own T4 (gpu-pool=t4cv): on CPU it measured
+# ~14 s/frame. Omni, ASR and DiffusionGemma are called over HTTP in nasa-inference.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: perception-cam-handheld
+  namespace: nasa-app
+  labels: {app: perception, camera: cam-handheld}
+  annotations: {image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"perception:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"perception\")].image"}]'}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: perception, camera: cam-handheld}}
+  template:
+    metadata: {labels: {app: perception, camera: cam-handheld}}
+    spec:
+      nodeSelector: {gpu-pool: t4cv}
+      tolerations: [{key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}]
+      containers:
+        - name: perception
+          image: perception:latest
+          env:
+            - {name: CAMERA_ID, value: cam-handheld}   # NASA tour footage is handheld: location comes from hints
+            - {name: PERCEPTION_DEVICE, value: cuda}
+            - {name: VIDEO_SOURCE, value: "/media/sample.mp4"}
+            - {name: INVENTORY_API_URL, value: "http://inventory-api.nasa-app.svc:8080"}
+            - {name: OMNI_URL, value: "http://omni.nasa-inference.svc:8000"}
+            - {name: OMNI_MODEL, value: omni}
+            - {name: DECISION_URL, value: "http://dgemma.nasa-inference.svc:8011"}
+            - {name: DECISION_MODEL, value: dgemma}
+            - {name: DECISION_TIMEOUT_S, value: "20"}   # DiffusionGemma on 4xT4, max-num-seqs 1: requests queue
+            - {name: ASR_URL, value: "http://asr.nasa-inference.svc:8000"}
+            - {name: ASR_MODEL, value: asr}
+            - {name: S3_ENDPOINT, value: "http://rustfs.nasa-data.svc:9000"}
+            - {name: S3_BUCKET, value: inventory}
+            - {name: S3_ACCESS_KEY, valueFrom: {secretKeyRef: {name: rustfs-creds, key: access-key}}}
+            - {name: S3_SECRET_KEY, valueFrom: {secretKeyRef: {name: rustfs-creds, key: secret-key}}}
+          resources: {requests: {cpu: "4", memory: 8Gi, nvidia.com/gpu: "1"}, limits: {cpu: "12", memory: 24Gi, nvidia.com/gpu: "1"}}
+          volumeMounts: [{name: media, mountPath: /media}, {name: cache, mountPath: /opt/app-root/src/.cache}]
+      volumes:
+        - {name: media, persistentVolumeClaim: {claimName: sample-media}}
+        - {name: cache, emptyDir: {sizeLimit: 10Gi}}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: sample-media, namespace: nasa-app}
+spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 10Gi}}}

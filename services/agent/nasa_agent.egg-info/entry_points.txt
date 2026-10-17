@@ -1,0 +1,3 @@
+[console_scripts]
+nasa-agent-dream = nasa_agent.dreaming:main
+nasa-agent-mcp = mcp_server:main

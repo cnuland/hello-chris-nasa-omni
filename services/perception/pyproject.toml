@@ -1,0 +1,55 @@
+[project]
+name = "perception"
+version = "0.1.0"
+description = "NASA Omni perception: ffmpeg ingest, detector + embeddings fast path, omni windows, reconciler -> inventory-api"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "numpy>=1.26",
+    "pillow>=10",
+    "httpx>=0.27",
+    "websockets>=13",
+    "jsonschema>=4.22",
+    "pydantic>=2.7",
+    "imageio-ffmpeg>=0.5",
+    "boto3>=1.34",
+]
+
+[project.optional-dependencies]
+# Real OWLv2 / DINOv2 implementations (lazy-imported; only needed in the container or for `-m model` tests).
+model = [
+    "torch>=2.3",
+    "transformers>=4.44",
+    "scipy>=1.11",   # Owlv2ImageProcessor.resize requires it at runtime (found in cluster integration, 2026-10-17)
+]
+test = [
+    "pytest>=8",
+    "pytest-timeout>=2.3",
+    "moto[s3]>=5",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+perception = "perception.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["perception"]
+
+[tool.setuptools.package-data]
+perception = ["*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -m 'not model'"
+timeout = 120
+markers = [
+    "model: needs real model weights (OWLv2 / DINOv2); skipped by default",
+    "db: needs the local Postgres test server (AC-PER-14)",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"

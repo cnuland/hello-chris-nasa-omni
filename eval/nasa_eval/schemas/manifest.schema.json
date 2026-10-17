@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nasa-omni.local/eval/manifest.schema.json",
+  "title": "Gold dataset manifest (manifest.yaml)",
+  "description": "AC-EVAL-1. video is a video file or a directory of frames (PNG, sorted by name) relative to the dataset dir; audio is a WAV file or null (TTS-free synthetic scenes); start_time is ISO-8601 with a timezone. video/audio/transcript must stay inside the dataset directory (checked by validate_dataset).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "video",
+    "audio",
+    "camera",
+    "start_time"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "description": "safe basename used in report file names (letters, digits, '.', '_', '-'; no path separators)"
+    },
+    "video": {
+      "type": "string",
+      "minLength": 1
+    },
+    "audio": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "camera": {
+      "type": "string",
+      "minLength": 1
+    },
+    "start_time": {
+      "type": "string",
+      "minLength": 1
+    },
+    "fps": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "transcript": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "description": {
+      "type": "string"
+    },
+    "seed": {
+      "type": "integer"
+    },
+    "zones": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "minItems": 4,
+        "maxItems": 4,
+        "items": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    }
+  }
+}

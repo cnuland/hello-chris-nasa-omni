@@ -1,0 +1,8 @@
+# Generated reports (pipeline reports, CI gate reports, QA and decision reports).
+reports/**/*.json
+reports/**/*.jsonl
+reports/**/*.md
+!reports/.gitkeep
+# Frames of the committed CI dataset are regenerated on demand:
+#   python -m nasa_eval generate --seed 7 --name synth-ci
+datasets/synth-ci/frames/

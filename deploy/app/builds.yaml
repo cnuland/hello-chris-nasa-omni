@@ -1,0 +1,49 @@
+# Binary Docker builds: scripts/build-images.sh uploads a tarball of the repo (no .venv/node_modules) to each.
+# Contexts: inventory-api and perception build from the repo root; agent from services/agent; dashboard from dashboard/.
+apiVersion: v1
+kind: List
+items:
+  - apiVersion: image.openshift.io/v1
+    kind: ImageStream
+    metadata: {name: inventory-api, namespace: nasa-app}
+  - apiVersion: build.openshift.io/v1
+    kind: BuildConfig
+    metadata: {name: inventory-api, namespace: nasa-app}
+    spec:
+      source: {type: Binary}
+      strategy: {type: Docker, dockerStrategy: {dockerfilePath: services/inventory-api/Containerfile}}
+      output: {to: {kind: ImageStreamTag, name: "inventory-api:latest"}}
+      resources: {limits: {memory: 4Gi}}
+  - apiVersion: image.openshift.io/v1
+    kind: ImageStream
+    metadata: {name: perception, namespace: nasa-app}
+  - apiVersion: build.openshift.io/v1
+    kind: BuildConfig
+    metadata: {name: perception, namespace: nasa-app}
+    spec:
+      source: {type: Binary}
+      strategy: {type: Docker, dockerStrategy: {dockerfilePath: services/perception/Containerfile, buildArgs: [{name: TORCH_INDEX, value: cu128}]}}
+      output: {to: {kind: ImageStreamTag, name: "perception:latest"}}
+      resources: {limits: {memory: 4Gi}}
+  - apiVersion: image.openshift.io/v1
+    kind: ImageStream
+    metadata: {name: agent, namespace: nasa-app}
+  - apiVersion: build.openshift.io/v1
+    kind: BuildConfig
+    metadata: {name: agent, namespace: nasa-app}
+    spec:
+      source: {type: Binary}
+      strategy: {type: Docker, dockerStrategy: {dockerfilePath: Containerfile}}
+      output: {to: {kind: ImageStreamTag, name: "agent:latest"}}
+      resources: {limits: {memory: 4Gi}}
+  - apiVersion: image.openshift.io/v1
+    kind: ImageStream
+    metadata: {name: dashboard, namespace: nasa-app}
+  - apiVersion: build.openshift.io/v1
+    kind: BuildConfig
+    metadata: {name: dashboard, namespace: nasa-app}
+    spec:
+      source: {type: Binary}
+      strategy: {type: Docker, dockerStrategy: {dockerfilePath: Containerfile}}
+      output: {to: {kind: ImageStreamTag, name: "dashboard:latest"}}
+      resources: {limits: {memory: 4Gi}}

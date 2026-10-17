@@ -1,0 +1,67 @@
+# Qwen3-8B (Apache-2.0) for the chatbot and inventory agent: tool calling (hermes parser). T4 has no FP8, so the
+# official AWQ 4-bit checkpoint (~5.7 GB) runs fp16 on GPU 2 of the perception node; Qwen3-ASR has GPU 3.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: agent-llm, namespace: nasa-inference, labels: {app: agent-llm}}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: agent-llm}}
+  template:
+    metadata: {labels: {app: agent-llm}}
+    spec:
+      nodeSelector: {nasa-role: perception}
+      tolerations: [{key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}]
+      containers:
+        - name: vllm
+          image: docker.io/vllm/vllm-openai:v0.31.0
+          args: ["Qwen/Qwen3-8B-AWQ", "--served-model-name", "agent", "--host", "0.0.0.0", "--port", "8000",
+                 "--max-model-len", "16384", "--gpu-memory-utilization", "0.90", "--dtype", "half",
+                 "--enable-auto-tool-choice", "--tool-call-parser", "hermes", "--reasoning-parser", "qwen3",
+                 "--default-chat-template-kwargs", '{"enable_thinking": false}']   # T4 ~42 tok/s: thinking made tool turns exceed 30 s
+          env: [{name: HOME, value: /cache}, {name: HF_HOME, value: /cache/hf}]
+          ports: [{containerPort: 8000, name: openai}]
+          resources:
+            requests: {cpu: "2", memory: 16Gi, nvidia.com/gpu: "1"}
+            limits: {cpu: "8", memory: 32Gi, nvidia.com/gpu: "1"}
+          volumeMounts: [{name: cache, mountPath: /cache}]
+          startupProbe: {httpGet: {path: /health, port: 8000}, periodSeconds: 15, failureThreshold: 120}
+          readinessProbe: {httpGet: {path: /health, port: 8000}, periodSeconds: 10}
+      volumes: [{name: cache, emptyDir: {sizeLimit: 40Gi}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: agent-llm, namespace: nasa-inference}
+spec: {selector: {app: agent-llm}, ports: [{name: openai, port: 8000}]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: asr, namespace: nasa-inference, labels: {app: asr}}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: asr}}
+  template:
+    metadata: {labels: {app: asr}}
+    spec:
+      nodeSelector: {nasa-role: perception}
+      tolerations: [{key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}]
+      containers:
+        - name: vllm
+          image: docker.io/vllm/vllm-openai:v0.31.0
+          args: ["Qwen/Qwen3-ASR-1.7B", "--served-model-name", "asr", "--host", "0.0.0.0", "--port", "8000",
+                 "--gpu-memory-utilization", "0.85", "--dtype", "half", "--max-model-len", "8192", "--trust-remote-code"]
+          env: [{name: HOME, value: /cache}, {name: HF_HOME, value: /cache/hf}]
+          ports: [{containerPort: 8000, name: openai}]
+          resources:
+            requests: {cpu: "2", memory: 8Gi, nvidia.com/gpu: "1"}
+            limits: {cpu: "4", memory: 16Gi, nvidia.com/gpu: "1"}
+          volumeMounts: [{name: cache, mountPath: /cache}]
+          startupProbe: {httpGet: {path: /health, port: 8000}, periodSeconds: 15, failureThreshold: 80}
+          readinessProbe: {httpGet: {path: /health, port: 8000}, periodSeconds: 10}
+      volumes: [{name: cache, emptyDir: {sizeLimit: 20Gi}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: asr, namespace: nasa-inference}
+spec: {selector: {app: asr}, ports: [{name: openai, port: 8000}]}

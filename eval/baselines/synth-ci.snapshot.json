@@ -1,0 +1,1074 @@
+{
+ "format": "nasa-eval-snapshot/1",
+ "source": "reference",
+ "dataset": "synth-ci",
+ "locations": {
+  "COL1": [
+   "USOS",
+   "module"
+  ],
+  "COL1A1": [
+   "COL1",
+   "zone"
+  ],
+  "CUP1": [
+   "USOS",
+   "module"
+  ],
+  "JLP1": [
+   "USOS",
+   "module"
+  ],
+  "JPM1": [
+   "USOS",
+   "module"
+  ],
+  "JPM1F5": [
+   "JPM1",
+   "zone"
+  ],
+  "LAB1": [
+   "USOS",
+   "module"
+  ],
+  "LAB1O3": [
+   "LAB1",
+   "zone"
+  ],
+  "LAB1P3": [
+   "LAB1",
+   "zone"
+  ],
+  "LAB1S2": [
+   "LAB1",
+   "zone"
+  ],
+  "NAUKA": [
+   "ROS",
+   "module"
+  ],
+  "NOD1": [
+   "USOS",
+   "module"
+  ],
+  "NOD1D1": [
+   "NOD1",
+   "zone"
+  ],
+  "NOD1O1": [
+   "NOD1",
+   "zone"
+  ],
+  "NOD2": [
+   "USOS",
+   "module"
+  ],
+  "NOD2D4": [
+   "NOD2",
+   "zone"
+  ],
+  "NOD2D5": [
+   "NOD2",
+   "zone"
+  ],
+  "NOD2O4": [
+   "NOD2",
+   "zone"
+  ],
+  "NOD2O5": [
+   "NOD2",
+   "zone"
+  ],
+  "NOD2P5": [
+   "NOD2",
+   "zone"
+  ],
+  "NOD2S5": [
+   "NOD2",
+   "zone"
+  ],
+  "NOD3": [
+   "USOS",
+   "module"
+  ],
+  "NOD3A3": [
+   "NOD3",
+   "zone"
+  ],
+  "NOD3F4": [
+   "NOD3",
+   "zone"
+  ],
+  "PMM1": [
+   "USOS",
+   "module"
+  ],
+  "PMM1D2": [
+   "PMM1",
+   "zone"
+  ],
+  "ROS": [
+   null,
+   "segment"
+  ],
+  "USOS": [
+   null,
+   "segment"
+  ],
+  "ZARYA": [
+   "ROS",
+   "module"
+  ],
+  "ZVEZDA": [
+   "ROS",
+   "module"
+  ]
+ },
+ "entities": [
+  {
+   "entity_id": "ref-multimeter-1",
+   "catalog_id": "multimeter",
+   "status": "provisional",
+   "kind": "object",
+   "last_location": "LAB1P3",
+   "last_seen_at": "2026-10-01T12:00:57+00:00"
+  },
+  {
+   "entity_id": "ref-duct-tape-a",
+   "catalog_id": "duct-tape",
+   "status": "provisional",
+   "kind": "object",
+   "last_location": "LAB1O3",
+   "last_seen_at": "2026-10-01T12:00:57+00:00"
+  },
+  {
+   "entity_id": "ref-duct-tape-b",
+   "catalog_id": "duct-tape",
+   "status": "provisional",
+   "kind": "object",
+   "last_location": "LAB1S2",
+   "last_seen_at": "2026-10-01T12:00:57+00:00"
+  },
+  {
+   "entity_id": "ref-headset-1",
+   "catalog_id": "headset",
+   "status": "provisional",
+   "kind": "object",
+   "last_location": "LAB1P3",
+   "last_seen_at": "2026-10-01T12:00:57+00:00"
+  },
+  {
+   "entity_id": "ref-tablet-1",
+   "catalog_id": "tablet",
+   "status": "provisional",
+   "kind": "object",
+   "last_location": "LAB1S2",
+   "last_seen_at": "2026-10-01T12:00:33+00:00"
+  },
+  {
+   "entity_id": "ref-unknown-1",
+   "catalog_id": null,
+   "status": "unknown",
+   "kind": "object",
+   "last_location": "LAB1S2",
+   "last_seen_at": "2026-10-01T12:00:53+00:00"
+  },
+  {
+   "entity_id": "ref-ghost",
+   "catalog_id": "headset",
+   "status": "provisional",
+   "kind": "object",
+   "last_location": "LAB1O3",
+   "last_seen_at": "2026-10-01T12:00:33+00:00"
+  }
+ ],
+ "sightings": [
+  {
+   "sighting_id": "ref-s0001",
+   "entity_id": "ref-multimeter-1",
+   "seen_at": "2026-10-01T12:00:05+00:00",
+   "location_id": "LAB1O3",
+   "bbox": [
+    0.51936,
+    0.167924,
+    0.61936,
+    0.327924
+   ]
+  },
+  {
+   "sighting_id": "ref-s0014",
+   "entity_id": "ref-duct-tape-a",
+   "seen_at": "2026-10-01T12:00:05+00:00",
+   "location_id": "LAB1O3",
+   "bbox": [
+    0.372361,
+    0.146804,
+    0.472361,
+    0.306804
+   ]
+  },
+  {
+   "sighting_id": "ref-s0028",
+   "entity_id": "ref-duct-tape-b",
+   "seen_at": "2026-10-01T12:00:05+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.197402,
+    0.14536,
+    0.297402,
+    0.30536
+   ]
+  },
+  {
+   "sighting_id": "ref-s0053",
+   "entity_id": "ref-tablet-1",
+   "seen_at": "2026-10-01T12:00:05+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.056112,
+    0.167909,
+    0.156112,
+    0.327909
+   ]
+  },
+  {
+   "sighting_id": "ref-s0002",
+   "entity_id": "ref-multimeter-1",
+   "seen_at": "2026-10-01T12:00:09+00:00",
+   "location_id": "LAB1O3",
+   "bbox": [
+    0.51936,
+    0.167924,
+    0.61936,
+    0.327924
+   ]
+  },
+  {
+   "sighting_id": "ref-s0015",
+   "entity_id": "ref-duct-tape-a",
+   "seen_at": "2026-10-01T12:00:09+00:00",
+   "location_id": "LAB1O3",
+   "bbox": [
+    0.372361,
+    0.146804,
+    0.472361,
+    0.306804
+   ]
+  },
+  {
+   "sighting_id": "ref-s0029",
+   "entity_id": "ref-duct-tape-b",
+   "seen_at": "2026-10-01T12:00:09+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.197402,
+    0.14536,
+    0.297402,
+    0.30536
+   ]
+  },
+  {
+   "sighting_id": "ref-s0054",
+   "entity_id": "ref-tablet-1",
+   "seen_at": "2026-10-01T12:00:09+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.056112,
+    0.167909,
+    0.156112,
+    0.327909
+   ]
+  },
+  {
+   "sighting_id": "ref-s0016",
+   "entity_id": "ref-duct-tape-a",
+   "seen_at": "2026-10-01T12:00:13+00:00",
+   "location_id": "LAB1O3",
+   "bbox": [
+    0.372361,
+    0.146804,
+    0.472361,
+    0.306804
+   ]
+  },
+  {
+   "sighting_id": "ref-s0030",
+   "entity_id": "ref-duct-tape-b",
+   "seen_at": "2026-10-01T12:00:13+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.197402,
+    0.14536,
+    0.297402,
+    0.30536
+   ]
+  },
+  {
+   "sighting_id": "ref-s0055",
+   "entity_id": "ref-tablet-1",
+   "seen_at": "2026-10-01T12:00:13+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.056112,
+    0.167909,
+    0.156112,
+    0.327909
+   ]
+  },
+  {
+   "sighting_id": "ref-s0061",
+   "entity_id": "ref-unknown-1",
+   "seen_at": "2026-10-01T12:00:13+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.194312,
+    0.417465,
+    0.294312,
+    0.577465
+   ]
+  },
+  {
+   "sighting_id": "ref-s0003",
+   "entity_id": "ref-multimeter-1",
+   "seen_at": "2026-10-01T12:00:17+00:00",
+   "location_id": "LAB1O3",
+   "bbox": [
+    0.51936,
+    0.167924,
+    0.61936,
+    0.327924
+   ]
+  },
+  {
+   "sighting_id": "ref-s0017",
+   "entity_id": "ref-duct-tape-a",
+   "seen_at": "2026-10-01T12:00:17+00:00",
+   "location_id": "LAB1O3",
+   "bbox": [
+    0.372361,
+    0.146804,
+    0.472361,
+    0.306804
+   ]
+  },
+  {
+   "sighting_id": "ref-s0031",
+   "entity_id": "ref-duct-tape-b",
+   "seen_at": "2026-10-01T12:00:17+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.197402,
+    0.14536,
+    0.297402,
+    0.30536
+   ]
+  },
+  {
+   "sighting_id": "ref-s0042",
+   "entity_id": "ref-headset-1",
+   "seen_at": "2026-10-01T12:00:17+00:00",
+   "location_id": "LAB1P3",
+   "bbox": [
+    0.848492,
+    0.419286,
+    0.948492,
+    0.579286
+   ]
+  },
+  {
+   "sighting_id": "ref-s0056",
+   "entity_id": "ref-tablet-1",
+   "seen_at": "2026-10-01T12:00:17+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.056112,
+    0.167909,
+    0.156112,
+    0.327909
+   ]
+  },
+  {
+   "sighting_id": "ref-s0062",
+   "entity_id": "ref-unknown-1",
+   "seen_at": "2026-10-01T12:00:17+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.194312,
+    0.417465,
+    0.294312,
+    0.577465
+   ]
+  },
+  {
+   "sighting_id": "ref-s0004",
+   "entity_id": "ref-multimeter-1",
+   "seen_at": "2026-10-01T12:00:21+00:00",
+   "location_id": "LAB1O3",
+   "bbox": [
+    0.51936,
+    0.167924,
+    0.61936,
+    0.327924
+   ]
+  },
+  {
+   "sighting_id": "ref-s0018",
+   "entity_id": "ref-duct-tape-a",
+   "seen_at": "2026-10-01T12:00:21+00:00",
+   "location_id": "LAB1O3",
+   "bbox": [
+    0.372361,
+    0.146804,
+    0.472361,
+    0.306804
+   ]
+  },
+  {
+   "sighting_id": "ref-s0032",
+   "entity_id": "ref-duct-tape-b",
+   "seen_at": "2026-10-01T12:00:21+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.197402,
+    0.14536,
+    0.297402,
+    0.30536
+   ]
+  },
+  {
+   "sighting_id": "ref-s0043",
+   "entity_id": "ref-headset-1",
+   "seen_at": "2026-10-01T12:00:21+00:00",
+   "location_id": "LAB1P3",
+   "bbox": [
+    0.848492,
+    0.419286,
+    0.948492,
+    0.579286
+   ]
+  },
+  {
+   "sighting_id": "ref-s0057",
+   "entity_id": "ref-tablet-1",
+   "seen_at": "2026-10-01T12:00:21+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.056112,
+    0.167909,
+    0.156112,
+    0.327909
+   ]
+  },
+  {
+   "sighting_id": "ref-s0063",
+   "entity_id": "ref-unknown-1",
+   "seen_at": "2026-10-01T12:00:21+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.194312,
+    0.417465,
+    0.294312,
+    0.577465
+   ]
+  },
+  {
+   "sighting_id": "ref-s0005",
+   "entity_id": "ref-multimeter-1",
+   "seen_at": "2026-10-01T12:00:25+00:00",
+   "location_id": "LAB1O3",
+   "bbox": [
+    0.51936,
+    0.167924,
+    0.61936,
+    0.327924
+   ]
+  },
+  {
+   "sighting_id": "ref-s0019",
+   "entity_id": "ref-duct-tape-a",
+   "seen_at": "2026-10-01T12:00:25+00:00",
+   "location_id": "LAB1O3",
+   "bbox": [
+    0.372361,
+    0.146804,
+    0.472361,
+    0.306804
+   ]
+  },
+  {
+   "sighting_id": "ref-s0033",
+   "entity_id": "ref-duct-tape-b",
+   "seen_at": "2026-10-01T12:00:25+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.197402,
+    0.14536,
+    0.297402,
+    0.30536
+   ]
+  },
+  {
+   "sighting_id": "ref-s0044",
+   "entity_id": "ref-headset-1",
+   "seen_at": "2026-10-01T12:00:25+00:00",
+   "location_id": "LAB1P3",
+   "bbox": [
+    0.848492,
+    0.419286,
+    0.948492,
+    0.579286
+   ]
+  },
+  {
+   "sighting_id": "ref-s0058",
+   "entity_id": "ref-tablet-1",
+   "seen_at": "2026-10-01T12:00:25+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.056112,
+    0.167909,
+    0.156112,
+    0.327909
+   ]
+  },
+  {
+   "sighting_id": "ref-s0064",
+   "entity_id": "ref-unknown-1",
+   "seen_at": "2026-10-01T12:00:25+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.194312,
+    0.417465,
+    0.294312,
+    0.577465
+   ]
+  },
+  {
+   "sighting_id": "ref-s0006",
+   "entity_id": "ref-multimeter-1",
+   "seen_at": "2026-10-01T12:00:29+00:00",
+   "location_id": "LAB1P3",
+   "bbox": [
+    0.704404,
+    0.689671,
+    0.804404,
+    0.849671
+   ]
+  },
+  {
+   "sighting_id": "ref-s0020",
+   "entity_id": "ref-duct-tape-a",
+   "seen_at": "2026-10-01T12:00:29+00:00",
+   "location_id": "LAB1O3",
+   "bbox": [
+    0.372361,
+    0.146804,
+    0.472361,
+    0.306804
+   ]
+  },
+  {
+   "sighting_id": "ref-s0034",
+   "entity_id": "ref-duct-tape-b",
+   "seen_at": "2026-10-01T12:00:29+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.197402,
+    0.14536,
+    0.297402,
+    0.30536
+   ]
+  },
+  {
+   "sighting_id": "ref-s0045",
+   "entity_id": "ref-headset-1",
+   "seen_at": "2026-10-01T12:00:29+00:00",
+   "location_id": "LAB1P3",
+   "bbox": [
+    0.848492,
+    0.419286,
+    0.948492,
+    0.579286
+   ]
+  },
+  {
+   "sighting_id": "ref-s0059",
+   "entity_id": "ref-tablet-1",
+   "seen_at": "2026-10-01T12:00:29+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.056112,
+    0.167909,
+    0.156112,
+    0.327909
+   ]
+  },
+  {
+   "sighting_id": "ref-s0065",
+   "entity_id": "ref-unknown-1",
+   "seen_at": "2026-10-01T12:00:29+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.194312,
+    0.417465,
+    0.294312,
+    0.577465
+   ]
+  },
+  {
+   "sighting_id": "ref-s0007",
+   "entity_id": "ref-multimeter-1",
+   "seen_at": "2026-10-01T12:00:33+00:00",
+   "location_id": "LAB1P3",
+   "bbox": [
+    0.704404,
+    0.689671,
+    0.804404,
+    0.849671
+   ]
+  },
+  {
+   "sighting_id": "ref-s0021",
+   "entity_id": "ref-duct-tape-a",
+   "seen_at": "2026-10-01T12:00:33+00:00",
+   "location_id": "LAB1O3",
+   "bbox": [
+    0.372361,
+    0.146804,
+    0.472361,
+    0.306804
+   ]
+  },
+  {
+   "sighting_id": "ref-s0035",
+   "entity_id": "ref-duct-tape-b",
+   "seen_at": "2026-10-01T12:00:33+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.197402,
+    0.14536,
+    0.297402,
+    0.30536
+   ]
+  },
+  {
+   "sighting_id": "ref-s0046",
+   "entity_id": "ref-headset-1",
+   "seen_at": "2026-10-01T12:00:33+00:00",
+   "location_id": "LAB1P3",
+   "bbox": [
+    0.848492,
+    0.419286,
+    0.948492,
+    0.579286
+   ]
+  },
+  {
+   "sighting_id": "ref-s0060",
+   "entity_id": "ref-tablet-1",
+   "seen_at": "2026-10-01T12:00:33+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.056112,
+    0.167909,
+    0.156112,
+    0.327909
+   ]
+  },
+  {
+   "sighting_id": "ref-s0066",
+   "entity_id": "ref-unknown-1",
+   "seen_at": "2026-10-01T12:00:33+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.194312,
+    0.417465,
+    0.294312,
+    0.577465
+   ]
+  },
+  {
+   "sighting_id": "ref-s9999",
+   "entity_id": "ref-ghost",
+   "seen_at": "2026-10-01T12:00:33+00:00",
+   "location_id": "LAB1O3",
+   "bbox": [
+    0.4,
+    0.02,
+    0.45,
+    0.07
+   ]
+  },
+  {
+   "sighting_id": "ref-s0008",
+   "entity_id": "ref-multimeter-1",
+   "seen_at": "2026-10-01T12:00:37+00:00",
+   "location_id": "LAB1P3",
+   "bbox": [
+    0.704404,
+    0.689671,
+    0.804404,
+    0.849671
+   ]
+  },
+  {
+   "sighting_id": "ref-s0022",
+   "entity_id": "ref-duct-tape-a",
+   "seen_at": "2026-10-01T12:00:37+00:00",
+   "location_id": "LAB1O3",
+   "bbox": [
+    0.372361,
+    0.146804,
+    0.472361,
+    0.306804
+   ]
+  },
+  {
+   "sighting_id": "ref-s0036",
+   "entity_id": "ref-duct-tape-b",
+   "seen_at": "2026-10-01T12:00:37+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.197402,
+    0.14536,
+    0.297402,
+    0.30536
+   ]
+  },
+  {
+   "sighting_id": "ref-s0047",
+   "entity_id": "ref-headset-1",
+   "seen_at": "2026-10-01T12:00:37+00:00",
+   "location_id": "LAB1P3",
+   "bbox": [
+    0.848492,
+    0.419286,
+    0.948492,
+    0.579286
+   ]
+  },
+  {
+   "sighting_id": "ref-s0067",
+   "entity_id": "ref-unknown-1",
+   "seen_at": "2026-10-01T12:00:37+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.194312,
+    0.417465,
+    0.294312,
+    0.577465
+   ]
+  },
+  {
+   "sighting_id": "ref-s0009",
+   "entity_id": "ref-multimeter-1",
+   "seen_at": "2026-10-01T12:00:41+00:00",
+   "location_id": "LAB1P3",
+   "bbox": [
+    0.704404,
+    0.689671,
+    0.804404,
+    0.849671
+   ]
+  },
+  {
+   "sighting_id": "ref-s0023",
+   "entity_id": "ref-duct-tape-a",
+   "seen_at": "2026-10-01T12:00:41+00:00",
+   "location_id": "LAB1O3",
+   "bbox": [
+    0.372361,
+    0.146804,
+    0.472361,
+    0.306804
+   ]
+  },
+  {
+   "sighting_id": "ref-s0037",
+   "entity_id": "ref-duct-tape-b",
+   "seen_at": "2026-10-01T12:00:41+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.197402,
+    0.14536,
+    0.297402,
+    0.30536
+   ]
+  },
+  {
+   "sighting_id": "ref-s0048",
+   "entity_id": "ref-headset-1",
+   "seen_at": "2026-10-01T12:00:41+00:00",
+   "location_id": "LAB1P3",
+   "bbox": [
+    0.848492,
+    0.419286,
+    0.948492,
+    0.579286
+   ]
+  },
+  {
+   "sighting_id": "ref-s0068",
+   "entity_id": "ref-unknown-1",
+   "seen_at": "2026-10-01T12:00:41+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.194312,
+    0.417465,
+    0.294312,
+    0.577465
+   ]
+  },
+  {
+   "sighting_id": "ref-s0010",
+   "entity_id": "ref-multimeter-1",
+   "seen_at": "2026-10-01T12:00:45+00:00",
+   "location_id": "LAB1P3",
+   "bbox": [
+    0.704404,
+    0.689671,
+    0.804404,
+    0.849671
+   ]
+  },
+  {
+   "sighting_id": "ref-s0024",
+   "entity_id": "ref-duct-tape-a",
+   "seen_at": "2026-10-01T12:00:45+00:00",
+   "location_id": "LAB1O3",
+   "bbox": [
+    0.372361,
+    0.146804,
+    0.472361,
+    0.306804
+   ]
+  },
+  {
+   "sighting_id": "ref-s0038",
+   "entity_id": "ref-duct-tape-b",
+   "seen_at": "2026-10-01T12:00:45+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.197402,
+    0.14536,
+    0.297402,
+    0.30536
+   ]
+  },
+  {
+   "sighting_id": "ref-s0049",
+   "entity_id": "ref-headset-1",
+   "seen_at": "2026-10-01T12:00:45+00:00",
+   "location_id": "LAB1P3",
+   "bbox": [
+    0.848492,
+    0.419286,
+    0.948492,
+    0.579286
+   ]
+  },
+  {
+   "sighting_id": "ref-s0069",
+   "entity_id": "ref-unknown-1",
+   "seen_at": "2026-10-01T12:00:45+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.194312,
+    0.417465,
+    0.294312,
+    0.577465
+   ]
+  },
+  {
+   "sighting_id": "ref-s0011",
+   "entity_id": "ref-multimeter-1",
+   "seen_at": "2026-10-01T12:00:49+00:00",
+   "location_id": "LAB1P3",
+   "bbox": [
+    0.704404,
+    0.689671,
+    0.804404,
+    0.849671
+   ]
+  },
+  {
+   "sighting_id": "ref-s0025",
+   "entity_id": "ref-duct-tape-a",
+   "seen_at": "2026-10-01T12:00:49+00:00",
+   "location_id": "LAB1O3",
+   "bbox": [
+    0.372361,
+    0.146804,
+    0.472361,
+    0.306804
+   ]
+  },
+  {
+   "sighting_id": "ref-s0039",
+   "entity_id": "ref-duct-tape-b",
+   "seen_at": "2026-10-01T12:00:49+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.197402,
+    0.14536,
+    0.297402,
+    0.30536
+   ]
+  },
+  {
+   "sighting_id": "ref-s0050",
+   "entity_id": "ref-headset-1",
+   "seen_at": "2026-10-01T12:00:49+00:00",
+   "location_id": "LAB1P3",
+   "bbox": [
+    0.848492,
+    0.419286,
+    0.948492,
+    0.579286
+   ]
+  },
+  {
+   "sighting_id": "ref-s0070",
+   "entity_id": "ref-unknown-1",
+   "seen_at": "2026-10-01T12:00:49+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.194312,
+    0.417465,
+    0.294312,
+    0.577465
+   ]
+  },
+  {
+   "sighting_id": "ref-s0012",
+   "entity_id": "ref-multimeter-1",
+   "seen_at": "2026-10-01T12:00:53+00:00",
+   "location_id": "LAB1P3",
+   "bbox": [
+    0.704404,
+    0.689671,
+    0.804404,
+    0.849671
+   ]
+  },
+  {
+   "sighting_id": "ref-s0026",
+   "entity_id": "ref-duct-tape-a",
+   "seen_at": "2026-10-01T12:00:53+00:00",
+   "location_id": "LAB1O3",
+   "bbox": [
+    0.372361,
+    0.146804,
+    0.472361,
+    0.306804
+   ]
+  },
+  {
+   "sighting_id": "ref-s0040",
+   "entity_id": "ref-duct-tape-b",
+   "seen_at": "2026-10-01T12:00:53+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.197402,
+    0.14536,
+    0.297402,
+    0.30536
+   ]
+  },
+  {
+   "sighting_id": "ref-s0051",
+   "entity_id": "ref-headset-1",
+   "seen_at": "2026-10-01T12:00:53+00:00",
+   "location_id": "LAB1P3",
+   "bbox": [
+    0.848492,
+    0.419286,
+    0.948492,
+    0.579286
+   ]
+  },
+  {
+   "sighting_id": "ref-s0071",
+   "entity_id": "ref-unknown-1",
+   "seen_at": "2026-10-01T12:00:53+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.194312,
+    0.417465,
+    0.294312,
+    0.577465
+   ]
+  },
+  {
+   "sighting_id": "ref-s0013",
+   "entity_id": "ref-multimeter-1",
+   "seen_at": "2026-10-01T12:00:57+00:00",
+   "location_id": "LAB1P3",
+   "bbox": [
+    0.704404,
+    0.689671,
+    0.804404,
+    0.849671
+   ]
+  },
+  {
+   "sighting_id": "ref-s0027",
+   "entity_id": "ref-duct-tape-a",
+   "seen_at": "2026-10-01T12:00:57+00:00",
+   "location_id": "LAB1O3",
+   "bbox": [
+    0.372361,
+    0.146804,
+    0.472361,
+    0.306804
+   ]
+  },
+  {
+   "sighting_id": "ref-s0041",
+   "entity_id": "ref-duct-tape-b",
+   "seen_at": "2026-10-01T12:00:57+00:00",
+   "location_id": "LAB1S2",
+   "bbox": [
+    0.197402,
+    0.14536,
+    0.297402,
+    0.30536
+   ]
+  },
+  {
+   "sighting_id": "ref-s0052",
+   "entity_id": "ref-headset-1",
+   "seen_at": "2026-10-01T12:00:57+00:00",
+   "location_id": "LAB1P3",
+   "bbox": [
+    0.848492,
+    0.419286,
+    0.948492,
+    0.579286
+   ]
+  }
+ ],
+ "events": [
+  {
+   "event_type": "removed",
+   "entity_id": "ref-tablet-1",
+   "occurred_at": "2026-10-01T12:00:29+00:00",
+   "actor_desc": null,
+   "to_location": null
+  },
+  {
+   "event_type": "moved",
+   "entity_id": "ref-multimeter-1",
+   "occurred_at": "2026-10-01T12:00:31+00:00",
+   "actor_desc": "crew member, red shirt",
+   "to_location": "LAB1P3"
+  }
+ ],
+ "reviews": [
+  {
+   "kind": "unknown_object",
+   "entity_id": "ref-unknown-1",
+   "status": "open"
+  }
+ ]
+}
