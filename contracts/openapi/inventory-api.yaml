@@ -1,0 +1,317 @@
+openapi: 3.1.0
+info:
+  title: NASA Omni Inventory API
+  version: 0.1.0
+  description: >
+    Inventory Management System (diagram) — the only writer to Postgres. Consumers: dashboard (GET/POST/PATCH),
+    perception reconciler (/ingest/*), agent (read tools), eval runner. Images are served via /media.
+servers: [{url: http://inventory-api.nasa-app.svc:8080}]
+paths:
+  /healthz:
+    get: {summary: Liveness + DB check, responses: {'200': {description: ok}}}
+
+  /items:
+    get:
+      summary: List/search entities with filters (R7)
+      parameters:
+        - {name: q, in: query, schema: {type: string}, description: fuzzy match on label/description/catalog name}
+        - {name: kind, in: query, schema: {enum: [object, person]}}
+        - {name: status, in: query, schema: {type: array, items: {enum: [confirmed, provisional, unknown, merged, dismissed]}}, style: form, explode: true}
+        - {name: catalog_id, in: query, schema: {type: string}}
+        - {name: location, in: query, schema: {type: string}, description: location_id; matches the location and its descendants}
+        - {name: min_confidence, in: query, schema: {type: number, minimum: 0, maximum: 1}}
+        - {name: seen_after, in: query, schema: {type: string, format: date-time}}
+        - {name: seen_before, in: query, schema: {type: string, format: date-time}}
+        - {name: needs_review, in: query, schema: {type: boolean}}
+        - {name: sort, in: query, schema: {enum: [last_seen_at, -last_seen_at, label, -label, confidence, -confidence], default: -last_seen_at}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 500, default: 50}}
+        - {name: offset, in: query, schema: {type: integer, minimum: 0, default: 0}}
+      responses:
+        '200': {description: page, content: {application/json: {schema: {$ref: '#/components/schemas/ItemPage'}}}}
+    post:
+      summary: Operator adds an item not yet seen by the pipeline — IMAGE REQUIRED (R7)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [image, label, location_id]
+              properties:
+                image: {type: string, format: binary}
+                label: {type: string}
+                description: {type: string}
+                catalog_id: {type: string}
+                location_id: {type: string}
+                kind: {enum: [object, person], default: object}
+                operator: {type: string}
+      responses:
+        '201': {description: created, content: {application/json: {schema: {$ref: '#/components/schemas/Item'}}}}
+        '422': {description: missing image or invalid fields}
+
+  /items/{entity_id}:
+    parameters: [{name: entity_id, in: path, required: true, schema: {type: string, format: uuid}}]
+    get:
+      summary: Item detail with recent sightings and events
+      responses:
+        '200': {description: detail, content: {application/json: {schema: {$ref: '#/components/schemas/ItemDetail'}}}}
+        '404': {description: not found}
+    patch:
+      summary: Operator edits an item changed off-screen (R7); audited
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label: {type: string}
+                description: {type: string}
+                catalog_id: {type: [string, 'null']}
+                last_location: {type: string}
+                status: {enum: [confirmed, provisional, unknown, dismissed]}
+                attributes: {type: object}
+                needs_review: {type: boolean}
+                operator: {type: string}
+                note: {type: string}
+      responses:
+        '200': {description: updated, content: {application/json: {schema: {$ref: '#/components/schemas/Item'}}}}
+        '404': {description: not found}
+        '409': {description: entity is merged}
+
+  /items/{entity_id}/merge:
+    post:
+      summary: Merge this entity INTO another (dedup by operator); reversible via /audit
+      parameters: [{name: entity_id, in: path, required: true, schema: {type: string, format: uuid}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [into_entity_id], properties: {into_entity_id: {type: string, format: uuid}, operator: {type: string}, note: {type: string}}}}}}
+      responses: {'200': {description: merged}, '409': {description: invalid merge (self, already merged, kind mismatch)}}
+
+  /items/{entity_id}/history:
+    get:
+      summary: Timeline of sightings + events for an item
+      parameters: [{name: entity_id, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses: {'200': {description: timeline, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/TimelineEntry'}}}}}}
+
+  /review:
+    get:
+      summary: Review queue — unknown objects, possible duplicates, low confidence (R6)
+      parameters:
+        - {name: status, in: query, schema: {enum: [open, resolved, dismissed], default: open}}
+        - {name: kind, in: query, schema: {enum: [unknown_object, possible_duplicate, low_confidence, conflict]}}
+        - {name: limit, in: query, schema: {type: integer, default: 50}}
+      responses: {'200': {description: queue, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/ReviewItem'}}}}}}
+  /review/{review_id}/resolve:
+    post:
+      summary: NASA classifies a review item (R6)
+      parameters: [{name: review_id, in: path, required: true, schema: {type: string, format: uuid}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action, operator]
+              properties:
+                action: {enum: [assign_catalog, new_catalog, merge_into, dismiss]}
+                catalog_id: {type: string, description: for assign_catalog}
+                new_catalog: {$ref: '#/components/schemas/CatalogItem'}
+                target_entity_id: {type: string, format: uuid, description: for merge_into}
+                label: {type: string}
+                operator: {type: string}
+                note: {type: string}
+      responses: {'200': {description: resolved}, '409': {description: already resolved}, '422': {description: invalid action payload}}
+
+  /catalog:
+    get: {summary: Closed-world catalog, responses: {'200': {description: list, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/CatalogItem'}}}}}}}
+    post:
+      summary: Add a catalog item
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CatalogItem'}}}}
+      responses: {'201': {description: created}, '409': {description: duplicate id}}
+  /locations:
+    get: {summary: Location hierarchy, responses: {'200': {description: list, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Location'}}}}}}}
+  /events:
+    get:
+      summary: Events (who moved what)
+      parameters:
+        - {name: entity_id, in: query, schema: {type: string, format: uuid}}
+        - {name: type, in: query, schema: {type: string}}
+        - {name: after, in: query, schema: {type: string, format: date-time}}
+        - {name: before, in: query, schema: {type: string, format: date-time}}
+        - {name: limit, in: query, schema: {type: integer, default: 100}}
+      responses: {'200': {description: events, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Event'}}}}}}
+  /search:
+    get:
+      summary: Full-text search over entities and observation windows (agent tool, memory tier 2 index)
+      parameters: [{name: q, in: query, required: true, schema: {type: string}}, {name: limit, in: query, schema: {type: integer, default: 20}}]
+      responses: {'200': {description: hits}}
+  /stats:
+    get: {summary: Counts by status/location/kind and open review items, responses: {'200': {description: stats}}}
+  /media/{key}:
+    get:
+      summary: Proxy an image/crop from the object store
+      parameters: [{name: key, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: image bytes}, '404': {description: missing}}
+
+  # ---- internal: perception reconciler ----
+  /ingest/candidates:
+    post:
+      summary: Candidate entities for an observation (pgvector top-k on exemplar embeddings + zone/time context)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [embedding]
+              properties:
+                embedding: {type: array, items: {type: number}, minItems: 768, maxItems: 768}
+                catalog_id: {type: [string, 'null']}
+                location_id: {type: [string, 'null']}
+                k: {type: integer, default: 10}
+      responses: {'200': {description: candidates, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Candidate'}}}}}}
+  /ingest/window:
+    post:
+      summary: Transactionally record one reconciled observation window (window + sightings + new entities + events + review items)
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/IngestWindow'}}}}
+      responses: {'201': {description: recorded}, '422': {description: invalid payload}}
+
+components:
+  schemas:
+    Item:
+      type: object
+      required: [entity_id, kind, status, label, confidence]
+      properties:
+        entity_id: {type: string, format: uuid}
+        catalog_id: {type: [string, 'null']}
+        catalog_name: {type: [string, 'null']}
+        kind: {enum: [object, person]}
+        status: {enum: [confirmed, provisional, unknown, merged, dismissed]}
+        label: {type: string}
+        description: {type: [string, 'null']}
+        attributes: {type: object}
+        last_location: {type: [string, 'null']}
+        last_location_name: {type: [string, 'null']}
+        last_seen_at: {type: [string, 'null'], format: date-time}
+        first_seen_at: {type: [string, 'null'], format: date-time}
+        confidence: {type: number}
+        snapshot_url: {type: [string, 'null']}
+        needs_review: {type: boolean}
+        review_reason: {type: [string, 'null']}
+        last_moved_by: {type: [string, 'null'], description: actor_desc of the latest 'moved' event}
+        last_moved_at: {type: [string, 'null'], format: date-time}
+    ItemPage:
+      type: object
+      required: [items, total]
+      properties: {items: {type: array, items: {$ref: '#/components/schemas/Item'}}, total: {type: integer}}
+    ItemDetail:
+      allOf:
+        - $ref: '#/components/schemas/Item'
+        - type: object
+          properties:
+            sightings: {type: array, items: {type: object}}
+            events: {type: array, items: {$ref: '#/components/schemas/Event'}}
+            exemplar_count: {type: integer}
+    TimelineEntry:
+      type: object
+      required: [at, kind]
+      properties: {at: {type: string, format: date-time}, kind: {enum: [sighting, event, audit]}, location_id: {type: [string, 'null']}, summary: {type: string}, image_url: {type: [string, 'null']}}
+    Event:
+      type: object
+      properties:
+        event_id: {type: string, format: uuid}
+        event_type: {type: string}
+        entity_id: {type: string, format: uuid}
+        actor_desc: {type: [string, 'null']}
+        from_location: {type: [string, 'null']}
+        to_location: {type: [string, 'null']}
+        occurred_at: {type: string, format: date-time}
+        confidence: {type: number}
+        evidence_url: {type: [string, 'null']}
+        source: {type: string}
+    ReviewItem:
+      type: object
+      required: [review_id, kind, image_url, description, observed_at, status]
+      properties:
+        review_id: {type: string, format: uuid}
+        kind: {type: string}
+        entity_id: {type: [string, 'null'], format: uuid}
+        candidate_ids: {type: array, items: {type: string, format: uuid}}
+        candidates: {type: array, items: {$ref: '#/components/schemas/Item'}}
+        image_url: {type: string}
+        description: {type: string}
+        observed_at: {type: string, format: date-time}
+        location_id: {type: [string, 'null']}
+        model_guess: {type: [string, 'null']}
+        probabilities: {type: object}
+        status: {type: string}
+    CatalogItem:
+      type: object
+      required: [catalog_id, class_name, display_name]
+      properties:
+        catalog_id: {type: string, pattern: '^[a-z0-9][a-z0-9-]{1,63}$'}
+        class_name: {type: string}
+        display_name: {type: string}
+        synonyms: {type: array, items: {type: string}}
+        category: {enum: [object, person, container]}
+        is_fungible: {type: boolean}
+        expected_count: {type: [integer, 'null']}
+        home_location: {type: [string, 'null']}
+    Location:
+      type: object
+      properties: {location_id: {type: string}, parent_id: {type: [string, 'null']}, kind: {type: string}, display_name: {type: string}}
+    Candidate:
+      type: object
+      properties:
+        entity_id: {type: string, format: uuid}
+        catalog_id: {type: [string, 'null']}
+        label: {type: string}
+        similarity: {type: number, description: max cosine similarity over exemplars}
+        last_location: {type: [string, 'null']}
+        last_seen_at: {type: [string, 'null'], format: date-time}
+        status: {type: string}
+    IngestWindow:
+      type: object
+      required: [window, assignments]
+      properties:
+        window:
+          type: object
+          required: [camera_id, t_start, t_end, model]
+          properties: {camera_id: {type: string}, t_start: {type: string, format: date-time}, t_end: {type: string, format: date-time}, scene_summary: {type: string}, transcript: {type: string}, audio_events: {type: array}, model: {type: string}, raw_uri: {type: string}}
+        assignments:
+          type: array
+          items:
+            type: object
+            required: [sighting]
+            properties:
+              entity_id: {type: [string, 'null'], format: uuid, description: existing entity; null => create new_entity}
+              new_entity:
+                type: object
+                properties: {catalog_id: {type: [string, 'null']}, kind: {type: string}, status: {type: string}, label: {type: string}, description: {type: string}, attributes: {type: object}}
+              sighting:
+                type: object
+                required: [seen_at, confidence]
+                properties: {location_id: {type: [string, 'null']}, seen_at: {type: string, format: date-time}, bbox: {type: [array, 'null']}, confidence: {type: number}, frame_uri: {type: string}, description: {type: string}}
+              exemplar: {type: [object, 'null'], properties: {embedding: {type: array, items: {type: number}}, quality: {type: number}, crop_uri: {type: string}}}
+              ref: {type: string, description: local ref so events/reviews in the same payload can point at new entities}
+        events:
+          type: array
+          items:
+            type: object
+            properties: {event_type: {type: string}, entity_ref: {type: string}, entity_id: {type: [string, 'null']}, actor_desc: {type: [string, 'null']}, from_location: {type: [string, 'null']}, to_location: {type: [string, 'null']}, occurred_at: {type: string}, confidence: {type: number}, evidence_uri: {type: [string, 'null']}, source: {type: string}}
+        reviews:
+          type: array
+          items:
+            type: object
+            properties: {kind: {type: string}, entity_ref: {type: string}, entity_id: {type: [string, 'null']}, candidate_ids: {type: array}, image_uri: {type: string}, description: {type: string}, observed_at: {type: string}, location_id: {type: [string, 'null']}, model_guess: {type: [string, 'null']}, probabilities: {type: object}}
+        decisions:
+          type: array
+          items: {type: object, properties: {question: {type: string}, subject: {type: object}, choice: {type: string}, probabilities: {type: object}, model: {type: string}, latency_ms: {type: integer}}}
+        stock_updates:
+          type: array
+          description: fungible items — upsert (catalog_id, location_id) with est_count and last_seen_at (newer wins)
+          items: {type: object, required: [catalog_id, location_id, est_count, seen_at], properties: {catalog_id: {type: string}, location_id: {type: string}, est_count: {type: integer, minimum: 0}, seen_at: {type: string, format: date-time}}}
+  /stock:
+    get:
+      summary: Fungible stock counts per zone
+      parameters: [{name: catalog_id, in: query, schema: {type: string}}, {name: location, in: query, schema: {type: string}}]
+      responses: {'200': {description: rows}}

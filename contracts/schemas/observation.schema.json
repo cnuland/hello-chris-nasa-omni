@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nasa-omni.local/schemas/observation.schema.json",
+  "title": "OmniWindowObservation",
+  "description": "What the omni model must return for one observation window (frames + audio). Validated by the reconciler before anything touches Postgres (ARCHITECTURE decision 1).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["scene_summary", "objects", "people", "events", "transcript", "audio_events"],
+  "properties": {
+    "scene_summary": {"type": "string", "maxLength": 1200},
+    "location_hint": {"type": ["string", "null"], "description": "module/zone if visible signage or speech says so, else null"},
+    "objects": {
+      "type": "array", "maxItems": 40,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["label", "description", "confidence"],
+        "properties": {
+          "label": {"type": "string", "maxLength": 80, "description": "short noun phrase; prefer catalog class names given in the prompt"},
+          "description": {"type": "string", "maxLength": 400},
+          "attributes": {"type": "object", "additionalProperties": {"type": ["string", "number", "boolean"]}},
+          "bbox": {"type": ["array", "null"], "items": {"type": "number", "minimum": 0, "maximum": 1}, "minItems": 4, "maxItems": 4,
+                   "description": "[x1,y1,x2,y2] normalised to 0..1 on the frame given by frame_index"},
+          "frame_index": {"type": ["integer", "null"], "minimum": 0},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+          "held_by": {"type": ["string", "null"], "description": "person ref (e.g. 'P1') if a person is holding it"}
+        }
+      }
+    },
+    "people": {
+      "type": "array", "maxItems": 10,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["ref", "appearance"],
+        "properties": {
+          "ref": {"type": "string", "pattern": "^P[0-9]+$"},
+          "appearance": {"type": "string", "maxLength": 200, "description": "non-biometric descriptor, e.g. 'blue shirt, headset'"},
+          "activity": {"type": "string", "maxLength": 200},
+          "is_speaking": {"type": "boolean"}
+        }
+      }
+    },
+    "events": {
+      "type": "array", "maxItems": 20,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["type", "object_label", "confidence"],
+        "properties": {
+          "type": {"enum": ["moved", "added", "removed", "used", "handed_over"]},
+          "object_label": {"type": "string", "maxLength": 80},
+          "actor_ref": {"type": ["string", "null"]},
+          "to_location_hint": {"type": ["string", "null"]},
+          "frame_index": {"type": ["integer", "null"], "minimum": 0},
+          "evidence": {"type": "string", "maxLength": 300, "description": "what was seen/heard that supports the event"},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+        }
+      }
+    },
+    "transcript": {"type": "string", "maxLength": 4000},
+    "audio_events": {
+      "type": "array", "maxItems": 10,
+      "items": {"type": "object", "additionalProperties": false, "required": ["label"],
+                "properties": {"label": {"type": "string"}, "confidence": {"type": "number", "minimum": 0, "maximum": 1}}}
+    }
+  }
+}
