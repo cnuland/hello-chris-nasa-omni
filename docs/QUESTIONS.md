@@ -116,3 +116,28 @@ I need from you.
     repeats inside one omni reply. Queued for perception after the omni-budget work.
 25. **Dashboard polish (not blocking):** recent events show the item ID (`item 550f3b9d`) rather than its label.
     Screenshots of the live dashboard are in docs/screenshots/.
+26. **Throughput and GPU sizing (measured).** On T4, omni takes 80% of the wall time: Qwen2.5-Omni-7B fp16 TP2 decodes
+    at about 28 tok/s (memory-bandwidth bound), so each window costs about 20 s, even after the output budget brought
+    tokens down from about 1,000 to about 550. Real time at a 4 s stride needs about 5× that, i.e. an L4/A10/L40S/H100.
+    The RHDP policy blocks those GPUs here.
+    - **POC setting:** `PERCEPTION_STRIDE_S=12` (a 6 s window every 12 s), so the 15 min tour takes roughly 30 min.
+    - **Options:** (a) a newer GPU, the real fix; (b) Qwen2.5-Omni-3B on 1×T4, about 2× faster with lower quality;
+      (c) parallel windows across 2 omni replicas.
+    - **Need:** the target hardware for the ISS / DGX Spark deployment, which decides between these.
+27. **Follow-up: unknown-label variants.** On the full tour, "spacesuit" and "space suit" became separate unknown
+    groups. Unknown grouping compares `normalise_label` output exactly. Proposed fix: a separate grouping key without
+    spaces or hyphens, used only for UNKNOWN-vs-UNKNOWN comparisons, plus a fuzzy fallback (`fuzzy_similarity` ≥ 0.9).
+    It is not done yet because `normalise_label` has 12 call sites, display text included, and it deserves a reviewed
+    TDD round. NASA's review queue (merge_into) covers it in the meantime.
+28. **Omni still exceeds the output budget.** Over the full tour, 77% of omni replies hit `OMNI_MAX_TOKENS=700`
+    (mean 662 tokens), and 42 of 44 were salvaged. The model largely ignores the prompt caps. Options: constrained JSON
+    decoding if vLLM-Omni adds it to chat; a fine-tuned or smaller omni; or `OMNI_MAX_OBJECTS` 8 for faster windows.
+29. **Revisit dedup after a long gap: the most important next fix.** The full tour (101 windows, with the video
+    looped) created 57 entities in windows 0–29, 37 in 30–79, a **spike of 22 right after the loop restart**
+    (windows 80–89, back in Columbus about 15 min later), then 5 in 90–100.
+    - **Likely cause:** omni-only sightings carry no embedding (quality gate, AC-PER-22). They attach only to a
+      same-class entity seen within `PERCEPTION_NO_EXEMPLAR_MATCH_S=600` s, so a module revisited after more than
+      10 min gets new entities. The expected-count rule did flag them (35 possible-duplicate reviews).
+    - **Proposed fix (TDD):** for omni-only sightings, attach by (class, module or zone) with no time limit when
+      exactly one live candidate exists; when several exist, ask DiffusionGemma with their descriptions. Add a
+      "revisit" scenario to the eval (same scene replayed after a 15 min gap, gate: new entities on the revisit ≤ 5%).

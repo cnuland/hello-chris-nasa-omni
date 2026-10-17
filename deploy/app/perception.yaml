@@ -23,6 +23,7 @@ spec:
           env:
             - {name: CAMERA_ID, value: cam-handheld}   # NASA tour footage is handheld: location comes from hints
             - {name: PERCEPTION_DEVICE, value: cuda}
+            - {name: PERCEPTION_STRIDE_S, value: "12"}   # T4 sizing: omni ~20 s/window (QUESTIONS #26); objects persist, short handovers may fall between windows
             - {name: VIDEO_SOURCE, value: "/media/sample.mp4"}
             - {name: INVENTORY_API_URL, value: "http://inventory-api.nasa-app.svc:8080"}
             - {name: OMNI_URL, value: "http://omni.nasa-inference.svc:8000"}
