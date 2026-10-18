@@ -43,7 +43,8 @@ class Settings:
 
     Environment variables:
       DATABASE_URL (required), S3_BUCKET, S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY, S3_REGION, MIGRATIONS_DIR,
-      DB_POOL_MIN, DB_POOL_MAX, DB_TIMEOUT_S, HEALTH_TIMEOUT_S, MAX_UPLOAD_BYTES, LOG_LEVEL.
+      DB_POOL_MIN, DB_POOL_MAX, DB_TIMEOUT_S, HEALTH_TIMEOUT_S, MAX_UPLOAD_BYTES, LOG_LEVEL,
+      LOCATION_DOWNGRADE_HOLD_S (AC-API-45, default 600, 0 = off).
     """
 
     database_url: str
@@ -59,6 +60,7 @@ class Settings:
     health_timeout_s: float = 2.0
     max_upload_bytes: int = 20 * 1024 * 1024
     log_level: str = "INFO"
+    location_downgrade_hold_s: float = 600.0  # AC-API-45: a segment sighting keeps a module location this long
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -80,4 +82,5 @@ class Settings:
             health_timeout_s=_env_float("HEALTH_TIMEOUT_S", 2.0),
             max_upload_bytes=_env_int("MAX_UPLOAD_BYTES", 20 * 1024 * 1024),
             log_level=_env("LOG_LEVEL", "INFO") or "INFO",
+            location_downgrade_hold_s=_env_float("LOCATION_DOWNGRADE_HOLD_S", 600.0),
         )

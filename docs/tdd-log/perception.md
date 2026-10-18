@@ -1192,3 +1192,48 @@ No window had the wrong module; all 14 misses stayed at segment level (USOS).
      use an unknown, which is now always framed).
   - Accepted (spec residual risks): widened detector-miss risk, repeated per-window cost, omni's box not used to pick
     among query boxes, eval cannot score query links (its fake detector never returns unknowns).
+
+## AC-PER-58..63 box format and UI review round 5 (live Gemma 4 run, 2026-10-18)
+- **Measured first** (read-only): 34 raw replies of the live run (`observation_window.raw_uri` -> dashboard media
+  proxy), saved as tests/fixtures/gemma4_boxes_2026-10-18.json with the video offset of each window (the run loops
+  tour-medium.mp4, 896.8 s; frame k = window offset + k s). 142 boxes, all integers 0..1000. Drawn on the real frames
+  (ffmpeg): `[y1,x1,y2,x2]/1000` lands on the treadmill belt, the laptop, the orange sphere, the wristwatch and the
+  camera; `[x1,y1,x2,y2]/1000` does not. The old clamp kept 1 of 142 boxes ("green fabric cover" -> the whole frame).
+- **Spec first:** docs/spec/20-perception.md "Amendments: box format and UI review round 5" (AC-PER-58..63) and
+  docs/spec/10-inventory-api.md AC-API-45.
+- **AC-PER-58 red -> green:** tests/test_ac_per_58_box_format.py (import errors, then 3 wrong expectations of mine
+  fixed against the data: before = 1 survivor, not 0; after = 141, not 142, one box is 1.7% wide). `box_order_for`,
+  per-reply scale, `OMNI_BOX_ORDER`, Gemma prompt + patched prompt schema, chat + realtime clients.
+- **Effect measured with the real OWLv2** (CPU, temp venv, catalog + person/face queries on every frame of the 34
+  windows, then the real `Reconciler._link`): before 1 omni box, 37/139 instances linked (36 by label, 1 by IoU to a
+  wrong whole-frame box). With the boxes alone: 39 IoU links, but 29 to another class's detection (laptop -> cable,
+  camera -> cargo transfer bag, food package -> laptop). Added test-first: a catalog instance never takes another
+  class's box by IoU; an unknown only at IoU >= 0.5 (`PERCEPTION_LINK_IOU_CROSS_CLASS`). After: 140/141 instances
+  carry a box, 42 linked (15 by IoU: 11 same class, 4 unknown cross-class, 2 of those to `cable` boxes).
+- **AC-PER-59 red -> green:** tests/test_ac_per_59_unknown_flood.py on the round-5 labels and on all 35 unknown
+  listings of the run (before 8 structure / 27 to the queue; after 13 structure / 6 generic held / 16 to the queue).
+  Deviation from the request, by data: "attached to a rack/rail" is not structure (16 real pouches and bags).
+- **AC-PER-60 red -> green:** live decision log read first: the Zvezda laptop match was the decision model at 0.83 with
+  similarity 0.61 (p 0.63). Generic classes need the auto band across modules; module changes emit `moved`.
+- **AC-PER-61:** caption rule test-first. A summary transit rule was also implemented and measured on the 51 labelled
+  windows: -1 correct carry, 0 gains, so it was removed (spec: rejected). Fixture truth corrected for the two
+  "NOD 3" windows (frames viewed: a node with "To NOD 3" signs, not the Cupola); AC-PER-42 figures amended
+  (16/23 -> 14/23 on the first 41, 19/30 -> 17/30 overall, 0 wrong either way; the old carry is 2 wrong).
+  gemma4_tour_people fixture `module` (replayed resolution) amended for the 3 "NOD 3" windows. Person attach checked:
+  not an attach; Gemma swapped garment colours; clash rule holds.
+- **AC-PER-63:** existing tests amended: AC-PER-10 event tests now use a drill with a previous place (a first
+  sighting no longer gets a move); AC-PER-44 / AC-PER-51 person moves are `seen` arrivals.
+- **Runs:** perception 1455 passed (1314 -> +141); inventory-api 515; ruff clean; `make test` all suites passed
+  (api 515, perception 1455, agent 668, eval 408 + 1 skipped, dashboard 471, e2e 29); `make eval` gate PASSED.
+- **Adversarial review** (independent reviewer agent; no P1; fixes test-first in
+  tests/test_ac_per_58_63_review_round.py, 24 red then green): P2 held-review flood (only ask-band look-alikes);
+  P2 held review blocked same-place adoption (moved after adoption); P3 no synthesized move in carried / truncated /
+  hint-conflict windows; P3 placeholder hints do not end the carry; P3 negation, possessive and size-digit false
+  positives in the label regexes; P3 two-phase IoU linking (same class first); P3 inf clamped, NaN -> null box;
+  warning on grid replies to an xyxy client. Accepted (spec): model alias, mixed replies, cable boxes, label links
+  ignore omni's box, broad modifiers, garment swaps, generic recall, FakeOmni order. API findings: see
+  inventory-api.md. Real-data link figures unchanged after the fixes.
+- **Final runs:** perception **1483 passed** (1314 -> +169), ruff clean.
+
+- **After review:** `make test` all suites passed (api 517, perception 1483, agent 668, eval 408 + 1 skipped, dashboard
+  471, e2e 29); `make eval` gate PASSED.

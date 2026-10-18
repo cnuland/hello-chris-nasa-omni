@@ -404,6 +404,7 @@ def test_ac_per_51_person_moved_to_another_module_names_the_destination(make_rec
     assert payload["assignments"][0]["entity_id"] == eid
     (ev,) = payload["events"]
     assert ev["from_location"] == "NOD1" and ev["to_location"] == "LAB1"
+    assert ev["event_type"] == "seen"  # AC-PER-63: an arrival, never "moved"
 
 
 def test_ac_per_51_person_moved_within_the_segment_is_not_a_move(make_reconciler, inv):
@@ -417,9 +418,9 @@ def test_ac_per_51_person_moved_within_the_segment_is_not_a_move(make_reconciler
 def test_ac_per_51_new_person_track_event_gets_its_place(make_reconciler, inv):
     payload, _ = run(make_reconciler(LAB_CAM), people=[{"ref": "P1", "appearance": "red shirt"}],
                      events=[MOVED, {"type": "seen", "object_label": "person", "frame_index": 0, "confidence": 0.8}])
-    by_type = {e["event_type"]: e for e in payload["events"]}
-    assert by_type["seen"]["to_location"] == "LAB1"
-    assert by_type["moved"]["from_location"] is None and by_type["moved"]["to_location"] == "LAB1"
+    # AC-PER-63 amendment: the new track's "moved" becomes an arrival "seen" there, which collapses with the "seen"
+    (ev,) = payload["events"]
+    assert ev["event_type"] == "seen" and ev["to_location"] == "LAB1" and ev["from_location"] is None
 
 
 def test_ac_per_51_object_events_carry_the_known_place(make_reconciler, inv):

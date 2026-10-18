@@ -1,0 +1,273 @@
+{
+ "source": "live Gemma 4 run on the ARO cluster (OMNI_MODEL gemma4), 2026-10-18 06:27-06:47 UTC, camera cam-handheld replaying tour-medium.mp4 in a loop (duration 896.8 s); every raw reply of the run read read-only from s3 via the dashboard media proxy",
+ "video_time": "frame k of a window is at video t = video_t0 + k s (1 fps keyframes, window t_start minus the first window's t_start, modulo the video duration)",
+ "box_measurement": "34 replies, 142 objects, 142 boxes, all integers in 0..1000 (min 0, max 1000); none in 0..1. Drawn on the 1080x608 video frame, [y1,x1,y2,x2]/1000 lands on the object and [x1,y1,x2,y2]/1000 does not: treadmill 063508 (belt, px x 358-586 y 515-608), laptop 063938 (px x 11-238 y 22-179), orange sphere 062838, wristwatch 064138, camera 064608",
+ "order_checks": [
+  {
+   "raw_uri_key": "063508",
+   "label": "treadmill",
+   "bbox": [
+    847,
+    331,
+    1000,
+    543
+   ],
+   "yxyx_on_object": true,
+   "xyxy_on_object": false
+  },
+  {
+   "raw_uri_key": "063938",
+   "label": "laptop",
+   "bbox": [
+    37,
+    10,
+    294,
+    223
+   ],
+   "yxyx_on_object": true,
+   "xyxy_on_object": false
+  },
+  {
+   "raw_uri_key": "062838",
+   "label": "orange sphere",
+   "bbox": [
+    415,
+    493,
+    478,
+    531
+   ],
+   "yxyx_on_object": true,
+   "xyxy_on_object": false
+  },
+  {
+   "raw_uri_key": "064138",
+   "label": "wristwatch",
+   "bbox": [
+    755,
+    604,
+    824,
+    644
+   ],
+   "yxyx_on_object": true,
+   "xyxy_on_object": false
+  },
+  {
+   "raw_uri_key": "064608",
+   "label": "camera",
+   "bbox": [
+    927,
+    348,
+    988,
+    395
+   ],
+   "yxyx_on_object": true,
+   "xyxy_on_object": false
+  }
+ ],
+ "windows": [
+  {
+   "t_start": "2026-10-18T06:27:38.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/062738.555353.json",
+   "video_t0": 0.0,
+   "raw": "{\"scene_summary\": \"A person in a blue flight suit is looking towards the camera in a space station module.\", \"location_hint\": null, \"objects\": [], \"people\": [{\"ref\": \"P1\", \"appearance\": \"blue flight suit with American flag patch\", \"activity\": \"looking at camera\", \"is_speaking\": true}], \"events\": [], \"transcript\": \"de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se se se se se de se"
+  },
+  {
+   "t_start": "2026-10-18T06:28:03.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/062808.555353.json",
+   "video_t0": 25.0,
+   "raw": "{\"scene_summary\": \"A person in a black shirt stands near a hatch in the Columbus Laboratory Module.\", \"location_hint\": \"Columbus Laboratory Module\", \"objects\": [{\"label\": \"blue cloth\", \"description\": \"a blue piece of fabric\", \"confidence\": 0.9, \"bbox\": [617, 424, 714, 501], \"frame_index\": 5}, {\"label\": \"orange tool\", \"description\": \"an orange handled tool\", \"confidence\": 0.85, \"bbox\": [614, 688, 884, 731], \"frame_index\": 5}], \"people\": [{\"ref\": \"P1\", \"appearance\": \"black shirt, grey pants\", \"activity\": \"standing near a hatch\", \"is_speaking\": false}], \"events\": [], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:28:33.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/062838.555353.json",
+   "video_t0": 55.0,
+   "raw": "{\"scene_summary\": \"A person in a blue shirt floats in the Japanese Experiment Module \\\"Kibo\\\" while looking at equipment.\", \"location_hint\": \"Japanese Experiment Module \\\"Kibo\\\"\", \"objects\": [{\"label\": \"laptop\", \"description\": \"a black laptop mounted on a rack\", \"confidence\": 0.9, \"bbox\": [400, 547, 465, 603], \"frame_index\": 0}, {\"label\": \"orange sphere\", \"description\": \"a small orange spherical object\", \"confidence\": 0.95, \"bbox\": [415, 493, 478, 531], \"frame_index\": 0}, {\"label\": \"white pouch\", \"description\": \"a white pouch attached to a rail\", \"confidence\": 0.85, \"bbox\": [848, 455, 915, 503], \"frame_index\": 3}, {\"label\": \"ziploc bag\", \"description\": \"a clear ziploc bag containing items\", \"confidence\": 0.8, \"bbox\": [885, 415, 955, 455], \"frame_index\": 3}, {\"label\": \"food package\", \"description\": \"a small food package on a shelf\", \"confidence\": 0.75, \"bbox\": [455, 855, 495, 885], \"frame_index\": 0}], \"people\": [{\"ref\": \"P1\", \"appearance\": \"blue shirt, dark hair\", \"activity\": \"floating and looking at equipment\", \"is_speaking\": false}], \"events\": [{\"type\": \"moved\", \"object_label\": \"person\", \"actor_ref\": \"P1\", \"confidence\": 0.9, \"frame_index\": 4, \"evidence\": \"P1 moves into view and floats in the center of the module\"}], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:29:03.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/062908.555353.json",
+   "video_t0": 85.0,
+   "raw": "{\"scene_summary\": \"A view through a hatch shows a large white wrapped object in the foreground and another module beyond.\", \"location_hint\": null, \"objects\": [{\"label\": \"white wrapped object\", \"description\": \"large white bundle wrapped in protective material\", \"confidence\": 0.95, \"bbox\": [475, 515, 665, 985], \"frame_index\": 5}, {\"label\": \"laptop\", \"description\": \"black laptop mounted on a rack\", \"confidence\": 0.85, \"bbox\": [100, 145, 355, 315], \"frame_index\": 0}, {\"label\": \"white pouch\", \"description\": \"small white pouch attached to a rack\", \"confidence\": 0.8, \"bbox\": [545, 100, 715, 155], \"frame_index\": 5}], \"people\": [], \"events\": [], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:30:33.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/063038.555353.json",
+   "video_t0": 175.0,
+   "raw": "{\"scene_summary\": \"Two astronauts are seen floating and interacting within the Unity Module of the ISS.\", \"location_hint\": \"Unity Module\", \"objects\": [{\"label\": \"laptop\", \"description\": \"A small black laptop mounted on a wall panel.\", \"bbox\": [317, 0, 431, 118], \"frame_index\": 0, \"confidence\": 0.9}, {\"label\": \"drink pouch\", \"description\": \"A clear plastic drink pouch attached to a rack.\", \"bbox\": [534, 584, 614, 631], \"frame_index\": 3, \"confidence\": 0.85}, {\"label\": \"m-bag\", \"description\": \"A blue storage bag secured to a rail.\", \"bbox\": [614, 584, 944, 714], \"frame_index\": 4, \"confidence\": 0.8}, {\"label\": \"trash bag\", \"description\": \"A white bag hanging near the entrance.\", \"bbox\": [504, 51, 684, 125], \"frame_index\": 0, \"confidence\": 0.8}], \"people\": [{\"ref\": \"P1\", \"appearance\": \"dark hair, dark blue long-sleeved shirt\", \"activity\": \"floating and looking towards P2\", \"is_speaking\": false}, {\"ref\": \"P2\", \"appearance\": \"short hair, grey t-shirt, black shorts\", \"activity\": \"floating horizontally while holding onto a rail\", \"is_speaking\": false}], \"events\": [{\"type\": \"moved\", \"object_label\": \"P2\", \"actor_ref\": \"P2\", \"frame_index\": 4, \"evidence\": \"P2 shifts position while holding the rail\", \"confidence\": 0.9}], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:31:03.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/063108.555353.json",
+   "video_t0": 205.0,
+   "raw": "{\"scene_summary\": \"A person in blue shorts and a grey shirt maneuvers inside the Cupola module of the ISS.\", \"location_hint\": \"Cupola\", \"objects\": [{\"label\": \"drink pouch\", \"description\": \"clear plastic pouch containing liquid\", \"confidence\": 0.9, \"bbox\": [327, 331, 454, 418], \"frame_index\": 0, \"held_by\": null}], \"people\": [{\"ref\": \"P1\", \"appearance\": \"grey long-sleeve shirt, blue shorts\", \"activity\": \"moving and maneuvering inside the Cupola module\", \"is_speaking\": false}], \"events\": [{\"type\": \"moved\", \"object_label\": \"person\", \"actor_ref\": \"P1\", \"confidence\": 0.95, \"frame_index\": 3, \"evidence\": \"P1 moves from the center towards the bottom of the frame\", \"to_location_hint\": null}], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:31:33.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/063138.555353.json",
+   "video_t0": 235.0,
+   "raw": "{\"scene_summary\": \"A person in a grey shirt works near a rack while another person is visible in the background.\", \"location_hint\": \"NOD 3\", \"objects\": [{\"label\": \"m-bag\", \"description\": \"white m-bag attached to a rack\", \"confidence\": 0.9, \"bbox\": [578, 578, 684, 644], \"frame_index\": 3}, {\"label\": \"trash bag\", \"description\": \"white trash bag on the floor\", \"confidence\": 0.85, \"bbox\": [700, 580, 850, 645], \"frame_index\": 4}, {\"label\": \"drink pouch\", \"description\": \"green drink pouch attached to a wall\", \"confidence\": 0.8, \"bbox\": [510, 388, 545, 405], \"frame_index\": 3}, {\"label\": \"laptop\", \"description\": \"laptop mounted on a rack\", \"confidence\": 0.85, \"bbox\": [545, 315, 645, 355], \"frame_index\": 0}], \"people\": [{\"ref\": \"P1\", \"appearance\": \"grey shirt, black shorts, headset\", \"activity\": \"working on a rack\", \"is_speaking\": false}, {\"ref\": \"P2\", \"appearance\": \"blue shirt, orange helmet\", \"activity\": \"floating in the background\", \"is_speaking\": false}], \"events\": [{\"type\": \"moved\", \"object_label\": \"P1\", \"actor_ref\": \"P1\", \"frame_index\": 5, \"evidence\": \"P1 shifts position slightly while working\", \"confidence\": 0.9}], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:32:03.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/063208.555353.json",
+   "video_t0": 265.0,
+   "raw": "{\"scene_summary\": \"Astronauts prepare extravehicular activity equipment inside the ISS.\", \"location_hint\": null, \"objects\": [{\"label\": \"spacesuit\", \"description\": \"white spacesuit with tan helmet cover\", \"confidence\": 0.95, \"bbox\": [301, 397, 998, 613], \"frame_index\": 0}, {\"label\": \"spacesuit\", \"description\": \"another white spacesuit partially visible\", \"confidence\": 0.9, \"bbox\": [493, 0, 998, 231], \"frame_index\": 0}, {\"label\": \"camera\", \"description\": \"black camera mounted on a robotic arm\", \"confidence\": 0.9, \"bbox\": [384, 668, 888, 954], \"frame_index\": 2}, {\"label\": \"drink pouch\", \"description\": \"blue and green drink pouch\", \"confidence\": 0.85, \"bbox\": [723, 688, 888, 754], \"frame_index\": 5}, {\"label\": \"m-bag\", \"description\": \"white storage bag\", \"confidence\": 0.8, \"bbox\": [184, 254, 484, 381], \"frame_index\": 0}], \"people\": [{\"ref\": \"P1\", \"appearance\": \"blue shirt, khaki pants\", \"activity\": \"preparing equipment\", \"is_speaking\": false}, {\"ref\": \"P2\", \"appearance\": \"grey shirt, short hair\", \"activity\": \"looking at camera\", \"is_speaking\": false}, {\"ref\": \"P3\", \"appearance\": \"grey shirt, dark hair\", \"activity\": \"working in background\", \"is_speaking\": false}], \"events\": [{\"type\": \"moved\", \"object_label\": \"camera\", \"actor_ref\": null, \"to_location_hint\": null, \"frame_index\": 3, \"evidence\": \"camera moves into view on robotic arm\", \"confidence\": 0.8}], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:32:33.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/063238.555353.json",
+   "video_t0": 295.0,
+   "raw": "{\"scene_summary\": \"A person holds onto a blue handrail while looking into a hatch filled with white storage bags.\", \"location_hint\": null, \"objects\": [{\"label\": \"cargo transfer bag\", \"description\": \"multiple white bags with blue labels packed into a hatch\", \"bbox\": [100, 100, 500, 900], \"frame_index\": 0, \"confidence\": 0.9}, {\"label\": \"cable\", \"description\": \"orange corrugated hose-like cable\", \"bbox\": [200, 330, 750, 530], \"frame_index\": 0, \"confidence\": 0.8}, {\"label\": \"ziploc bag\", \"description\": \"clear plastic bag containing small items\", \"bbox\": [680, 750, 950, 950], \"frame_index\": 5, \"confidence\": 0.85}, {\"label\": \"m-bag\", \"description\": \"large grey fabric bag hanging on the wall\", \"bbox\": [620, 620, 980, 780], \"frame_index\": 0, \"confidence\": 0.8}, {\"label\": \"ziploc bag\", \"description\": \"small clear bag with white contents\", \"bbox\": [100, 740, 250, 820], \"frame_index\": 0, \"confidence\": 0.7}], \"people\": [{\"ref\": \"P1\", \"appearance\": \"black shirt, blue pants\", \"activity\": \"holding a blue handrail and looking into a hatch\", \"is_speaking\": false}], \"events\": [{\"type\": \"moved\", \"object_label\": \"hand\", \"actor_ref\": \"P1\", \"frame_index\": 2, \"evidence\": \"P1's hand moves along the blue handrail\", \"confidence\": 0.9}], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:33:03.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/063308.555353.json",
+   "video_t0": 325.0,
+   "raw": "{\"scene_summary\": \"A view through a circular hatch shows a cluttered interior with various equipment and a large grey object in the foreground.\", \"location_hint\": null, \"objects\": [{\"label\": \"grey object\", \"description\": \"large, smooth grey object in the foreground\", \"confidence\": 0.9, \"bbox\": [347, 443, 1000, 1000], \"frame_index\": 0}, {\"label\": \"hatch\", \"description\": \"circular opening between modules\", \"confidence\": 0.95, \"bbox\": [103, 281, 788, 654], \"frame_index\": 0}, {\"label\": \"equipment rack\", \"description\": \"rack with multiple grey boxes and wires\", \"confidence\": 0.85, \"bbox\": [188, 128, 583, 254], \"frame_index\": 0}, {\"label\": \"white pouch\", \"description\": \"small white pouch attached to a rail\", \"confidence\": 0.7, \"bbox\": [378, 348, 473, 414], \"frame_index\": 0}, {\"label\": \"blue container\", \"description\": \"blue storage container in the background\", \"confidence\": 0.8, \"bbox\": [213, 398, 358, 443], \"frame_index\": 0}, {\"label\": \"orange bag\", \"description\": \"orange bag hanging on a rail\", \"confidence\": 0.85, \"bbox\": [483, 768, 753, 848], \"frame_index\": 0}], \"people\": [], \"events\": [], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:33:33.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/063338.555353.json",
+   "video_t0": 355.0,
+   "raw": "{\"scene_summary\": \"A cluttered interior of the International Space Station shows numerous cylindrical containers and bags.\", \"location_hint\": null, \"objects\": [{\"label\": \"cylindrical container\", \"description\": \"large silver cylindrical container\", \"bbox\": [748, 331, 998, 538], \"frame_index\": 0, \"confidence\": 0.9}, {\"label\": \"cargo transfer bag\", \"description\": \"white bag with yellow markings\", \"bbox\": [588, 523, 988, 728], \"frame_index\": 0, \"confidence\": 0.85}, {\"label\": \"m-bag\", \"description\": \"blue storage bag\", \"bbox\": [0, 133, 318, 323], \"frame_index\": 0, \"confidence\": 0.8}, {\"label\": \"ziploc bag\", \"description\": \"clear plastic bag containing items\", \"bbox\": [708, 773, 998, 973], \"frame_index\": 0, \"confidence\": 0.75}, {\"label\": \"food package\", \"description\": \"white wrapped package\", \"bbox\": [503, 403, 613, 513], \"frame_index\": 0, \"confidence\": 0.7}, {\"label\": \"cable\", \"description\": \"thin black cable running across containers\", \"bbox\": [633, 353, 998, 633], \"frame_index\": 0, \"confidence\": 0.8}, {\"label\": \"towel\", \"description\": \"green cloth hanging on left\", \"bbox\": [153, 133, 363, 233], \"frame_index\": 0, \"confidence\": 0.7}, {\"label\": \"trash bag\", \"description\": \"black bag on the left\", \"bbox\": [473, 0, 813, 163], \"frame_index\": 0, \"confidence\": 0.8}, {\"label\": \"drink pouch\", \"description\": \"small white pouch\", \"bbox\": [513, 583, 653, 643], \"frame_index\": 0, \"confidence\": 0.65}], \"people\": [], \"events\": [], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:34:03.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/063408.555353.json",
+   "video_t0": 385.0,
+   "raw": "{\"scene_summary\": \"A view through a hatch into another module of the International Space Station.\", \"location_hint\": null, \"objects\": [{\"label\": \"laptop\", \"description\": \"a black laptop mounted on a rack\", \"bbox\": [731, 781, 911, 863], \"frame_index\": 2, \"confidence\": 0.9}], \"people\": [{\"ref\": \"P1\", \"appearance\": \"white suit, blue gloves\", \"activity\": \"working in the background module\", \"is_speaking\": false}], \"events\": [], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:34:33.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/063438.555353.json",
+   "video_t0": 415.0,
+   "raw": "{\"scene_summary\": \"A person is seen floating in the Zvezda Service Module of the ISS.\", \"location_hint\": \"Zvezda Service Module\", \"objects\": [{\"label\": \"laptop\", \"description\": \"black laptop mounted on a rack\", \"confidence\": 0.95, \"bbox\": [478, 348, 644, 443], \"frame_index\": 0}, {\"label\": \"drink pouch\", \"description\": \"red and white drink pouch attached to a rail\", \"confidence\": 0.9, \"bbox\": [198, 38, 468, 92], \"frame_index\": 0}, {\"label\": \"m-bag\", \"description\": \"blue m-bag attached to a rack\", \"confidence\": 0.85, \"bbox\": [704, 248, 834, 318], \"frame_index\": 0}, {\"label\": \"trash bag\", \"description\": \"blue trash bag hanging from a rail\", \"confidence\": 0.8, \"bbox\": [714, 472, 864, 524], \"frame_index\": 0}, {\"label\": \"food package\", \"description\": \"white food package on a shelf\", \"confidence\": 0.8, \"bbox\": [584, 714, 844, 784], \"frame_index\": 0}], \"people\": [{\"ref\": \"P1\", \"appearance\": \"blue shirt, shorts, glasses\", \"activity\": \"floating in the module\", \"is_speaking\": false}], \"events\": [{\"type\": \"moved\", \"object_label\": \"person\", \"actor_ref\": \"P1\", \"confidence\": 0.9, \"frame_index\": 3, \"evidence\": \"The person moves slightly forward in the frame.\"}], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:35:03.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/063508.555353.json",
+   "video_t0": 445.0,
+   "raw": "{\"scene_summary\": \"A person is running on a treadmill while holding a large grey device.\", \"location_hint\": null, \"objects\": [{\"label\": \"treadmill\", \"description\": \"a treadmill with a red belt\", \"confidence\": 0.95, \"bbox\": [847, 331, 1000, 543], \"frame_index\": 0}, {\"label\": \"grey device\", \"description\": \"a large grey rectangular device with a screen\", \"confidence\": 0.9, \"bbox\": [311, 291, 534, 514], \"frame_index\": 0, \"held_by\": \"P1\"}, {\"label\": \"black bag\", \"description\": \"a large black bag hanging on the right\", \"confidence\": 0.85, \"bbox\": [208, 623, 598, 825], \"frame_index\": 0}, {\"label\": \"white pouch\", \"description\": \"a white pouch attached to a rack\", \"confidence\": 0.8, \"bbox\": [568, 924, 814, 1000], \"frame_index\": 0}, {\"label\": \"drink pouch\", \"description\": \"a small clear drink pouch\", \"confidence\": 0.85, \"bbox\": [448, 45, 503, 74], \"frame_index\": 0}, {\"label\": \"food package\", \"description\": \"a small food package on a shelf\", \"confidence\": 0.8, \"bbox\": [463, 125, 511, 158], \"frame_index\": 0}, {\"label\": \"laptop\", \"description\": \"a laptop mounted on a rack\", \"confidence\": 0.85, \"bbox\": [248, 588, 448, 681], \"frame_index\": 0}, {\"label\": \"trash bag\", \"description\": \"a black trash bag on the floor\", \"confidence\": 0.8, \"bbox\": [753, 711, 1000, 931], \"frame_index\": 0}], \"people\": [{\"ref\": \"P1\", \"appearance\": \"blue shorts, grey shirt, running\", \"activity\": \"running on a treadmill while holding a device\", \"is_speaking\": false}], \"events\": [{\"type\": \"used\", \"object_label\": \"treadmill\", \"actor_ref\": \"P1\", \"confidence\": 0.9, \"frame_index\": 0, \"evidence\": \"P1 is running on the treadmill belt\"}], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:36:03.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/063608.555353.json",
+   "video_t0": 505.0,
+   "raw": "{\"scene_summary\": \"A person in a blue suit works in the Nauka Multipurpose Laboratory Module.\", \"location_hint\": \"Nauka Multipurpose Laboratory Module\", \"objects\": [{\"label\": \"m-bag\", \"description\": \"white m-bag with black markings\", \"bbox\": [10, 147, 365, 441], \"frame_index\": 0, \"confidence\": 0.9}, {\"label\": \"laptop\", \"description\": \"grey laptop on a surface\", \"bbox\": [483, 213, 688, 331], \"frame_index\": 0, \"confidence\": 0.8}, {\"label\": \"yellow helmet\", \"description\": \"yellow protective helmet\", \"bbox\": [414, 254, 524, 331], \"frame_index\": 0, \"confidence\": 0.9}, {\"label\": \"white pouch\", \"description\": \"large white pouch in foreground\", \"bbox\": [495, 348, 1000, 778], \"frame_index\": 0, \"confidence\": 0.9}, {\"label\": \"ziploc bag\", \"description\": \"clear ziploc bag containing items\", \"bbox\": [403, 403, 541, 475], \"frame_index\": 0, \"confidence\": 0.8}, {\"label\": \"food package\", \"description\": \"green food package on rack\", \"bbox\": [348, 1, 564, 263], \"frame_index\": 0, \"confidence\": 0.8}], \"people\": [{\"ref\": \"P1\", \"appearance\": \"blue suit, orange gloves\", \"activity\": \"working with equipment\", \"is_speaking\": false}], \"events\": [{\"type\": \"moved\", \"object_label\": \"white pouch\", \"actor_ref\": \"P1\", \"frame_index\": 5, \"evidence\": \"The large white pouch moves closer to the camera as the person works.\", \"confidence\": 0.8}], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:36:33.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/063638.555353.json",
+   "video_t0": 535.0,
+   "raw": "{\"scene_summary\": \"A person in a dark blue shirt works near a circular hatch in a cluttered space station module.\", \"location_hint\": null, \"objects\": [{\"label\": \"gas cylinder\", \"description\": \"two yellow and blue cylinders secured together\", \"bbox\": [633, 227, 1000, 400], \"frame_index\": 0, \"confidence\": 0.9}, {\"label\": \"white pouch\", \"description\": \"large white padded tube-like structure\", \"bbox\": [0, 498, 1000, 1000], \"frame_index\": 0, \"confidence\": 0.9}, {\"label\": \"black pouch\", \"description\": \"small black pouch attached to a rail\", \"bbox\": [548, 788, 683, 853], \"frame_index\": 2, \"confidence\": 0.8}, {\"label\": \"grey pouch\", \"description\": \"another small grey pouch nearby\", \"bbox\": [528, 523, 673, 655], \"frame_index\": 2, \"confidence\": 0.8}, {\"label\": \"metal bracket\", \"description\": \"perforated metal plate\", \"bbox\": [613, 483, 883, 710], \"frame_index\": 2, \"confidence\": 0.8}, {\"label\": \"black strap\", \"description\": \"thick black strap wrapped around equipment\", \"bbox\": [853, 483, 1000, 655], \"frame_index\": 2, \"confidence\": 0.8}], \"people\": [{\"ref\": \"P1\", \"appearance\": \"dark blue shirt, short hair\", \"activity\": \"working near a hatch\", \"is_speaking\": false}], \"events\": [{\"type\": \"moved\", \"object_label\": \"camera\", \"actor_ref\": null, \"to_location_hint\": null, \"frame_index\": 5, \"evidence\": \"The camera pans to show a person working through a hatch.\", \"confidence\": 0.9}], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:37:03.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/063708.555353.json",
+   "video_t0": 565.0,
+   "raw": "{\"scene_summary\": \"A view of a green fabric-covered object and a hatch opening into another module.\", \"location_hint\": null, \"objects\": [{\"label\": \"green fabric cover\", \"description\": \"a green perforated fabric cover over some equipment\", \"bbox\": [0, 0, 800, 1000], \"frame_index\": 0, \"confidence\": 0.9}, {\"label\": \"metal handle\", \"description\": \"a curved metal handle attached to the green cover\", \"bbox\": [100, 490, 750, 700], \"frame_index\": 0, \"confidence\": 0.9}, {\"label\": \"yellow latch\", \"description\": \"a yellow latch mechanism on the hatch frame\", \"bbox\": [600, 240, 820, 280], \"frame_index\": 0, \"confidence\": 0.8}, {\"label\": \"blue container\", \"description\": \"a blue plastic container in the background module\", \"bbox\": [480, 100, 580, 160], \"frame_index\": 5, \"confidence\": 0.8}, {\"label\": \"white pouch\", \"description\": \"a small white pouch on a surface\", \"bbox\": [570, 20, 650, 60], \"frame_index\": 5, \"confidence\": 0.7}], \"people\": [], \"events\": [], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:37:33.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/063738.555353.json",
+   "video_t0": 595.0,
+   "raw": "{\"scene_summary\": \"A view down a cluttered corridor of the International Space Station showing various equipment and blue storage bags.\", \"location_hint\": null, \"objects\": [{\"label\": \"blue storage bag\", \"description\": \"large blue bag with red markings\", \"bbox\": [258, 558, 603, 675], \"frame_index\": 0, \"confidence\": 0.95}, {\"label\": \"blue storage bag\", \"description\": \"another large blue bag attached to the wall\", \"bbox\": [248, 448, 443, 532], \"frame_index\": 0, \"confidence\": 0.92}, {\"label\": \"blue storage bag\", \"description\": \"blue bag mounted higher up\", \"bbox\": [385, 420, 583, 483], \"frame_index\": 0, \"confidence\": 0.9}, {\"label\": \"blue storage bag\", \"description\": \"blue bag near the ceiling\", \"bbox\": [385, 418, 583, 483], \"frame_index\": 0, \"confidence\": 0.9}, {\"label\": \"blue storage bag\", \"description\": \"blue bag partially visible in foreground\", \"bbox\": [0, 680, 853, 998], \"frame_index\": 5, \"confidence\": 0.85}, {\"label\": \"white cloth cover\", \"description\": \"large white protective cover on equipment\", \"bbox\": [713, 128, 998, 680], \"frame_index\": 0, \"confidence\": 0.9}, {\"label\": \"silver foil insulation\", \"description\": \"corrugated silver insulation along the floor\", \"bbox\": [453, 373, 998, 583], \"frame_index\": 0, \"confidence\": 0.95}, {\"label\": \"cable\", \"description\": \"thin white cable running across the floor\", \"bbox\": [533, 483, 853, 553], \"frame_index\": 0, \"confidence\": 0.8}, {\"label\": \"m-bag\", \"description\": \"white bag with black markings\", \"bbox\": [748, 313, 998, 533], \"frame_index\": 0, \"confidence\": 0.88}], \"people\": [], \"events\": [], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:38:03.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/063808.555353.json",
+   "video_t0": 625.0,
+   "raw": "{\"scene_summary\": \"A view through a hatch into another module of the ISS showing various equipment and storage containers.\", \"location_hint\": null, \"objects\": [{\"label\": \"storage container\", \"description\": \"large cylindrical silver container with white straps\", \"bbox\": [478, 594, 818, 758], \"frame_index\": 0, \"confidence\": 0.9}, {\"label\": \"white pouch\", \"description\": \"large white padded cover or pouch\", \"bbox\": [374, 498, 675, 605], \"frame_index\": 0, \"confidence\": 0.85}, {\"label\": \"cable\", \"description\": \"thick white insulated cable running across the foreground\", \"bbox\": [114, 98, 991, 488], \"frame_index\": 0, \"confidence\": 0.9}, {\"label\": \"hatch\", \"description\": \"circular hatch opening leading to another module\", \"bbox\": [314, 318, 714, 488], \"frame_index\": 0, \"confidence\": 0.95}, {\"label\": \"metal rack\", \"description\": \"yellow metal rack structure near the top\", \"bbox\": [0, 348, 183, 531], \"frame_index\": 0, \"confidence\": 0.8}, {\"label\": \"silver cylinder\", \"description\": \"small silver cylinder mounted on the wall\", \"bbox\": [100, 453, 253, 531], \"frame_index\": 0, \"confidence\": 0.8}, {\"label\": \"white panel\", \"description\": \"large white circular panel on the left\", \"bbox\": [414, 231, 783, 411], \"frame_index\": 0, \"confidence\": 0.8}, {\"label\": \"white pouch\", \"description\": \"another large white padded cover\", \"bbox\": [411, 453, 864, 664], \"frame_index\": 3, \"confidence\": 0.85}], \"people\": [], \"events\": [], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:38:33.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/063838.555353.json",
+   "video_t0": 655.0,
+   "raw": "{\"scene_summary\": \"A person performs exercises in the ISS while another person is visible in the background.\", \"location_hint\": \"Ti LAB\", \"objects\": [{\"label\": \"drink pouch\", \"description\": \"orange liquid in a clear pouch\", \"confidence\": 0.9, \"bbox\": [197, 715, 288, 745], \"frame_index\": 0}, {\"label\": \"drink pouch\", \"description\": \"red liquid in a clear pouch\", \"confidence\": 0.9, \"bbox\": [288, 725, 382, 755], \"frame_index\": 0}, {\"label\": \"drink pouch\", \"description\": \"green liquid in a clear pouch\", \"confidence\": 0.9, \"bbox\": [288, 755, 382, 785], \"frame_index\": 0}, {\"label\": \"drink pouch\", \"description\": \"white liquid in a clear pouch\", \"confidence\": 0.9, \"bbox\": [288, 785, 382, 815], \"frame_index\": 0}, {\"label\": \"trash bag\", \"description\": \"green bag hanging in foreground\", \"confidence\": 0.9, \"bbox\": [715, 560, 995, 825], \"frame_index\": 0}, {\"label\": \"ziploc bag\", \"description\": \"clear bag containing white items\", \"confidence\": 0.8, \"bbox\": [100, 855, 350, 955], \"frame_index\": 0}], \"people\": [{\"ref\": \"P1\", \"appearance\": \"dark hair, blue tank top, dark shorts\", \"activity\": \"performing core exercises\", \"is_speaking\": false}, {\"ref\": \"P2\", \"appearance\": \"grey shirt, dark pants\", \"activity\": \"standing in background\", \"is_speaking\": false}], \"events\": [{\"type\": \"moved\", \"object_label\": \"P1\", \"actor_ref\": \"P1\", \"frame_index\": 3, \"evidence\": \"P1 moves across the frame during exercise\", \"confidence\": 0.9}], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:39:03.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/063908.555353.json",
+   "video_t0": 685.0,
+   "raw": "{\"scene_summary\": \"A view through a hatch shows astronauts in space suits and various equipment.\", \"location_hint\": null, \"objects\": [{\"label\": \"food package\", \"description\": \"multiple grey packages stacked on a shelf\", \"bbox\": [718, 801, 998, 980], \"frame_index\": 5, \"confidence\": 0.9}, {\"label\": \"camera\", \"description\": \"black camera mounted on a bracket\", \"bbox\": [375, 500, 435, 633], \"frame_index\": 4, \"confidence\": 0.8}, {\"label\": \"camera\", \"description\": \"another black camera mounted nearby\", \"bbox\": [415, 175, 660, 333], \"frame_index\": 3, \"confidence\": 0.8}, {\"label\": \"camera\", \"description\": \"third black camera mounted on the wall\", \"bbox\": [365, 0, 485, 30], \"frame_index\": 1, \"confidence\": 0.8}, {\"label\": \"m-bag\", \"description\": \"white storage bags inside the hatch\", \"bbox\": [465, 545, 735, 785], \"frame_index\": 0, \"confidence\": 0.8}, {\"label\": \"ziploc bag\", \"description\": \"small white bag near the center\", \"bbox\": [515, 545, 680, 640], \"frame_index\": 0, \"confidence\": 0.7}], \"people\": [{\"ref\": \"P1\", \"appearance\": \"white spacesuit, helmet\", \"activity\": \"floating inside the hatch area\", \"is_speaking\": false}, {\"ref\": \"P2\", \"appearance\": \"white spacesuit, helmet\", \"activity\": \"floating inside the hatch area\", \"is_speaking\": false}, {\"ref\": \"P3\", \"appearance\": \"grey shirt, dark pants\", \"activity\": \"standing outside the hatch looking in\", \"is_speaking\": false}], \"events\": [{\"type\": \"moved\", \"object_label\": \"camera\", \"actor_ref\": null, \"to_location_hint\": null, \"frame_index\": 3, \"evidence\": \"The camera moves into the foreground as the viewpoint shifts.\", \"confidence\": 0.9}], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:39:33.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/063938.555353.json",
+   "video_t0": 715.0,
+   "raw": "{\"scene_summary\": \"A person in a grey shirt uses a handheld vacuum cleaner to clean a surface in the ISS.\", \"location_hint\": null, \"objects\": [{\"label\": \"laptop\", \"description\": \"a silver laptop mounted on a rack\", \"confidence\": 0.95, \"bbox\": [37, 10, 294, 223], \"frame_index\": 0}, {\"label\": \"drill\", \"description\": \"a black handheld vacuum cleaner being used for cleaning\", \"confidence\": 0.85, \"bbox\": [588, 431, 778, 503], \"frame_index\": 2, \"held_by\": \"P1\"}, {\"label\": \"ziploc bag\", \"description\": \"a clear plastic bag held by the person\", \"confidence\": 0.8, \"bbox\": [718, 373, 853, 415], \"frame_index\": 4, \"held_by\": \"P1\"}], \"people\": [{\"ref\": \"P1\", \"appearance\": \"grey t-shirt, dark shorts\", \"activity\": \"using a handheld vacuum cleaner to clean a surface\", \"is_speaking\": false}, {\"ref\": \"P2\", \"appearance\": \"grey hoodie\", \"activity\": \"standing in the foreground, back to camera\", \"is_speaking\": false}], \"events\": [{\"type\": \"used\", \"object_label\": \"drill\", \"actor_ref\": \"P1\", \"confidence\": 0.9, \"frame_index\": 2, \"evidence\": \"P1 is operating the handheld vacuum cleaner on a surface\"}], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:40:03.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/064008.555353.json",
+   "video_t0": 745.0,
+   "raw": "{\"scene_summary\": \"A view through a hatch into another module of the International Space Station showing various equipment and cables.\", \"location_hint\": null, \"objects\": [{\"label\": \"white box\", \"description\": \"a large white rectangular container with some text on top\", \"bbox\": [700, 448, 998, 724], \"frame_index\": 0, \"confidence\": 0.9}, {\"label\": \"tablet\", \"description\": \"a small black tablet device mounted on a surface\", \"bbox\": [873, 364, 954, 426], \"frame_index\": 0, \"confidence\": 0.8}, {\"label\": \"cable\", \"description\": \"multiple blue and white cables bundled together\", \"bbox\": [700, 0, 1000, 450], \"frame_index\": 0, \"confidence\": 0.9}, {\"label\": \"laptop\", \"description\": \"a screen visible in the background module\", \"bbox\": [348, 478, 448, 526], \"frame_index\": 0, \"confidence\": 0.7}, {\"label\": \"camera\", \"description\": \"a small black camera mounted on a bracket\", \"bbox\": [568, 644, 684, 724], \"frame_index\": 0, \"confidence\": 0.8}], \"people\": [], \"events\": [], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:41:03.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/064108.555353.json",
+   "video_t0": 805.0,
+   "raw": "{\"scene_summary\": \"A person reaches through a circular hatch opening towards another module.\", \"location_hint\": null, \"objects\": [{\"label\": \"white pouch\", \"description\": \"large white storage pouch with yellow label and black text\", \"bbox\": [117, 598, 998, 1000], \"frame_index\": 0, \"confidence\": 0.95}, {\"label\": \"white pouch\", \"description\": \"smaller white pouch attached to the ceiling\", \"bbox\": [0, 395, 283, 635], \"frame_index\": 0, \"confidence\": 0.9}, {\"label\": \"cable\", \"description\": \"thin red cable near the bottom left\", \"bbox\": [885, 115, 1000, 245], \"frame_index\": 5, \"confidence\": 0.8}], \"people\": [{\"ref\": \"P1\", \"appearance\": \"white suit sleeve\", \"activity\": \"reaching through a hatch\", \"is_speaking\": false}], \"events\": [{\"type\": \"moved\", \"object_label\": \"hand\", \"actor_ref\": \"P1\", \"frame_index\": 4, \"evidence\": \"The hand moves closer to the center of the hatch opening.\", \"confidence\": 0.9}], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:41:33.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/064138.555353.json",
+   "video_t0": 835.0,
+   "raw": "{\"scene_summary\": \"A person in a black shirt floats near a window, looking out at Earth.\", \"location_hint\": null, \"objects\": [{\"label\": \"wristwatch\", \"description\": \"black watch with a yellow face\", \"confidence\": 0.95, \"bbox\": [755, 604, 824, 644], \"frame_index\": 5}], \"people\": [{\"ref\": \"P1\", \"appearance\": \"black shirt, grey shorts\", \"activity\": \"floating and looking out the window\", \"is_speaking\": false}], \"events\": [{\"type\": \"moved\", \"object_label\": \"P1\", \"actor_ref\": null, \"to_location_hint\": null, \"frame_index\": 5, \"evidence\": \"P1 moves closer to the camera and raises their hand\", \"confidence\": 0.8}], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:42:03.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/064208.555353.json",
+   "video_t0": 865.0,
+   "raw": "{\"scene_summary\": \"A view of Earth and a spacecraft component through a window.\", \"location_hint\": null, \"objects\": [{\"label\": \"spacecraft\", \"description\": \"white and black spacecraft component visible outside the window\", \"confidence\": 0.95, \"bbox\": [317, 15, 998, 352], \"frame_index\": 0}], \"people\": [], \"events\": [], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:42:33.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/064238.555353.json",
+   "video_t0": 895.0,
+   "raw": "{\"scene_summary\": \"An astronaut in a blue flight suit looks around the interior of the International Space Station.\", \"location_hint\": null, \"objects\": [{\"label\": \"drink pouch\", \"description\": \"a small clear pouch containing liquid\", \"confidence\": 0.8, \"bbox\": [17, 815, 115, 885], \"frame_index\": 4}], \"people\": [{\"ref\": \"P1\", \"appearance\": \"blue flight suit with American flag patch\", \"activity\": \"looking around the cabin\", \"is_speaking\": false}], \"events\": [], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:43:03.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/064308.555353.json",
+   "video_t0": 28.2,
+   "raw": "{\"scene_summary\": \"A view through a hatchway shows the interior of the International Space Station with various equipment and a blue cloth.\", \"location_hint\": \"To COL\", \"objects\": [{\"label\": \"blue cloth\", \"description\": \"a blue piece of fabric\", \"confidence\": 0.95, \"bbox\": [537, 404, 714, 524], \"frame_index\": 2}, {\"label\": \"orange pouch\", \"description\": \"an orange pouch attached to a rail\", \"confidence\": 0.85, \"bbox\": [608, 694, 714, 726], \"frame_index\": 5}, {\"label\": \"white pouch\", \"description\": \"a white pouch hanging on a rack\", \"confidence\": 0.8, \"bbox\": [384, 688, 464, 726], \"frame_index\": 4}, {\"label\": \"black device\", \"description\": \"a small black electronic device\", \"confidence\": 0.8, \"bbox\": [688, 784, 844, 834], \"frame_index\": 5}, {\"label\": \"ziploc bag\", \"description\": \"a clear plastic bag containing items\", \"confidence\": 0.75, \"bbox\": [896, 568, 996, 672], \"frame_index\": 5}], \"people\": [], \"events\": [], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:43:33.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/064338.555353.json",
+   "video_t0": 58.2,
+   "raw": "{\"scene_summary\": \"A person in a blue shirt maneuvers through the cluttered interior of the ISS.\", \"location_hint\": null, \"objects\": [{\"label\": \"laptop\", \"description\": \"a small screen mounted on a rack\", \"confidence\": 0.9, \"bbox\": [371, 551, 453, 601], \"frame_index\": 1}, {\"label\": \"orange sphere\", \"description\": \"a bright orange spherical object\", \"confidence\": 0.95, \"bbox\": [414, 486, 484, 526], \"frame_index\": 1}, {\"label\": \"white pouch\", \"description\": \"a small white container on a shelf\", \"confidence\": 0.85, \"bbox\": [883, 451, 963, 501], \"frame_index\": 0}, {\"label\": \"ziploc bag\", \"description\": \"a clear plastic bag containing items\", \"confidence\": 0.8, \"bbox\": [875, 373, 954, 423], \"frame_index\": 0}], \"people\": [{\"ref\": \"P1\", \"appearance\": \"blue shirt, dark pants\", \"activity\": \"moving through the module and reaching for equipment\", \"is_speaking\": false}], \"events\": [{\"type\": \"moved\", \"object_label\": \"person\", \"actor_ref\": \"P1\", \"confidence\": 0.9, \"frame_index\": 5, \"evidence\": \"P1 moves from the center towards the left side of the frame\"}], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:44:03.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/064408.555353.json",
+   "video_t0": 88.2,
+   "raw": "{\"scene_summary\": \"A view through a series of interconnected modules on the International Space Station, showing various equipment and a large white covered object.\", \"location_hint\": null, \"objects\": [{\"label\": \"white covered object\", \"description\": \"large object covered in white fabric\", \"confidence\": 0.95, \"bbox\": [437, 543, 723, 998], \"frame_index\": 0}, {\"label\": \"cable\", \"description\": \"various cables and wires along the walls\", \"confidence\": 0.9, \"bbox\": [118, 118, 281, 998], \"frame_index\": 0}, {\"label\": \"m-bag\", \"description\": \"white storage bag attached to a rack\", \"confidence\": 0.85, \"bbox\": [543, 437, 723, 998], \"frame_index\": 0}], \"people\": [], \"events\": [], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:45:33.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/064538.555353.json",
+   "video_t0": 178.2,
+   "raw": "{\"scene_summary\": \"Two astronauts are seen floating and interacting within the Unity Module of the ISS.\", \"location_hint\": \"Unity Module\", \"objects\": [{\"label\": \"drink pouch\", \"description\": \"silver drink pouch attached to a rack\", \"confidence\": 0.9, \"bbox\": [788, 374, 884, 433], \"frame_index\": 0}, {\"label\": \"cable\", \"description\": \"various cables and wires running along the walls\", \"confidence\": 0.8, \"bbox\": [380, 340, 450, 430], \"frame_index\": 0}], \"people\": [{\"ref\": \"P1\", \"appearance\": \"dark hair, dark blue long-sleeved shirt\", \"activity\": \"floating and observing\", \"is_speaking\": false}, {\"ref\": \"P2\", \"appearance\": \"short hair, grey t-shirt, black shorts\", \"activity\": \"floating and moving\", \"is_speaking\": false}], \"events\": [{\"type\": \"moved\", \"object_label\": \"P2\", \"actor_ref\": \"P2\", \"frame_index\": 5, \"evidence\": \"P2 moves their body position while floating\", \"confidence\": 0.9}], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:46:03.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/064608.555353.json",
+   "video_t0": 208.2,
+   "raw": "{\"scene_summary\": \"An astronaut in a blue shirt uses a camera to take photos from the Cupola module.\", \"location_hint\": \"Cupola\", \"objects\": [{\"label\": \"camera\", \"description\": \"small black handheld camera\", \"confidence\": 0.95, \"bbox\": [927, 348, 988, 395], \"frame_index\": 4, \"held_by\": \"P1\"}], \"people\": [{\"ref\": \"P1\", \"appearance\": \"blue shirt, long hair\", \"activity\": \"taking photos with a camera\", \"is_speaking\": false}], \"events\": [{\"type\": \"used\", \"object_label\": \"camera\", \"actor_ref\": \"P1\", \"confidence\": 0.9, \"frame_index\": 4, \"evidence\": \"P1 is holding and pointing the camera towards the window\"}], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:46:33.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/064638.555353.json",
+   "video_t0": 238.2,
+   "raw": "{\"scene_summary\": \"An astronaut works with equipment in a module while another person is visible through a hatch.\", \"location_hint\": \"NOD 3\", \"objects\": [{\"label\": \"laptop\", \"description\": \"a small silver laptop\", \"confidence\": 0.9, \"bbox\": [775, 375, 845, 425], \"frame_index\": 0, \"held_by\": \"P1\"}, {\"label\": \"m-bag\", \"description\": \"a large white storage bag\", \"confidence\": 0.85, \"bbox\": [750, 780, 980, 950], \"frame_index\": 5}, {\"label\": \"trash bag\", \"description\": \"a green trash bag\", \"confidence\": 0.8, \"bbox\": [780, 880, 880, 940], \"frame_index\": 5}, {\"label\": \"drink pouch\", \"description\": \"a small blue drink pouch\", \"confidence\": 0.75, \"bbox\": [710, 680, 740, 710], \"frame_index\": 0}], \"people\": [{\"ref\": \"P1\", \"appearance\": \"grey t-shirt, black shorts\", \"activity\": \"working with a laptop and equipment\", \"is_speaking\": false}, {\"ref\": \"P2\", \"appearance\": \"blue shirt\", \"activity\": \"visible through a hatch\", \"is_speaking\": false}], \"events\": [{\"type\": \"used\", \"object_label\": \"laptop\", \"actor_ref\": \"P1\", \"confidence\": 0.9, \"frame_index\": 0, \"evidence\": \"P1 is interacting with the laptop screen and keyboard\"}], \"transcript\": \"\", \"audio_events\": []}"
+  },
+  {
+   "t_start": "2026-10-18T06:47:03.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/064708.555353.json",
+   "video_t0": 268.2,
+   "raw": "{\"scene_summary\": \"Several astronauts are gathered in a module, some eating and interacting.\", \"location_hint\": null, \"objects\": [{\"label\": \"drink pouch\", \"description\": \"a blue and green drink pouch\", \"confidence\": 0.9, \"bbox\": [388, 688, 544, 754], \"frame_index\": 3, \"held_by\": \"P2\"}, {\"label\": \"food package\", \"description\": \"an orange food package being held\", \"confidence\": 0.85, \"bbox\": [578, 723, 653, 781], \"frame_index\": 3, \"held_by\": \"P3\"}, {\"label\": \"drink pouch\", \"description\": \"a small clear drink pouch\", \"confidence\": 0.8, \"bbox\": [718, 783, 783, 823], \"frame_index\": 5, \"held_by\": \"P4\"}, {\"label\": \"green bag\", \"description\": \"a green storage bag attached to a rail\", \"confidence\": 0.95, \"bbox\": [783, 118, 983, 243], \"frame_index\": 5}, {\"label\": \"white pouch\", \"description\": \"a white pouch attached to a rack\", \"confidence\": 0.8, \"bbox\": [388, 503, 513, 553], \"frame_index\": 2}], \"people\": [{\"ref\": \"P1\", \"appearance\": \"grey short-sleeved shirt, black pants\", \"activity\": \"standing and looking towards the camera\", \"is_speaking\": false}, {\"ref\": \"P2\", \"appearance\": \"grey t-shirt, dark hair\", \"activity\": \"sitting and holding a drink pouch\", \"is_speaking\": true}, {\"ref\": \"P3\", \"appearance\": \"dark blue long-sleeved shirt, light pants\", \"activity\": \"floating and eating a food package\", \"is_speaking\": false}, {\"ref\": \"P4\", \"appearance\": \"black t-shirt, blue shorts\", \"activity\": \"floating and holding a drink pouch\", \"is_speaking\": true}], \"events\": [{\"type\": \"used\", \"object_label\": \"food package\", \"actor_ref\": \"P3\", \"confidence\": 0.9, \"frame_index\": 3, \"evidence\": \"P3 is holding and appears to be consuming the orange package\"}, {\"type\": \"used\", \"object_label\": \"drink pouch\", \"actor_ref\": \"P2\", \"confidence\": 0.9, \"frame_index\": 3, \"evidence\": \"P2 is holding and drinking from the blue and green pouch\"}], \"transcript\": \"\", \"audio_events\": [{\"label\": \"muffled voices and background hum\", \"confidence\": 0.8}]}"
+  }
+ ]
+}

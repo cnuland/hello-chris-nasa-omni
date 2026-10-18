@@ -10,6 +10,7 @@ import json
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from datetime import UTC
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -83,6 +84,19 @@ class _Locations:
     parent: dict[str, str | None]
     flagged: dict[str, bool]
     _cache: dict[str, bool] = field(default_factory=dict)
+    kind: dict[str, str] = field(default_factory=dict)
+
+    def chain(self, location_id: str | None) -> list[str]:
+        """The location and its ancestors, nearest first (cycle-safe)."""
+        out: list[str] = []
+        current = location_id
+        while current is not None and current in self.parent and current not in out:
+            out.append(current)
+            current = self.parent.get(current)
+        return out
+
+    def module_of(self, location_id: str | None) -> str | None:
+        return next((loc for loc in self.chain(location_id) if self.kind.get(loc) == "module"), None)
 
     def exists(self, location_id: str) -> bool:
         return location_id in self.parent
@@ -107,11 +121,44 @@ class _Locations:
 
 
 def _load_locations(conn: psycopg.Connection) -> _Locations:
-    rows = conn.execute("SELECT location_id, parent_id, no_capture FROM location").fetchall()
+    rows = conn.execute("SELECT location_id, parent_id, no_capture, kind FROM location").fetchall()
     return _Locations(
         parent={r["location_id"]: r["parent_id"] for r in rows},
         flagged={r["location_id"]: r["no_capture"] for r in rows},
+        kind={r["location_id"]: r["kind"] for r in rows},
     )
+
+
+def _downgrade_held(
+    conn: psycopg.Connection, locs: _Locations, entity_id: UUID, location_id: str, seen_at: Any, hold_s: float
+) -> bool:
+    """AC-API-45 (UI5-05): True when a sighting at ``location_id`` (outside any module) must not replace the entity's
+    module location: the current last_location is a module or inside one, that module lies in ``location_id`` (the
+    sighting is coarser, not elsewhere) and the location was set at most ``hold_s`` seconds before ``seen_at``
+    (``COALESCE(location_set_at, last_seen_at)``)."""
+    if hold_s <= 0 or locs.module_of(location_id) is not None:
+        return False
+    row = conn.execute(
+        "SELECT last_location, last_seen_at, COALESCE(location_set_at, last_seen_at) AS set_at FROM entity "
+        "WHERE entity_id = %s",
+        (entity_id,),
+    ).fetchone()
+    if row is None or row["set_at"] is None:
+        return False
+    if seen_at.tzinfo is None:  # review round: SightingIn accepts naive timestamps; the DB stores UTC
+        seen_at = seen_at.replace(tzinfo=UTC)
+    if row["last_seen_at"] is not None and seen_at <= row["last_seen_at"]:
+        return False  # the UPDATE will not apply: nothing to hold, nothing to freeze
+    module = locs.module_of(row["last_location"])
+    if module is None or location_id not in locs.chain(module):
+        return False
+    if not 0 <= (seen_at - row["set_at"]).total_seconds() <= hold_s:
+        return False
+    # a legacy row (no location_set_at) would measure the hold from last_seen_at, which every held sighting advances:
+    # freeze the provenance time so the hold ends
+    conn.execute("UPDATE entity SET location_set_at = %s WHERE entity_id = %s AND location_set_at IS NULL",
+                 (row["set_at"], entity_id))
+    return True
 
 
 @dataclass(frozen=True)
@@ -360,7 +407,7 @@ def ingest_window(body: IngestWindow, ctx: Ctx) -> JSONResponse:
     _check_uris(body, ctx.bucket)
     try:
         with ctx.db.connection() as conn, conn.transaction():
-            result, withheld = _record_window(conn, body)
+            result, withheld = _record_window(conn, body, hold_s=float(ctx.settings.location_downgrade_hold_s))
     except psycopg.IntegrityError as exc:
         logger.warning("ingest rejected by database constraint", extra={"error": exc.diag.message_primary})
         raise Unprocessable(f"constraint violation: {exc.diag.message_primary}") from exc
@@ -398,7 +445,9 @@ def _purge_withheld(ctx: Any, withheld: set[str]) -> None:
             logger.warning("deleting a withheld crop failed", extra={"key": key, "error": str(exc)})
 
 
-def _record_window(conn: psycopg.Connection, body: IngestWindow) -> tuple[dict[str, Any], set[str]]:
+def _record_window(
+    conn: psycopg.Connection, body: IngestWindow, *, hold_s: float = 0.0
+) -> tuple[dict[str, Any], set[str]]:
     digest = _request_digest(body)
     previous = _previous_result(conn, digest)
     if previous is not None:
@@ -502,6 +551,11 @@ def _record_window(conn: psycopg.Connection, body: IngestWindow) -> tuple[dict[s
             assert a.entity_id is not None
             survivor = survivors[a.entity_id]
             entity_id = survivor.entity_id
+            new_location = s.location_id
+            if new_location is not None and _downgrade_held(conn, locs, entity_id, new_location, s.seen_at, hold_s):
+                new_location = None  # AC-API-45: keep the module; the sighting itself stays at segment level
+                logger.info("segment sighting keeps the module location (downgrade hold)",
+                            extra={"entity_id": str(entity_id), "location_id": s.location_id})
             # AC-API-31: a sighting newer than last_seen_at refreshes last_seen_at/confidence/snapshot. It moves the
             # entity only when it is also newer than location_set_at (an operator's move is not undone by a late
             # window). Both conditions are evaluated on the row before this UPDATE. first_seen_at can move earlier.
@@ -520,7 +574,7 @@ def _record_window(conn: psycopg.Connection, body: IngestWindow) -> tuple[dict[s
                        snapshot_uri = COALESCE(%(snap)s, snapshot_uri), updated_at = now()
                     WHERE entity_id = %(id)s AND (last_seen_at IS NULL OR last_seen_at < %(seen)s)""",
                 {
-                    "loc": s.location_id,
+                    "loc": new_location,
                     "seen": s.seen_at,
                     "conf": s.confidence,
                     "snap": snapshot,

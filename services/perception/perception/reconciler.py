@@ -71,8 +71,16 @@ import numpy as np
 
 from . import NEW, UNKNOWN
 from .config import PerceptionConfig
-from .labels import CatalogMapper, is_structure_label, label_key, normalise_label, noun_phrase
-from .locations import LocationResolver, ModuleCarry
+from .labels import (
+    CatalogMapper,
+    is_fixed_in_place,
+    is_generic_label,
+    is_structure_label,
+    label_key,
+    normalise_label,
+    noun_phrase,
+)
+from .locations import LocationResolver, ModuleCarry, caption_scene_change
 from .media import crop as crop_image
 from .media import encode_jpeg
 from .people import (
@@ -111,11 +119,14 @@ LEAVES_INVENTORY = frozenset({"removed", "consumed"})  # AC-PER-51: no destinati
 
 def structure_filtered(objects: Sequence[dict[str, Any]], mapper: CatalogMapper) -> list[dict[str, Any]]:
     """AC-PER-50: the omni objects that are station structure or an outside view. Only labels that map to UNKNOWN are
-    checked, so a catalogued item is always kept however structural it sounds."""
+    checked, so a catalogued item is always kept however structural it sounds. AC-PER-59: an unknown whose label or
+    description says it is fixed in place ("mounted on the wall") is structure too."""
     out = []
     for o in objects:
         label = str(o.get("label") or "")
-        if mapper.map(label).catalog_id == UNKNOWN and is_structure_label(label):
+        if mapper.map(label).catalog_id != UNKNOWN:
+            continue
+        if is_structure_label(label) or is_fixed_in_place(label) or is_fixed_in_place(str(o.get("description") or "")):
             out.append(o)
     return out
 
@@ -265,6 +276,7 @@ class _Observed:
     members: list[int] = field(default_factory=list)  # omni object indexes consolidated into this instance
     candidate_ids: set[str] = field(default_factory=set)  # entities compared by appearance (have exemplars)
     person_overlap: bool = False  # AC-PER-49: its crop overlapped a person region and was dropped
+    held_cross_module: list[_Scored] = field(default_factory=list)  # AC-PER-60: ask-band candidates in another module
 
     @property
     def catalog_id(self) -> str | None:
@@ -337,6 +349,8 @@ class _WindowContext:
         self.unknown_boxes_linked = 0
         self.unknown_query_person_rejected = 0
         self.unknown_query_ms = 0
+        self.generic_unknowns_skipped = 0  # AC-PER-59
+        self.unknowns_capped = 0  # AC-PER-59
 
     def regions(self, idx: int) -> list[tuple[tuple[float, float, float, float], str]]:
         return self.person_regions.get(idx, [])
@@ -542,9 +556,14 @@ class Reconciler:
         self._module_carry.resolver = self.resolver
         self._module_carry.carry_s = float(self.config.module_carry_s or 0.0)
         carry = self._module_carry.step(window.t_start, window.t_end, scope, no_capture=no_capture,
-                                        roaming=self.resolver.is_roaming(camera_location))
+                                        roaming=self.resolver.is_roaming(camera_location),
+                                        scene_change=caption_scene_change(self.resolver, obs.get("location_hint")))
         location = carry.location
         window_location: dict[str, Any] = {"location_id": location, "source": carry.source}
+        if carry.ended:
+            window_location["carry_ended"] = carry.ended
+            logger.info("module carry ended by a scene change",
+                        extra={"camera_id": self.camera_id, "window": window.index, "reason": carry.ended})
         if carry.carried:
             window_location |= {"carried_from": _iso(carry.carried_from), "gap_s": carry.gap_s}
             logger.info("window has no module of its own; module carried from an earlier window",
@@ -584,6 +603,7 @@ class Reconciler:
             people_reported = bool([p for p in obs.get("people") or [] if isinstance(p, dict)]) or any(
                 self._is_region_label(str(o.get("label") or "")) for o in raw_objects)
             self._query_unknowns(ctx, observed, dets, query_detect, people_reported)  # AC-PER-54/55
+        observed = self._gate_unknowns(ctx, observed)  # AC-PER-59
         observed = self._with_people(window, obs, observed)  # AC-PER-35
         for o in observed:
             o.location = self._object_location(ctx, o)
@@ -607,6 +627,7 @@ class Reconciler:
             reviews = []
 
         events = self._visual_events(ctx, obs, instances)
+        events.extend(self._module_change_events(ctx, instances, assignments, events))  # AC-PER-60
         speech_events, claims = self._speech_events(ctx, transcript, instances)
         events.extend(speech_events)
 
@@ -631,6 +652,9 @@ class Reconciler:
         window_doc["unknown_boxes_linked"] = ctx.unknown_boxes_linked
         window_doc["unknown_query_person_rejected"] = ctx.unknown_query_person_rejected
         window_doc["unknown_query_ms"] = ctx.unknown_query_ms
+        # AC-PER-59 window statistics (inventory-api ignores unknown window fields)
+        window_doc["generic_unknowns_skipped"] = ctx.generic_unknowns_skipped
+        window_doc["unknowns_capped"] = ctx.unknowns_capped
         if privacy is not None:
             window_doc["privacy"] = privacy  # AC-PER-37 metadata (inventory-api ignores unknown window fields)
         if not no_capture:
@@ -862,15 +886,20 @@ class Reconciler:
             )
         used: set[tuple[int, int]] = set()
         links: list[_Link | None] = [None] * len(groups)
-        for gi, group in enumerate(groups):  # pass 1: detector boxes that agree with omni's box
-            best = None
-            for e in group:
-                hit = self._iou_link(e, dets, used, n_frames)
-                if hit is not None and (best is None or hit.rank > best.rank):
-                    best = hit
-            if best is not None:
-                used.add(best.det)
-                links[gi] = best
+        # pass 1: detector boxes that agree with omni's box; same-class boxes for every instance first, then (AC-PER-58
+        # review round) another class's box for unknowns, so an unknown listed first never takes a catalog box
+        for cross in (False, True):
+            for gi, group in enumerate(groups):
+                if links[gi] is not None:
+                    continue
+                best = None
+                for e in group:
+                    hit = self._iou_link(e, dets, used, n_frames, cross=cross)
+                    if hit is not None and (best is None or hit.rank > best.rank):
+                        best = hit
+                if best is not None:
+                    used.add(best.det)
+                    links[gi] = best
         for gi, group in enumerate(groups):  # pass 2: same label in the requested / latest frame
             if links[gi] is not None:
                 continue
@@ -1009,6 +1038,45 @@ class Reconciler:
                    "ms": ctx.unknown_query_ms},
         )
 
+    def _query_linked(self, o: _Observed) -> bool:
+        """AC-PER-59: the instance's detector box came from the AC-PER-54 query of its own label."""
+        text = noun_phrase(str(o.obj.get("label") or ""))
+        return o.detection is not None and bool(text) and normalise_label(o.detection.label) == text
+
+    def _gate_unknowns(self, ctx: _WindowContext, observed: list[_Observed]) -> list[_Observed]:
+        """AC-PER-59 (UI5-02): a generic colour+noun unknown ("grey object") is kept only with a box from the query of
+        its own label (AC-PER-54); then at most ``unknowns_per_frame_max`` unknowns per frame and
+        ``unknowns_per_window_max`` per window, detector-linked first, then by omni confidence. Catalog instances are
+        never affected. Dropped instances are counted (window statistics) and logged without labels."""
+        unknowns: list[_Observed] = []
+        for o in observed:
+            if not o.is_unknown:
+                continue
+            if is_generic_label(str(o.obj.get("label") or ""), str(o.obj.get("description") or "")) and not (
+                self._query_linked(o)
+            ):
+                ctx.generic_unknowns_skipped += 1
+            else:
+                unknowns.append(o)
+        per_frame = int(self.config.unknowns_per_frame_max)
+        per_window = int(self.config.unknowns_per_window_max)
+        frames: Counter[int] = Counter()
+        kept_unknown: set[int] = set()
+        for o in sorted(unknowns, key=lambda u: (u.detection is None, -_clamp01(u.obj.get("confidence"), 0.5),
+                                                  u.index)):
+            if (per_window > 0 and len(kept_unknown) >= per_window) or (
+                per_frame > 0 and frames[o.frame_idx] >= per_frame
+            ):
+                ctx.unknowns_capped += 1
+                continue
+            frames[o.frame_idx] += 1
+            kept_unknown.add(id(o))
+        if ctx.generic_unknowns_skipped or ctx.unknowns_capped:
+            logger.info("unknown objects held back", extra={
+                "window": ctx.window.index, "generic_skipped": ctx.generic_unknowns_skipped,
+                "capped": ctx.unknowns_capped})
+        return [o for o in observed if not o.is_unknown or id(o) in kept_unknown]
+
     def _consolidation_key(self, e: _Entry) -> tuple[str, str] | None:
         """Instances of the same key may be consolidated; None = never (fungible, or an empty UNKNOWN label)."""
         if e.match.catalog_id == UNKNOWN:
@@ -1071,21 +1139,36 @@ class Reconciler:
                 target.append(e)
         return sorted(clusters, key=lambda c: min(x.index for x in c))
 
-    def _iou_link(self, e: _Entry, dets: list[list[Detection]], used: set[tuple[int, int]], n_frames: int):
-        if e.box is None:
+    def _iou_link(
+        self, e: _Entry, dets: list[list[Detection]], used: set[tuple[int, int]], n_frames: int, *, cross: bool = False
+    ):
+        """AC-PER-58: ``cross`` False = boxes of the entry's own class only; True = another class's box, for an
+        UNKNOWN entry only, at IoU >= ``link_iou_cross_class``."""
+        if e.box is None or (cross and e.match.catalog_id != UNKNOWN):
             return None
         frames = [e.frame_index] if e.frame_index is not None else list(range(n_frames - 1, -1, -1))
-        best, linked = 0.0, None
+        best: tuple[bool, float] | None = None
+        linked = None
         for f in frames:
             for d_i, det in enumerate(dets[f]):
                 if (f, d_i) in used or not self._det_allowed(e.match, det):
                     continue
+                same = self._same_class(e, det)
+                if same == cross:
+                    continue  # AC-PER-58: a catalog instance never takes another class's box
+                need = self.config.link_iou if same else max(self.config.link_iou, self.config.link_iou_cross_class)
                 overlap = iou(e.box, det.bbox)
-                if overlap >= self.config.link_iou and overlap > best:
-                    best, linked = overlap, (f, d_i)
+                if overlap >= need and (best is None or (same, overlap) > best):
+                    best, linked = (same, overlap), (f, d_i)
         if linked is None:
             return None
         return _Link(e, linked[0], linked, dets[linked[0]][linked[1]], agrees=True)
+
+    def _same_class(self, e: _Entry, det: Detection) -> bool:
+        """AC-PER-58: the detection is of the entry's class (an UNKNOWN entry: the detection's label is its label)."""
+        if e.match.catalog_id == UNKNOWN:
+            return normalise_label(det.label) == normalise_label(str(e.obj.get("label") or ""))
+        return self.mapper.map(det.label).catalog_id == e.match.catalog_id
 
     def _link_by_label(
         self,
@@ -1185,6 +1268,14 @@ class Reconciler:
                 if features is not None:
                     scored.append(_Scored(cand, _clamp01(self.scorer(features), 0.0)))
             o.scored = _rank(scored, o.location)
+            if self._is_generic(o):  # AC-PER-60: another module needs the auto band for a generic class
+                o.held_cross_module = [s for s in o.scored if s.p < self.config.assign_p
+                                       and self._cross_module(s.candidate.get("last_location"), o.location)]
+                if o.held_cross_module:
+                    held = {s.entity_id for s in o.held_cross_module}
+                    o.scored = [s for s in o.scored if s.entity_id not in held]
+                    logger.info("generic-class candidates in another module held back (below the auto band)",
+                                extra={"window": ctx.window.index, "class": o.catalog_id, "held": len(held)})
         # One entity per window: the object with the strongest match chooses first (ties: window order); instances
         # without an exemplar (AC-PER-22) come last and match by class and place only.
         taken: set[str] = set()
@@ -1200,6 +1291,17 @@ class Reconciler:
                 self._match_without_exemplar(ctx, o, taken | o.candidate_ids)
                 if o.entity_id:
                     taken.add(o.entity_id)
+        for o in embedded:  # AC-PER-60 (review round: after adoption, only ask-band look-alikes)
+            held = [s for s in o.held_cross_module if s.p >= self.config.ask_p and s.entity_id not in taken]
+            if o.entity_id is None and not o.reviews and held:
+                # a new entity; the look-alike in another module is for an operator to judge
+                o.reviews.append({
+                    "kind": "possible_duplicate",
+                    "candidate_ids": [s.entity_id for s in held[:MAX_DECISION_OPTIONS]],
+                    "probabilities": {},
+                    "description": self._review_description(
+                        o, "possible duplicate of the same class last seen in another module"),
+                })
         for o in gated:
             self._match_without_exemplar(ctx, o, taken)
             if o.entity_id:
@@ -1499,6 +1601,20 @@ class Reconciler:
             ctx.class_items[catalog_id] = {str(r.get("entity_id")): r for r in rows}
         return ctx.class_items[catalog_id]
 
+    def _is_generic(self, o: _Observed) -> bool:
+        """AC-PER-60: the instance's class is one of ``config.generic_classes`` (class name or catalog id)."""
+        item = self.mapper.item(o.catalog_id)
+        if item is None or item.get("category") == "person":
+            return False
+        names = {normalise_label(str(n)) for n in self.config.generic_classes}
+        return normalise_label(str(item.get("class_name") or "")) in names or normalise_label(
+            str(item.get("catalog_id") or "")) in names
+
+    def _cross_module(self, a: str | None, b: str | None) -> bool:
+        """AC-PER-60: both places lie in a known module and the modules differ (a segment-level place is not)."""
+        ma, mb = self.resolver.module_of(a), self.resolver.module_of(b)
+        return ma is not None and mb is not None and ma != mb
+
     def _same_place(self, last_location: str | None, location: str | None) -> bool:
         if last_location is None or location is None:
             return False
@@ -1782,8 +1898,17 @@ class Reconciler:
                     extra={"window": ctx.window.index, "entity_id": target.entity_id},
                 )
                 continue
+            if event_type == "moved" and self._is_person(target):
+                if to_location is None:
+                    continue
+                event_type = "seen"  # AC-PER-63: a person's own transit is an arrival ("seen" there), never a move
+            elif event_type == "moved" and from_location is None:
+                # AC-PER-63 (UI5-09): a first sighting is not a move; the new entity itself records where it appeared
+                logger.info("moved event without a previous place dropped",
+                            extra={"window": ctx.window.index, "entity_ref": target.ref})
+                continue
             occurred = ctx.frame_ts(fi)
-            if target.entity_id and self._is_repeat(target.entity_id, str(ev.get("type")), self._dedup_place(to_location),
+            if target.entity_id and self._is_repeat(target.entity_id, event_type, self._dedup_place(to_location),
                                                     occurred):
                 logger.info(
                     "omni event already recorded from an overlapping window; dropped",
@@ -1792,7 +1917,7 @@ class Reconciler:
                 continue
             events.append(
                 {
-                    "event_type": ev.get("type"),
+                    "event_type": event_type,
                     "entity_ref": target.ref,
                     # AC-PER-35/36: the people[] descriptor, sanitised; none for people in a private zone
                     # AC-PER-44: a person track's own movement names no actor (only a person handling an object)
@@ -1808,6 +1933,42 @@ class Reconciler:
                 }
             )
         return _collapse_window_repeats(events)
+
+    def _module_change_events(
+        self, ctx: _WindowContext, instances: list[_Observed], assignments: list[dict[str, Any]], events: list[dict]
+    ) -> list[dict]:
+        """AC-PER-60 (UI5-03): an object matched to an existing entity whose last place lies in another module gets a
+        ``moved`` event (previous place -> this sighting), so a change of module is never silent. Person tracks are
+        excluded (AC-PER-63: their own transit is not a move); an omni ``moved`` event of the same instance in this
+        window wins; the cross-window dedup applies."""
+        if ctx.carried or ctx.truncated or ctx.hint_conflict:
+            return []  # review round: never infer a move from an inferred or doubtful place
+        confidence = {a["ref"]: a["sighting"]["confidence"] for a in assignments}
+        has_move = {e.get("entity_ref") for e in events if e.get("event_type") == "moved"}
+        out = []
+        for o in instances:
+            if not o.entity_id or self._is_person(o) or o.ref in has_move:
+                continue
+            if not self._cross_module(o.previous_location, o.location):
+                continue
+            occurred = ctx.frame_ts(o.frame_idx)
+            if self._is_repeat(o.entity_id, "moved", self._dedup_place(o.location), occurred):
+                continue
+            out.append({
+                "event_type": "moved",
+                "entity_ref": o.ref,
+                "actor_desc": None,
+                "from_location": o.previous_location,
+                "to_location": o.location,
+                "occurred_at": _iso(occurred),
+                "confidence": confidence.get(o.ref, 0.5),
+                "evidence_uri": ctx.frame_uri(o.frame_idx),
+                "source": "pipeline",
+            })
+            logger.info("object matched across modules; moved event emitted",
+                        extra={"window": ctx.window.index, "entity_id": o.entity_id,
+                               "from": o.previous_location, "to": o.location})
+        return out
 
     def _dedup_place(self, location: str | None) -> str | None:
         """Review round (AC-PER-51): destinations filled from sightings vary with the zone of the box centre, so the

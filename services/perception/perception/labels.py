@@ -85,22 +85,104 @@ STRUCTURE_KEYS = frozenset(
         "opening", "port", "docking port", "frame", "bracket", "mount", "rail", "interior", "background", "view",
         "spacecraft", "vehicle", "capsule", "dragon", "soyuz", "progress", "cygnus", "solar array", "truss",
         "radiator", "earth", "planet", "space", "stars", "robotic arm", "robot arm", "canadarm", "canadarm2",
+        # AC-PER-59 (UI5-02): fixed parts and fixed exercise equipment seen live in round 5
+        "latch", "latches", "hatch frame", "insulation", "foil", "foil insulation", "thermal insulation",
+        "treadmill", "exercise equipment", "exercise machine", "exercise device", "ergometer", "cycle ergometer",
+        "ared",
     )
 )
 # Review round: broad nouns that also head real loose items ("memory module", "portable fan", "camera mount",
 # "laptop cover", "picture frame") are structure only as the whole label
 STRUCTURE_WHOLE_ONLY = frozenset(label_key(k) for k in ("module", "fan", "mount", "frame", "cover"))
 
+# AC-PER-59: words that only describe colour, material, finish, size or shape. A label made of these plus a generic
+# head noun names nothing in particular ("grey object", "silver cylinder"); "cover" after only these words is a fixed
+# cover ("white cloth cover"), after an item noun it is the item's cover ("laptop cover", kept).
+MODIFIER_WORDS = frozenset(
+    (
+        "white", "black", "grey", "gray", "silver", "blue", "green", "red", "orange", "yellow", "purple",
+        "pink", "brown", "beige", "tan", "gold", "golden", "dark", "light", "bright", "pale", "clear",
+        "transparent", "translucent", "metallic", "shiny", "matte", "metal", "plastic", "fabric", "cloth",
+        "foam", "rubber", "paper", "cardboard", "glass", "wooden", "leather", "mesh", "padded", "soft", "hard",
+        "protective", "storage", "small", "large", "big", "tiny", "little", "long", "short", "round",
+        "rectangular", "square", "cylindrical", "spherical", "flat", "thin", "thick", "smooth", "curved",
+        "tall", "wide", "narrow", "huge", "giant", "medium", "colored", "coloured", "multicolored",
+        "multicoloured"
+    )
+)
+GENERIC_NOUNS = frozenset(
+    (
+        "object", "objects", "item", "items", "thing", "things", "cylinder", "cylinders", "container",
+        "containers", "device", "devices", "box", "boxes", "piece", "pieces", "unit", "units", "component",
+        "components", "equipment", "structure", "shape", "part", "parts", "material", "stuff", "article"
+    )
+)
+# AC-PER-59: words in a description that make a generic label identifiable (printed text, a serial, a logo, ...)
+_DISTINGUISHING = re.compile(
+    r"\b(text|label(?:l?ed)?|labels|logo|serial|barcode|sticker|written|printed|marked|markings?|lettering|"
+    r"brand|writing|number(?:ed)?|screen|display)\b"
+    r"|\b[a-z]+-?[0-9]+[a-z0-9]*\b|\b[0-9]+-?[a-z]{2,}[0-9]*\b(?<!cm)(?<!mm)"  # identifiers such as A12, SN-2231, 3D
+    r"|(?<!\w)[\"'][^\"']+[\"'](?!\w)"  # quoted text, not possessives
+)
+_NEGATION = frozenset(["no", "not", "never", "without", "none", "nor"])
+_NEGATION_WINDOW = 3  # review round: a cue preceded by a negation within this many words does not count
+
+
+def _negated(text: str, start: int) -> bool:
+    before = re.findall(r"[a-z]+", text[:start])[-_NEGATION_WINDOW:]
+    return any(w in _NEGATION for w in before) or " ".join(before[-2:]) == "no longer"
+
+
+def _unnegated_match(pattern: re.Pattern[str], text: str) -> bool:
+    return any(not _negated(text, m.start()) for m in pattern.finditer(text))
+# AC-PER-59 (UI5-02): an unknown described as fixed in place is structure. "attached to" counts for walls and hatches
+# only: pouches and bags attached to a rail or rack are stowed loose items (16 real listings in the live run).
+_FIXED_IN_PLACE = re.compile(
+    r"\b(?:mounted|fixed|bolted|built|installed|affixed|screwed)\s+(?:on|onto|to|into|in)\s+(?:the\s+|a\s+|an\s+)?"
+    r"(?:\w+\s+)?(?:wall|walls|rack|racks|hatch|hatchway|panel|panels|ceiling|floor|bulkhead|frame|structure)\b"
+    r"|\battached\s+to\s+(?:the\s+|a\s+|an\s+)?(?:\w+\s+)?(?:wall|walls|hatch|hatchway|bulkhead|frame)\b"
+    r"|\bon\s+the\s+hatch\s+(?:frame|rim|ring)\b"
+)
+
+
+def _phrase_words(text: str) -> list[str]:
+    """``normalise_label`` words without leading determiners, cut before the first preposition/participle."""
+    words = normalise_label(text).split()
+    while len(words) > 1 and words[0] in _DETERMINERS:
+        words = words[1:]
+    for i, w in enumerate(words):
+        if i > 0 and w in _PHRASE_END:
+            return words[:i]
+    return words
+
 
 def is_structure_label(text: str) -> bool:
     """AC-PER-50: the label names station structure or an outside view (hatch, window, handrail, spacecraft, Earth, ...).
+    AC-PER-59: "cover" is also structure as a head noun after modifier words only ("white cloth cover").
     Callers apply it only to labels that map to UNKNOWN."""
     heads = label_heads(text)
     if not heads:
         return False
-    return heads[0] in STRUCTURE_KEYS or any(
-        k in STRUCTURE_KEYS and k not in STRUCTURE_WHOLE_ONLY for k in heads[1:]
-    )
+    if heads[0] in STRUCTURE_KEYS or any(k in STRUCTURE_KEYS and k not in STRUCTURE_WHOLE_ONLY for k in heads[1:]):
+        return True
+    words = _phrase_words(text)
+    return len(words) > 1 and words[-1] in ("cover", "covers") and all(w in MODIFIER_WORDS for w in words[:-1])
+
+
+def is_fixed_in_place(text: str | None) -> bool:
+    """AC-PER-59: the text (an unknown's label or description) says the object is fixed in place: "mounted on the
+    wall", "fixed to the rack", "attached to the hatch", "on the hatch frame", "built into the wall"."""
+    return bool(text) and _unnegated_match(_FIXED_IN_PLACE, " ".join(str(text).lower().split()))
+
+
+def is_generic_label(label: str, description: str | None = None) -> bool:
+    """AC-PER-59: a generic colour+noun label: its noun phrase is modifier words (colour, material, size, shape) and a
+    generic head noun ("grey object", "silver cylinder", "blue container", "object"), and the description has nothing
+    distinguishing (printed text, a label, a serial, digits, quotes, a screen)."""
+    words = _phrase_words(label)
+    if not words or words[-1] not in GENERIC_NOUNS or not all(w in MODIFIER_WORDS for w in words[:-1]):
+        return False
+    return not _unnegated_match(_DISTINGUISHING, " ".join(str(description or "").lower().split()))
 
 
 def _bigrams(text: str) -> Counter[str]:

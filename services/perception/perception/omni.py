@@ -12,6 +12,10 @@ AC-PER-24..28 (output budget): the prompt caps objects/descriptions/people/event
 the request; a cut-off reply is salvaged from its complete prefix (``perception.salvage``) and NOT retried
 (``OmniResult.truncated``); at most ``max_objects`` objects are kept (label-diverse, highest confidence first);
 every request logs an ``omni usage`` record (tokens, finish_reason, latency).
+
+AC-PER-58 (box format): the box order is per model (``box_order``: "xyxy", or "yxyx" for Gemma's native box_2d,
+``box_order_for``); the prompt asks for that format; the scale is per reply (any coordinate > 1.5 -> every box of the
+reply is on the 0..1000 grid); boxes leave ``interpret_reply`` as canonical [x1, y1, x2, y2] in 0..1 (the contract).
 """
 
 from __future__ import annotations
@@ -44,6 +48,43 @@ MAX_EVENTS = 8
 MAX_DESCRIPTION_WORDS = 12
 
 
+#: AC-PER-58 box orders a model may reply in; boxes are always returned as canonical xyxy 0..1.
+BOX_ORDERS = ("xyxy", "yxyx")
+#: AC-PER-58: a reply with any box coordinate above this is on the 0..1000 grid (Gemma's box_2d); else 0..1.
+GRID_SCALE_THRESHOLD = 1.5
+BOX_GRID = 1000.0
+
+
+def box_order_for(model: str | None, setting: str = "auto") -> str:
+    """AC-PER-58: the box order to ask for and parse. ``setting`` "xyxy"/"yxyx" wins; "auto" -> "yxyx" for a Gemma
+    model (its native box_2d is [y1, x1, y2, x2] on a 0..1000 grid; measured live 2026-10-18), else "xyxy"."""
+    setting = (setting or "auto").strip().lower()
+    if setting in BOX_ORDERS:
+        return setting
+    if setting != "auto":
+        raise ValueError(f"box order must be auto, xyxy or yxyx, got {setting!r}")
+    return "yxyx" if "gemma" in str(model or "").lower() else "xyxy"
+
+
+def _check_order(box_order: str) -> str:
+    if box_order not in BOX_ORDERS:
+        raise ValueError(f"box_order must be one of {BOX_ORDERS}, got {box_order!r}")
+    return box_order
+
+
+def _prompt_schema(box_order: str) -> dict[str, Any]:
+    """The observation schema shown to the model. For "yxyx" the bbox entry describes the model's native format (the
+    reply is converted to the contract's xyxy 0..1 before validation)."""
+    schema = load_observation_schema()
+    if box_order != "yxyx":
+        return schema
+    schema = json.loads(json.dumps(schema))
+    bbox = schema["properties"]["objects"]["items"]["properties"]["bbox"]
+    bbox["items"] = {"type": "integer", "minimum": 0, "maximum": int(BOX_GRID)}
+    bbox["description"] = "[y1,x1,y2,x2] on a 0..1000 grid of the frame given by frame_index (box_2d)"
+    return schema
+
+
 class OmniModel(Protocol):
     def analyze(self, window: Window, *, context: str | None = None) -> OmniResult: ...
 
@@ -54,11 +95,20 @@ def build_system_prompt(
     *,
     max_objects: int = DEFAULT_MAX_OBJECTS,
     asr_transcript: bool = False,
+    box_order: str = "xyxy",
 ) -> str:
     """System prompt shared by the chat and realtime clients. ``max_objects`` is the object budget (AC-PER-24);
-    ``asr_transcript`` True when an ASR endpoint transcribes the audio (then omni's transcript must be "")."""
+    ``asr_transcript`` True when an ASR endpoint transcribes the audio (then omni's transcript must be "");
+    ``box_order`` the box format asked for (AC-PER-58)."""
     names = ", ".join(sorted({str(n) for n in catalog_names if str(n).strip()})) or "(none provided)"
-    schema = json.dumps(load_observation_schema(), separators=(",", ":"))
+    schema = json.dumps(_prompt_schema(_check_order(box_order)), separators=(",", ":"))
+    if box_order == "yxyx":
+        box_rule = (
+            "bbox is [y1,x1,y2,x2] as integers on a 0..1000 grid of that frame (y top to bottom, x left to right; "
+            "the box_2d convention); "
+        )
+    else:
+        box_rule = "bbox is [x1,y1,x2,y2] normalised to 0..1 on that frame; "
     if asr_transcript:
         transcript_rule = 'transcript must be "" (the speech is transcribed separately); '
     else:
@@ -75,8 +125,9 @@ def build_system_prompt(
         "list them with a short plain label (e.g. orange sphere, pen, wristwatch, white pouch) and never force an "
         "item into a catalog class it does not clearly match.\n"
         "Rules: list each distinct physical object ONCE per window, even when it is visible in several frames; "
-        "frame_index = the frame where it is clearest, and bbox is [x1,y1,x2,y2] normalised to 0..1 on that frame; "
-        "two objects get two entries only if they are two physically different objects. People get refs P1, P2, "
+        "frame_index = the frame where it is clearest, and "
+        + box_rule
+        + "two objects get two entries only if they are two physically different objects. People get refs P1, P2, "
         "... with a non-biometric appearance (clothing, headset), never a name; held_by is the person ref holding "
         "an object; events are only what you actually saw or heard; "
         + transcript_rule
@@ -198,14 +249,25 @@ def _capped(obj: dict[str, Any], max_objects: int) -> tuple[dict[str, Any], int]
 MIN_BOX_SIDE = 0.02
 
 
-def _sane_box(box: Any) -> Any:
-    """Four numbers: swap inverted coordinates, clamp to [0, 1], None when degenerate (AC-PER-33). Anything else is
-    returned unchanged so schema validation still rejects it (AC-PER-3: a malformed box makes the reply invalid)."""
-    if not (isinstance(box, (list, tuple)) and len(box) == 4) or not all(
+def _well_formed(box: Any) -> bool:
+    return (isinstance(box, (list, tuple)) and len(box) == 4) and all(
         isinstance(v, (int, float)) and not isinstance(v, bool) for v in box
-    ):
+    )
+
+
+def _sane_box(box: Any, *, scale: float = 1.0, box_order: str = "xyxy") -> Any:
+    """Four numbers: divide by ``scale`` (AC-PER-58: 1000 for a 0..1000 grid reply), read in ``box_order`` (yxyx ->
+    reordered to xyxy), then swap inverted coordinates, clamp to [0, 1], None when degenerate (AC-PER-33). Anything
+    else is returned unchanged so schema validation still rejects it (AC-PER-3: a malformed box makes the reply
+    invalid)."""
+    if not _well_formed(box):
         return box
-    x1, y1, x2, y2 = (min(max(float(v), 0.0), 1.0) for v in box)
+    if any(math.isnan(float(v)) for v in box):
+        return None  # review round: NaN passes JSON parsing and the schema's bounds; no usable box
+    a, b, c, d = (float(v) / scale for v in box)
+    if box_order == "yxyx":
+        a, b, c, d = b, a, d, c
+    x1, y1, x2, y2 = (min(max(v, 0.0), 1.0) for v in (a, b, c, d))
     x1, x2 = sorted((x1, x2))
     y1, y2 = sorted((y1, y2))
     if x2 - x1 < MIN_BOX_SIDE or y2 - y1 < MIN_BOX_SIDE:
@@ -213,31 +275,51 @@ def _sane_box(box: Any) -> Any:
     return [x1, y1, x2, y2]
 
 
-def _sanitize_boxes(obj: dict[str, Any]) -> dict[str, Any]:
-    objects = obj.get("objects")
+def reply_box_scale(objects: Any) -> float:
+    """AC-PER-58: 1000 when any well-formed box of the reply has a coordinate above GRID_SCALE_THRESHOLD (the 0..1000
+    grid), else 1. Decided per reply, so a small corner box of a grid reply is not read as a whole-frame 0..1 box."""
     if isinstance(objects, list):
         for o in objects:
+            box = o.get("bbox") if isinstance(o, dict) else None
+            if _well_formed(box) and any(math.isfinite(v) and float(v) > GRID_SCALE_THRESHOLD for v in box):
+                return BOX_GRID
+    return 1.0
+
+
+def _sanitize_boxes(obj: dict[str, Any], box_order: str = "xyxy") -> dict[str, Any]:
+    objects = obj.get("objects")
+    if isinstance(objects, list):
+        scale = reply_box_scale(objects)
+        if scale != 1.0 and box_order == "xyxy":
+            logger.warning("omni boxes on a 0..1000 grid for an xyxy model; check OMNI_BOX_ORDER (Gemma: yxyx)")
+        for o in objects:
             if isinstance(o, dict) and o.get("bbox") is not None:
-                o["bbox"] = _sane_box(o["bbox"])
+                o["bbox"] = _sane_box(o["bbox"], scale=scale, box_order=box_order)
     return obj
 
 
 def interpret_reply(
-    raw: str, *, finish_reason: str | None = None, max_objects: int = DEFAULT_MAX_OBJECTS
+    raw: str,
+    *,
+    finish_reason: str | None = None,
+    max_objects: int = DEFAULT_MAX_OBJECTS,
+    box_order: str = "xyxy",
 ) -> Reply:
-    """Parse a raw reply: the first complete JSON object, capped (AC-PER-27) and validated; when that fails and the
+    """Parse a raw reply: the first complete JSON object, boxes converted (AC-PER-58, ``box_order`` = the order the
+    model was asked for) and sanitised (AC-PER-33), capped (AC-PER-27) and validated; when that fails and the
     reply's top-level object is cut off (``finish_reason`` "length", or the JSON stops parsing part-way), the
     salvaged prefix (AC-PER-26), capped and validated, with ``truncated`` True."""
+    _check_order(box_order)
     obj = extract_first_json_object(raw or "")
     errors = ["no JSON object found in the reply"]
     if obj is not None:
-        capped, dropped = _capped(_sanitize_boxes(obj), max_objects)
+        capped, dropped = _capped(_sanitize_boxes(obj, box_order), max_objects)
         errors = validate_observation(capped)
         if not errors:
             return Reply(capped, [], False, dropped)
     salvaged = salvage_observation(raw or "")
     if salvaged is not None:
-        capped, dropped = _capped(_sanitize_boxes(salvaged), max_objects)
+        capped, dropped = _capped(_sanitize_boxes(salvaged, box_order), max_objects)
         if not validate_observation(capped):
             return Reply(capped, [], True, dropped)
     if finish_reason == "length":
@@ -262,8 +344,10 @@ class OmniClient:
         max_objects: int = DEFAULT_MAX_OBJECTS,
         repetition_penalty: float = DEFAULT_REPETITION_PENALTY,
         asr_transcript: bool = False,
+        box_order: str = "xyxy",
     ):
         self.base_url = base_url
+        self.box_order = _check_order(box_order)
         self.model = model
         self.catalog_names = list(catalog_names)
         self.http_client = http_client
@@ -295,7 +379,11 @@ class OmniClient:
             {
                 "role": "system",
                 "content": build_system_prompt(
-                    self.catalog_names, context, max_objects=self.max_objects, asr_transcript=self.asr_transcript
+                    self.catalog_names,
+                    context,
+                    max_objects=self.max_objects,
+                    asr_transcript=self.asr_transcript,
+                    box_order=self.box_order,
                 ),
             },
             {"role": "user", "content": parts},
@@ -366,7 +454,9 @@ class OmniClient:
                 value = usage.get(key)
                 if isinstance(value, int) and not isinstance(value, bool):
                     tokens[key] = (total or 0) + value
-            reply = interpret_reply(raw, finish_reason=finish, max_objects=self.max_objects)
+            reply = interpret_reply(
+                raw, finish_reason=finish, max_objects=self.max_objects, box_order=self.box_order
+            )
             logger.info(
                 "omni usage",
                 extra={
@@ -421,6 +511,7 @@ def create_omni_client(
     if not config.omni_url:
         raise ValueError("OMNI_URL is not configured")
     asr_transcript = bool(config.asr_url)
+    box_order = box_order_for(config.omni_model, config.omni_box_order)  # AC-PER-58
     if config.omni_realtime:
         from .realtime import RealtimeOmniClient
 
@@ -430,6 +521,7 @@ def create_omni_client(
             catalog_names=catalog_names,
             max_objects=config.omni_max_objects,
             asr_transcript=asr_transcript,
+            box_order=box_order,
         )
     return OmniClient(
         config.omni_url,
@@ -440,4 +532,5 @@ def create_omni_client(
         max_objects=config.omni_max_objects,
         repetition_penalty=config.omni_repetition_penalty,
         asr_transcript=asr_transcript,
+        box_order=box_order,
     )

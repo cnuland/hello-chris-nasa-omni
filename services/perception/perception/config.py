@@ -19,8 +19,13 @@ Environment variables (all optional unless noted):
   OMNI_MAX_TOKENS (AC-PER-25, default 700, 1..32768), OMNI_MAX_OBJECTS (AC-PER-25/27, default 12, 1..40),
   OMNI_REPETITION_PENALTY (AC-PER-25, default 1.05, > 0 and <= 2; not sent when 1.0),
   OMNI_TRUNCATED_CONFIDENCE (AC-PER-26, default 0.5, <= 1),
+  OMNI_BOX_ORDER (AC-PER-58, auto | xyxy | yxyx, default auto = yxyx for a Gemma OMNI_MODEL, else xyxy),
   PERCEPTION_UNKNOWN_QUERIES_MAX (AC-PER-54, default 6, 0 = off, max 40),
-  PERCEPTION_UNKNOWN_QUERY_MIN_SCORE (AC-PER-54, default 0.3, <= 1).
+  PERCEPTION_UNKNOWN_QUERY_MIN_SCORE (AC-PER-54, default 0.3, <= 1),
+  PERCEPTION_LINK_IOU_CROSS_CLASS (AC-PER-58, default 0.5, <= 1),
+  PERCEPTION_GENERIC_CLASSES (AC-PER-60, comma-separated class names or catalog ids, "none" = no class; default
+  laptop, tablet, camera, camcorder, cargo transfer bag, m-bag),
+  PERCEPTION_UNKNOWNS_PER_FRAME / PERCEPTION_UNKNOWNS_PER_WINDOW (AC-PER-59, default 2 / 4, 0 = no cap, max 40).
 
 A camera that has no entry in the camera -> location map is treated as no_capture (fail closed), and the CLI refuses
 to start for it.
@@ -56,6 +61,7 @@ class PerceptionConfig:
     omni_max_objects: int = 12
     omni_repetition_penalty: float = 1.05
     omni_truncated_confidence: float = 0.5  # sighting confidence cap for a salvaged (truncated) window
+    omni_box_order: str = "auto"  # AC-PER-58 auto | xyxy | yxyx (the model's box format)
     decision_url: str | None = None
     decision_model: str = "google/diffusiongemma-26B-A4B-it"
     asr_url: str | None = None
@@ -82,12 +88,17 @@ class PerceptionConfig:
     # AC-PER-54 extra OWLv2 text queries for unknown objects: distinct labels per window, and the link threshold
     unknown_queries_max: int = 6
     unknown_query_min_score: float = 0.3
+    unknowns_per_frame_max: int = 2  # AC-PER-59 unknown instances kept per frame (0 = no cap)
+    unknowns_per_window_max: int = 4  # AC-PER-59 unknown instances kept per window (0 = no cap)
     # AC-PER-5/6 torch device for OWLv2 + DINOv2: cpu | cuda | cuda:N | auto (PERCEPTION_DEVICE)
     device: str = "cpu"
     # AC-PER-7 label mapping
     label_floor: float = 0.55
     # AC-PER-8 reconciler
     link_iou: float = 0.3
+    # AC-PER-60 generic classes: a match in another module needs the auto band (class names or catalog ids)
+    generic_classes: tuple[str, ...] = ("laptop", "tablet", "camera", "camcorder", "cargo transfer bag", "m-bag")
+    link_iou_cross_class: float = 0.5  # AC-PER-58 an UNKNOWN instance takes another class's box only at this IoU
     consolidate_iou: float = 0.5  # AC-PER-19 same-class omni objects of one window with IoU >= this are one
     min_crop_px: int = 32  # AC-PER-22 no exemplar when the crop's short side is below this (hires pixels)
     no_exemplar_match_s: float = 600.0  # AC-PER-22 class-and-place match horizon for sightings without exemplar
@@ -135,6 +146,15 @@ class PerceptionConfig:
                     raise ConfigError(f"{var} must be > 0, got {value!r}")
         if env.get("PERCEPTION_DEVICE", "").strip():
             kwargs["device"] = _parse_device(env["PERCEPTION_DEVICE"])
+        if env.get("PERCEPTION_GENERIC_CLASSES", "").strip():
+            raw = env["PERCEPTION_GENERIC_CLASSES"].strip()
+            names = [] if raw.lower() == "none" else [" ".join(n.lower().split()) for n in raw.split(",")]
+            kwargs["generic_classes"] = tuple(n for n in names if n)
+        if env.get("OMNI_BOX_ORDER", "").strip():
+            order = env["OMNI_BOX_ORDER"].strip().lower()
+            if order not in ("auto", "xyxy", "yxyx"):
+                raise ConfigError(f"OMNI_BOX_ORDER must be auto, xyxy or yxyx, got {env['OMNI_BOX_ORDER']!r}")
+            kwargs["omni_box_order"] = order
         if env.get("OMNI_REALTIME", "").strip():
             kwargs["omni_realtime"] = _parse_bool("OMNI_REALTIME", env["OMNI_REALTIME"])
         if env.get("PERCEPTION_PERSON_SOFT_CAP", "").strip():
@@ -192,6 +212,9 @@ _NUMBER_VARS: dict[str, tuple[str, type]] = {
     "omni_truncated_confidence": ("OMNI_TRUNCATED_CONFIDENCE", float),
     "unknown_queries_max": ("PERCEPTION_UNKNOWN_QUERIES_MAX", int),
     "unknown_query_min_score": ("PERCEPTION_UNKNOWN_QUERY_MIN_SCORE", float),
+    "unknowns_per_frame_max": ("PERCEPTION_UNKNOWNS_PER_FRAME", int),
+    "link_iou_cross_class": ("PERCEPTION_LINK_IOU_CROSS_CLASS", float),
+    "unknowns_per_window_max": ("PERCEPTION_UNKNOWNS_PER_WINDOW", int),
 }
 
 # Upper bounds checked by from_env (inclusive).
@@ -209,6 +232,9 @@ _MAX_VALUES: dict[str, float] = {
     "omni_truncated_confidence": 1.0,
     "unknown_queries_max": 40,  # AC-PER-54: bounded extra detector work per window
     "unknown_query_min_score": 1.0,
+    "unknowns_per_frame_max": 40,
+    "link_iou_cross_class": 1.0,
+    "unknowns_per_window_max": 40,
 }
 # Must be strictly positive (checked by from_env).
 _POSITIVE = {"omni_max_tokens", "omni_max_objects", "omni_repetition_penalty"}

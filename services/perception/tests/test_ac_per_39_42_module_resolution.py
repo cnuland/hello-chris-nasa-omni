@@ -20,7 +20,7 @@ from support import LOCATIONS, T0, observation, scene_window
 from test_ac_per_08_reconciler import BOX_A
 
 from perception.config import ConfigError, PerceptionConfig
-from perception.locations import ISS_ALIASES, LocationResolver, ModuleCarry
+from perception.locations import ISS_ALIASES, LocationResolver, ModuleCarry, caption_scene_change
 from perception.omni import interpret_reply
 from perception.types import OmniResult
 
@@ -432,7 +432,8 @@ def replay_run(windows: list[dict], carry_s: float = 45.0) -> list[str]:
     for w in windows:
         scope = r.window_policy("USOS", w["location_hint"], w["scene_summary"])
         d = carry.step(datetime.fromisoformat(w["t_start"]), datetime.fromisoformat(w["t_end"]), scope,
-                       no_capture=w["no_capture"], roaming=True)
+                       no_capture=w["no_capture"], roaming=True,
+                       scene_change=caption_scene_change(r, w["location_hint"]))  # AC-PER-61
         predicted.append(r.module_of(d.location) or "unresolved")
     return predicted
 
@@ -452,8 +453,11 @@ def test_ac_per_42_real_run_fixture_is_the_measured_baseline():
 def test_ac_per_42_real_run_replay_predicts_the_caption_modules():
     windows = json.loads(RUN.read_text())["windows"]
     predicted = replay_run(windows)
-    assert accuracy(windows[:41], predicted[:41]) == (16, 23)  # 0.391 -> 0.696 on the exported 41 windows
-    assert accuracy(windows, predicted) == (19, 30)  # all 51 windows of the run so far
+    # AC-PER-61 amendment: two windows labelled CUP1 were the "NOD 3" caption windows (video t 237-240 s, a node with
+    # 'To NOD 3' signs); their truth is now NOD1 and the carry no longer puts them in CUP1 (they stay unresolved).
+    # Before the correction this read (16, 23) / (19, 30), two of them right only by the wrong label.
+    assert accuracy(windows[:41], predicted[:41]) == (14, 23)
+    assert accuracy(windows, predicted) == (17, 30)  # all 51 windows of the run so far
     wrong = [(i, w["truth"], p) for i, (w, p) in enumerate(zip(windows, predicted, strict=True))
              if w["truth"] and p not in (w["truth"], "unresolved")]
     assert wrong == []  # never the wrong module: misses stay unresolved
@@ -463,8 +467,24 @@ def test_ac_per_42_real_run_replay_predicts_the_caption_modules():
             by_truth.setdefault(w["truth"], []).append(p)
     assert by_truth["JPM1"] == ["JPM1", "JPM1", "unresolved", "unresolved"]
     assert by_truth["NAUKA"] == ["NAUKA", "NAUKA"]
-    assert by_truth["CUP1"] == ["CUP1", "CUP1", "CUP1", "CUP1"]
+    assert by_truth["CUP1"] == ["CUP1", "CUP1"]
+    assert by_truth["NOD1"] == ["NOD1", "unresolved", "NOD1", "unresolved"]
     assert by_truth["ZVEZDA"] == ["ZVEZDA", "ZVEZDA", "unresolved"]
+
+
+def test_ac_per_61_without_the_caption_rule_the_carry_puts_node_windows_in_the_cupola():
+    """UI5-04: the 45 s carry from the Cupola window labelled the next ('NOD 3' caption) window CUP1."""
+    windows = json.loads(RUN.read_text())["windows"]
+    r = LocationResolver(LOCATIONS)
+    carry = ModuleCarry(r, carry_s=45.0)
+    wrong = []
+    for w in windows:
+        scope = r.window_policy("USOS", w["location_hint"], w["scene_summary"])
+        d = carry.step(datetime.fromisoformat(w["t_start"]), datetime.fromisoformat(w["t_end"]), scope,
+                       no_capture=w["no_capture"], roaming=True)
+        if w["truth"] and r.module_of(d.location) not in (w["truth"], None):
+            wrong.append((w["truth"], r.module_of(d.location)))
+    assert wrong == [("NOD1", "CUP1"), ("NOD1", "CUP1")]
 
 
 def test_ac_per_42_chained_carry_would_assign_wrong_modules():

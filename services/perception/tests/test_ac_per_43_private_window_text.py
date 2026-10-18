@@ -146,7 +146,9 @@ def test_ac_per_44_person_moving_itself_gets_no_actor(make_reconciler, inv, stor
                             transcript="", audio=())
     kinds = {a["ref"]: (a.get("new_entity") or {}).get("kind") for a in payload["assignments"]}
     by_type = {e["event_type"]: e for e in payload["events"]}
-    assert kinds[by_type["moved"]["entity_ref"]] == "person"
-    assert by_type["moved"]["actor_desc"] is None
+    # AC-PER-63 amendment: a person track's own transit is an arrival ("seen" there), never "moved"
+    assert "moved" not in by_type
+    assert kinds[by_type["seen"]["entity_ref"]] == "person"
+    assert by_type["seen"]["actor_desc"] is None
     assert kinds[by_type["used"]["entity_ref"]] == "object"
     assert by_type["used"]["actor_desc"] == "spacesuit, dark visor"

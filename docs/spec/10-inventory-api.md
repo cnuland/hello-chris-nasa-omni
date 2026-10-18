@@ -306,3 +306,21 @@ All additions are optional ingest fields, optional response fields and migration
   ingest never stores an exemplar for a person_overlap sighting; legacy exemplars (no `sighting_id`, such as the one
   purged by hand in round 4) are not covered. The event place fill does not look at the window's privacy: locations
   are facts the API already exposes, never media.
+
+## UI review round 5 (docs/ui-review/round5: UI5-05)
+
+- AC-API-45 **Location downgrade hold** (UI5-05; amends AC-API-31; perception AC-PER-62).
+  - *Found live:* person 28513d12 went NOD1 06:30 -> CUP1 06:31 -> USOS 06:32, and 44% of items ended at segment
+    level: a later segment-only sighting (the handheld camera could not name the module) overwrote a module location.
+  - *Rule (ingest, existing entities):* the sighting's location does not replace `last_location` when all of these
+    hold: the sighting's location is outside any module (a segment); the current `last_location` is a module or inside
+    one (zone, container); that module lies inside the sighting's location; and `seen_at -
+    COALESCE(location_set_at, last_seen_at)` is between 0 and `LOCATION_DOWNGRADE_HOLD_S` (default 600 s, 0 = off).
+    `last_seen_at`, confidence and snapshot still advance; `last_location` and its provenance are kept; the sighting
+    is stored at segment level. A legacy row without `location_set_at` gets it frozen at the stand-in value, so the
+    hold ends (otherwise every held sighting would advance `last_seen_at` and extend it).
+  - A sighting in another segment, or in any module, moves the item as before (AC-API-31). After the hold, a segment
+    sighting moves it. An operator-placed module is held too.
+  - Tests: tests/test_ac_api_45_location_downgrade.py.
+  - *Review round:* a naive `seen_at` is read as UTC (it raised a 500 in the hold check); nothing is held or frozen
+    unless the sighting is newer than `last_seen_at` (the UPDATE would not apply).

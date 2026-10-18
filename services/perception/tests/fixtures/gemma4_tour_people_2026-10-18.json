@@ -249,7 +249,7 @@
   },
   {
    "t_start": "2026-10-18T03:06:48.878740+00:00",
-   "module": "CUP1",
+   "module": "USOS",
    "observation": {
     "scene_summary": "A person in a grey shirt works near a wall while another person is visible in the background.",
     "location_hint": "NOD 3",
@@ -1610,7 +1610,7 @@
   },
   {
    "t_start": "2026-10-18T03:21:48.878740+00:00",
-   "module": "CUP1",
+   "module": "USOS",
    "observation": {
     "scene_summary": "An astronaut works with equipment in a module while another is visible through a hatch.",
     "location_hint": "NOD 3",
@@ -3038,7 +3038,7 @@
   },
   {
    "t_start": "2026-10-18T03:36:48.878740+00:00",
-   "module": "CUP1",
+   "module": "USOS",
    "observation": {
     "scene_summary": "An astronaut works at a station while another person is visible through a window.",
     "location_hint": "NOD 3",
@@ -5126,5 +5126,5 @@
    }
   }
  ],
- "module_note": "module = the window location given by AC-PER-39..42 resolution (hint, summary, carry) replayed at this cadence; USOS = unresolved (segment level)"
+ "module_note": "module = the window location given by AC-PER-39..42 resolution (hint, summary, carry) replayed at this cadence; USOS = unresolved (segment level); amended 2026-10-18 (AC-PER-61): the 'NOD 3' caption windows no longer inherit CUP1 by the carry (the frames show a node with 'To NOD 3' signs, not the Cupola)"
 }

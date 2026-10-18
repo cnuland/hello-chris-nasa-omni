@@ -18,7 +18,7 @@ from typing import Any
 import numpy as np
 
 from .media import resample_pcm16
-from .omni import DEFAULT_MAX_OBJECTS, build_system_prompt, frame_data_uri, interpret_reply
+from .omni import DEFAULT_MAX_OBJECTS, _check_order, build_system_prompt, frame_data_uri, interpret_reply
 from .types import OmniResult, Window
 
 logger = logging.getLogger(__name__)
@@ -38,6 +38,7 @@ class RealtimeOmniClient:
         timeout_s: float = 60.0,
         max_objects: int = DEFAULT_MAX_OBJECTS,
         asr_transcript: bool = False,
+        box_order: str = "xyxy",
     ):
         """``ws_url`` is the server root (``ws://host:port``); the client connects to ``/v1/realtime?duplex=0``.
         An ``http(s)://`` root is converted to ``ws(s)://``. ``max_objects`` / ``asr_transcript``: AC-PER-24/27."""
@@ -47,6 +48,7 @@ class RealtimeOmniClient:
         self.timeout_s = timeout_s
         self.max_objects = max_objects
         self.asr_transcript = asr_transcript
+        self.box_order = _check_order(box_order)  # AC-PER-58
 
     @property
     def endpoint(self) -> str:
@@ -64,7 +66,11 @@ class RealtimeOmniClient:
             "modalities": ["text"],
             "output_modalities": ["text"],
             "instructions": build_system_prompt(
-                self.catalog_names, context, max_objects=self.max_objects, asr_transcript=self.asr_transcript
+                self.catalog_names,
+                context,
+                max_objects=self.max_objects,
+                asr_transcript=self.asr_transcript,
+                box_order=self.box_order,
             ),
         }
         content: list[dict[str, Any]] = [
@@ -144,7 +150,7 @@ class RealtimeOmniClient:
             )
             return result("error", "".join(text_parts), f"{type(exc).__name__}: {exc}")
         raw = "".join(text_parts) or (final_text or "")
-        reply = interpret_reply(raw, max_objects=self.max_objects)
+        reply = interpret_reply(raw, max_objects=self.max_objects, box_order=self.box_order)
         if reply.observation is None:
             return result("invalid", raw, "; ".join(reply.errors[:5]))
         return result(

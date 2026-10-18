@@ -953,4 +953,141 @@ AC-PER-54 to AC-PER-57 amend AC-PER-5, AC-PER-8, AC-PER-13, AC-PER-22 and AC-PER
   `unknown_queries`) but cannot score the links; the unit and replay tests cover them.
 - *Gemma 0..1000 boxes.* The live Gemma 4 replies give `bbox` on a 0..1000 scale in `[y1, x1, y2, x2]` order
   (Gemma's native box format), not the `[x1, y1, x2, y2]` 0..1 the prompt asks for, so AC-PER-33 nulls every omni box.
-  Query boxes do not depend on omni's box; fixing the scale is a separate change (it affects every object's linking).
+  Query boxes do not depend on omni's box; fixing the scale is a separate change (it affects every object's linking). **Fixed by AC-PER-58.**
+
+## Amendments: box format and UI review round 5 (live Gemma 4 run, 2026-10-18)
+
+Measured on the live run (cam-handheld replaying tour-medium.mp4 in a loop, 34 raw replies fetched read-only, now
+tests/fixtures/gemma4_boxes_2026-10-18.json) and on docs/ui-review/round5 (UI5-02, -03, -04, -05, -09).
+AC-PER-58 to AC-PER-63 amend AC-PER-3, 8, 10, 24, 33, 41, 44, 50, 51 and 54.
+
+- AC-PER-58 **Omni box format** (amends AC-PER-3, AC-PER-24, AC-PER-33).
+  - *Measured.* All 142 boxes of the 34 replies are integers in 0..1000. Drawn on the real 1080x608 video frames,
+    `[y1,x1,y2,x2]/1000` lands on the object and `[x1,y1,x2,y2]/1000` does not (treadmill belt, laptop, orange sphere,
+    wristwatch, camera): Gemma's native box_2d. Earlier runs sometimes gave 0..1. The old clamp kept 1 of 142 boxes
+    (a whole-frame box, also wrong).
+  - *Order per model.* `OMNI_BOX_ORDER` = `auto` (default) | `xyxy` | `yxyx`; `auto` = `yxyx` when `OMNI_MODEL`
+    contains "gemma", else `xyxy` (Qwen and the fakes keep today's behaviour). Chat and realtime clients use it.
+  - *Prompt.* For `yxyx` the prompt asks for Gemma's native format ("bbox is [y1,x1,y2,x2] as integers on a 0..1000
+    grid"), and the schema shown in the prompt has its bbox entry rewritten to match. Asking a model for the format it
+    was trained on is more robust than asking for another and converting what comes back. Validation still uses the
+    contract schema (xyxy 0..1) after conversion.
+  - *Scale per reply.* When any coordinate of any well-formed box in the reply is > 1.5, every box of the reply is on
+    the 0..1000 grid (divided by 1000), else 0..1. Per reply, not per box: a corner box `[0, 0, 1, 1]` in a grid reply
+    is a 1/1000 box, not the whole frame. Then the order is applied and the AC-PER-33 rules (swap, clamp, degenerate
+    under 2%) run. Boxes leave the client as canonical `[x1, y1, x2, y2]` in 0..1.
+  - *Effect on the real replies:* 141 of 142 boxes survive (1 is 1.7% wide, degenerate by AC-PER-33).
+  - *IoU link classes* (amends AC-PER-8 pass 1). Measured with the real OWLv2 (CPU) on the real frames: with boxes
+    restored, 29 of 39 IoU links took a detection of another class (laptop -> "cable" 0.34, camera -> "cargo transfer
+    bag" 0.61, food package -> "laptop" 0.48). Now a catalog instance links by IoU only to a detection of its own
+    class (IoU >= `link_iou`); an UNKNOWN instance may take another class's box only at IoU >=
+    `link_iou_cross_class` (`PERCEPTION_LINK_IOU_CROSS_CLASS`, default 0.5, <= 1); a same-class box is preferred
+    over a better-overlapping other-class box. On the real run: before 37 of 139 instances linked (1 by IoU, the
+    wrong whole-frame box), after 42 of 141 (15 by IoU: 11 same class, 4 unknowns to another class's box).
+  - Tests: tests/test_ac_per_58_box_format.py.
+- AC-PER-59 **Unknown queue flood** (UI5-02; amends AC-PER-50, AC-PER-54).
+  - *Structure keys added:* latch, latches, hatch frame, insulation, foil, foil insulation, thermal insulation,
+    treadmill, exercise equipment/machine/device, ergometer, cycle ergometer, ARED. `cover` is structure as a head noun
+    when every word before it is a modifier (colour, material, size, shape: "white cloth cover", "protective
+    cover"); after an item noun it is the item's cover ("laptop cover", "lens cover" are kept).
+  - *Fixed in place:* an UNKNOWN whose label or description says "mounted/fixed/bolted/built/installed on|to|into
+    (the) wall/rack/hatch/panel/ceiling/floor/bulkhead/frame", "attached to (the) wall/hatch/bulkhead/frame" or "on
+    the hatch frame" is structure. "attached to a rail/rack" is not: in the live run 16 listings are pouches and bags
+    velcroed to a rail or rack, i.e. stowed loose items.
+  - *Generic colour+noun labels* (`labels.is_generic_label`): the noun phrase is modifier words plus a generic head
+    (object, item, thing, cylinder, container, device, box, piece, unit, component, equipment, part, ...) and the
+    description has nothing distinguishing (text, label, logo, serial, barcode, sticker, markings, screen, display,
+    a digit or a quote). Such an UNKNOWN is kept only when the AC-PER-54 query of its own label linked a detector box;
+    otherwise it is dropped (no entity, sighting or review) and counted in `window.generic_unknowns_skipped`. An IoU
+    link to another class's box does not count.
+  - *Caps:* at most `unknowns_per_frame_max` (`PERCEPTION_UNKNOWNS_PER_FRAME`, default 2) UNKNOWN instances per
+    frame and `unknowns_per_window_max` (`PERCEPTION_UNKNOWNS_PER_WINDOW`, default 4) per window; 0 = no cap; max 40.
+    Detector-linked first, then omni confidence, then window order. Dropped ones are counted in
+    `window.unknowns_capped`. Catalog instances are never affected.
+  - *Measured on the round-5 labels:* yellow latch, silver foil insulation, silver cylinder (mounted on the wall),
+    white cloth cover and treadmill are structure; "grey object" (the hatch) is generic. Kept: orange sphere,
+    orange tool, white wrapped object, pen, wristwatch. On all 35 UNKNOWN listings of the run (seed catalog): before,
+    8 were structure and 27 could reach the queue; after, 13 are structure, 6 are generic (held for a box) and 16
+    can reach the queue, then capped.
+  - Tests: tests/test_ac_per_59_unknown_flood.py.
+- AC-PER-60 **Re-identification across modules** (UI5-03; amends AC-PER-8, AC-PER-10).
+  - *Found live:* laptop 8535788a went JPM1 -> USOS -> ZVEZDA with no move. The decision log shows the Zvezda match
+    was the decision model choosing it at 0.83 with appearance similarity 0.61 (p 0.63, ask band), and the USOS
+    sighting before it was matched the same way at similarity 0.47.
+  - *Generic classes:* `generic_classes` (`PERCEPTION_GENERIC_CLASSES`, comma-separated class names or catalog ids,
+    `none` = no class; default laptop, tablet, camera, camcorder, cargo transfer bag, m-bag). For such an instance, an
+    embedded candidate whose last place is in another module (both places in a known module, the modules differ; a
+    segment-level place is not "another module") counts only with p >= `assign_p` (the auto band). Below it the
+    candidate is not offered to the decision model. When nothing else matches, the instance becomes a new provisional
+    entity with a `possible_duplicate` review naming the held candidates. Exemplar-less matching (AC-PER-22/29)
+    already never crosses modules. A detector link alone does not qualify: every exemplar match is detector-linked,
+    including the live Zvezda one.
+  - *Module change is visible:* when an object instance (not a person track) is matched to an entity whose previous
+    place is in another module, a `moved` event (previous place -> this sighting, source `pipeline`, no actor,
+    confidence = the sighting's, evidence = the frame) is added, unless omni reported a `moved` event for that
+    instance in this window (omni's wins), or the same move was recorded within `event_dedup_s`.
+  - Tests: tests/test_ac_per_60_63_reid_carry_events.py.
+- AC-PER-61 **The module carry ends on a scene change** (UI5-04; amends AC-PER-41).
+  - *Found live:* window 063138 (hint "NOD 3", read from a "To NOD 3" sign; the frames show a node, not the Cupola)
+    inherited CUP1 from the Cupola window 30 s before.
+  - *Rule:* a window whose `location_hint` is non-empty but resolves to no location (`caption_scene_change`) is
+    evidence the camera left the anchored module: it does not inherit, and the anchor is cleared. The window metadata
+    says `location.carry_ended = "caption"`. A summary naming another module already ends the carry (AC-PER-41
+    `mentions`).
+  - *Rejected after measurement:* (a) a summary transit rule ("... a hatch into another module"): on the 51 labelled
+    windows of tests/fixtures/real_tour_run_2026-10-18.json it lost one correct Kibo carry (a view from inside Kibo
+    through its hatch) and gained nothing; (b) a frame-embedding (DINOv2) distance between windows: not implemented,
+    the caption rule covers the live case and there is no labelled data to calibrate a threshold.
+  - *Fixture correction:* the two "NOD 3" windows of the labelled run (video t 237-240 s) were labelled CUP1 (the last
+    caption before them); the frames show a node with "To NOD 3" signs and the next caption is "Quest Airlock" (on
+    Node 1). Their truth is now NOD1. The replay is 17/30 correct with 0 wrong; without the caption rule the carry
+    puts both in CUP1 (2 wrong).
+  - *Person attach (checked):* the CUP1 sighting of track 395bae46 was not an attach. It created the track. Gemma
+    described the person as "grey long-sleeve shirt, blue shorts", while the frame shows a blue shirt and grey
+    trousers (garments swapped). The AC-PER-45..48 clash rule holds: "blue shirt" vs "grey long-sleeve shirt" clash.
+    The CUP1 sighting of 28513d12 at 06:31:38 is the carried Node 1 window that this rule fixes.
+- AC-PER-62 **Segment sighting keeps a module location** (UI5-05). Perception never writes `last_location`;
+  inventory-api's ingest does, so the rule is AC-API-45 (`LOCATION_DOWNGRADE_HOLD_S`, default 600 s). Perception
+  reads the kept module back as the entity's `last_location` (matching, events' `from_location`, AC-PER-60's module
+  test). The sighting itself stays at segment level.
+- AC-PER-63 **Moved events** (UI5-09; amends AC-PER-10, AC-PER-44, AC-PER-51).
+  - An object `moved` event whose target has no previous place (a first sighting, from_location null) is dropped
+    (logged). The new entity already records where it was first seen.
+  - A person track's own `moved` event is never "moved". When it has a destination (the resolved hint, else its
+    sighting) that is a change of place, or the track is new, it becomes a `seen` event there (an arrival, no actor).
+    Otherwise it is dropped (AC-PER-51).
+  - Speech `moved` claims (AC-PER-10/16) are unchanged.
+
+### Review round (AC-PER-58..63): fixes and residual risks accepted
+Fixes (each test-first, tests/test_ac_per_58_63_review_round.py):
+- *Held review flood (P2).* `api.candidates` returns the nearest same-class entities however dissimilar, so a
+  cross-module `possible_duplicate` review was raised for almost every new generic-class sighting. Only ask-band
+  (`ask_p <= p < assign_p`) held candidates raise it.
+- *Held review blocked adoption (P2).* The review was added before the exemplar-less same-place adoption ran, which
+  then skipped the instance and created a duplicate. The review is now added after adoption, only when still new.
+- *No synthesized move from inferred places.* No AC-PER-60 `moved` event in a carried, truncated or hint-conflict
+  window.
+- *Placeholder hints* ("unknown", "N/A", "ISS", "station", "interior", "Node", "module") are not captions and do not
+  end the carry.
+- *Regex false positives.* A negation within 3 words ("not attached to the wall", "no text or markings") cancels a
+  fixed-in-place or distinguishing cue; quotes count only at word boundaries (not possessives); digits count only as
+  identifiers (A12, SN-2231), not sizes or counts.
+- *IoU link order.* Same-class IoU links are made for every instance before unknowns may take another class's box.
+- *Non-finite coordinates.* An infinite coordinate is clamped (it used to invalidate the whole reply); a NaN makes the
+  box null (NaN passes JSON parsing and the schema's bounds).
+- A warning is logged when a 0..1000 grid reply reaches an `xyxy` client (a Gemma served under an alias without
+  "gemma" in the name: set `OMNI_BOX_ORDER=yxyx`).
+
+Residual risks accepted:
+- *Model alias.* `auto` detects Gemma by name; an alias needs `OMNI_BOX_ORDER`. A non-Gemma model that answers in
+  pixel coordinates now gets plausible but wrong boxes (they used to be dropped).
+- *Mixed replies.* A reply mixing 0..1 and 0..1000 boxes nulls its 0..1 boxes (by design, per reply).
+- *Cable boxes.* 2 of the 4 real cross-class unknown links are OWLv2 `cable` boxes (IoU 0.58, 0.59).
+- *Label links ignore omni's box.* Pass 2 still takes the best same-class detection anywhere on the frame.
+- *Generic modifiers.* "storage", "protective", "padded", "soft" are modifiers, so "white storage box" is generic
+  (held for a query box).
+- *Garment swaps.* Gemma can swap garment colours ("grey shirt, blue shorts" for a blue shirt and grey trousers),
+  which starts a wrong track; the clash rule cannot see it.
+- *Recall.* A truly moved generic item (laptop carried to another module) becomes a new entity plus an ask-band
+  review unless its appearance reaches the auto band.
+- `FakeOmni` parses scripted replies as `xyxy` (test fake only).

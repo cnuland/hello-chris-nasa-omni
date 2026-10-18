@@ -111,8 +111,15 @@ def test_ac_per_10_other_event_types_pass_through(make_reconciler, inv, etype):
     assert inv.last["events"][0]["entity_ref"] == inv.last["assignments"][0]["ref"]
 
 
+def _known_drill(inv):
+    """AC-PER-63 amendment: a moved event needs a previous place, so these event tests use a drill last seen in NOD1."""
+    return inv.add_entity(catalog_id="drill-pistol", embedding=VEC.vector_for_object("drill-1"),
+                          last_location="NOD1", last_seen_at=T0 - timedelta(hours=1))
+
+
 def test_ac_per_10_event_with_unknown_actor_ref_has_no_actor_desc(make_reconciler, inv):
-    process(make_reconciler(), [[("drill-1", BOX_A)]], [obj("drill", BOX_A)], {"drill-1": "drill"},
+    _known_drill(inv)
+    process(make_reconciler(scorer=lambda f: 0.95), [[("drill-1", BOX_A)]], [obj("drill", BOX_A)], {"drill-1": "drill"},
             people=MOVE_PEOPLE, events=[_moved_event(frame_index=0, actor_ref="P7", to=None)])
     ev = inv.last["events"][0]
     assert ev.get("actor_desc") in (None, "")
@@ -125,7 +132,8 @@ def test_ac_per_10_event_for_object_not_observed_or_known_is_dropped(make_reconc
 
 
 def test_ac_per_10_event_frame_index_out_of_range_falls_back_to_window_frame(make_reconciler, inv, storage):
-    process(make_reconciler(), [[("drill-1", BOX_A)]], [obj("drill", BOX_A)], {"drill-1": "drill"},
+    _known_drill(inv)
+    process(make_reconciler(scorer=lambda f: 0.95), [[("drill-1", BOX_A)]], [obj("drill", BOX_A)], {"drill-1": "drill"},
             events=[_moved_event(frame_index=9, to=None)])
     ev = inv.last["events"][0]
     assert ev["evidence_uri"] is None or uri_key(ev["evidence_uri"]) in storage.objects
@@ -134,7 +142,8 @@ def test_ac_per_10_event_frame_index_out_of_range_falls_back_to_window_frame(mak
 def test_ac_per_10_event_to_location_hint_unknown_is_null(make_reconciler, inv):
     """Amended by AC-PER-51 (UI4-06): an unresolvable hint still never becomes a location, but the event now names
     the place the object was sighted in this window (LAB1, the camera's module) instead of no place at all."""
-    process(make_reconciler(), [[("drill-1", BOX_A)]], [obj("drill", BOX_A)], {"drill-1": "drill"},
+    _known_drill(inv)
+    process(make_reconciler(scorer=lambda f: 0.95), [[("drill-1", BOX_A)]], [obj("drill", BOX_A)], {"drill-1": "drill"},
             events=[_moved_event(frame_index=0, to="somewhere over the rainbow")])
     assert inv.last["events"][0].get("to_location") == "LAB1"
 

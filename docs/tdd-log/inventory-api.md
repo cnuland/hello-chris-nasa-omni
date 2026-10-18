@@ -629,3 +629,17 @@ docs/spec/10-inventory-api.md, plus the AC-API-25 order amendment. Perception's 
   Accepted and documented: the Classify guard cannot fire for data ingest itself produces (only for later flags) and
   does not cover legacy exemplars; event place fill ignores window privacy (location facts only).
 - **Final:** inventory-api **506 passed** (465 + 41); ruff clean.
+
+## UI review round 5 (AC-API-45) (2026-10-18)
+- **Spec first:** docs/spec/10-inventory-api.md AC-API-45 (location downgrade hold; perception AC-PER-62).
+- **Red:** tests/test_ac_api_45_location_downgrade.py, 6 of 9 failing (no setting, segment sighting overwrote the
+  module).
+- **Green:** `Settings.location_downgrade_hold_s` (`LOCATION_DOWNGRADE_HOLD_S`, 600), `_Locations.kind/chain/
+  module_of`, `_downgrade_held` before the existing-entity UPDATE (passes no location when held).
+- **Bug found by my own test before green:** with a legacy NULL `location_set_at`, `last_seen_at` stands in and every
+  held sighting advanced it, so the hold never ended. The provenance time is now frozen when the hold applies.
+- **Final:** inventory-api **515 passed** (506 + 9); ruff clean.
+- **Adversarial review:** P2 naive `seen_at` -> 500 in the hold check (red, then read as UTC); P3 legacy freeze wrote
+  provenance when the UPDATE would not apply (guard test added; now only for sightings newer than `last_seen_at`).
+- **Final:** inventory-api **517 passed** (506 + 11); ruff clean.
+

@@ -93,12 +93,13 @@
    "t_start": "2026-10-18T03:06:43.878740+00:00",
    "t_end": "2026-10-18T03:06:48.878740+00:00",
    "video_t_mid": 237.5,
-   "truth": "CUP1",
+   "truth": "NOD1",
    "no_capture": false,
    "location_hint": "NOD 3",
    "scene_summary": "A person in a grey shirt works near a wall while another person is visible in the background.",
    "sightings": 5,
-   "old_predicted": "unresolved"
+   "old_predicted": "unresolved",
+   "truth_note": "corrected 2026-10-18 (UI5-04): video t 237-240 s shows 'To NOD 3' signs through a node hatch, not the Cupola (its caption runs 03:26-03:42; the next caption is 'Quest Airlock', on Node 1)"
   },
   {
    "t_start": "2026-10-18T03:07:13.878740+00:00",
@@ -423,12 +424,13 @@
    "t_start": "2026-10-18T03:21:43.878740+00:00",
    "t_end": "2026-10-18T03:21:48.878740+00:00",
    "video_t_mid": 240.5,
-   "truth": "CUP1",
+   "truth": "NOD1",
    "no_capture": false,
    "location_hint": "NOD 3",
    "scene_summary": "An astronaut works with equipment in a module while another is visible through a hatch.",
    "sightings": 4,
-   "old_predicted": "unresolved"
+   "old_predicted": "unresolved",
+   "truth_note": "corrected 2026-10-18 (UI5-04): video t 237-240 s shows 'To NOD 3' signs through a node hatch, not the Cupola (its caption runs 03:26-03:42; the next caption is 'Quest Airlock', on Node 1)"
   },
   {
    "t_start": "2026-10-18T03:22:13.878740+00:00",

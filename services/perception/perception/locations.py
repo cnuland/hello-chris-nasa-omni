@@ -532,6 +532,25 @@ class LocationResolver:
         return scope.location, scope.no_capture
 
 
+def caption_scene_change(resolver: LocationResolver, hint: Any) -> str | None:
+    """AC-PER-61 (UI5-04): "caption" when the window has a location hint (signage the model read) that resolves to no
+    location, e.g. "NOD 3" read from a "To NOD 3" sign in Node 1, which is evidence the camera left the anchored
+    module; else None. A hint that resolves (a module, or a segment) is handled by the window policy itself."""
+    if not isinstance(hint, str) or not hint.strip() or resolver.resolve_hint(hint) is not None:
+        return None
+    words = normalise_hint(hint).split()
+    if not words or all(w in _PLACEHOLDER_HINT_WORDS for w in words):
+        return None  # review round: "unknown", "N/A", "ISS", "station", "Node": no signage, no evidence of a move
+    return "caption"
+
+
+#: AC-PER-61 review round: hint words that name no place (placeholders, the whole station, a bare module word)
+_PLACEHOLDER_HINT_WORDS = frozenset(
+    ["unknown", "null", "none", "n", "a", "na", "nil", "not", "visible", "unclear", "unspecified", "iss", "the",
+     "international", "space", "station", "interior", "inside", "of", "node", "module", "lab", "laboratory"]
+)
+
+
 @dataclass(frozen=True)
 class CarryDecision:
     """AC-PER-41 outcome for one window: ``location`` to use, ``carried`` when inherited from the anchor
@@ -542,6 +561,7 @@ class CarryDecision:
     source: str
     carried_from: datetime | None = None
     gap_s: float | None = None
+    ended: str | None = None  # AC-PER-61: the anchor was cleared by a scene change ("caption")
 
 
 class ModuleCarry:
@@ -565,8 +585,17 @@ class ModuleCarry:
         self._anchor = None
 
     def step(
-        self, t_start: datetime, t_end: datetime, scope: WindowScope, *, no_capture: bool, roaming: bool
+        self,
+        t_start: datetime,
+        t_end: datetime,
+        scope: WindowScope,
+        *,
+        no_capture: bool,
+        roaming: bool,
+        scene_change: str | None = None,
     ) -> CarryDecision:
+        """``scene_change`` (AC-PER-61): evidence that the camera left the anchored module; a window without a module
+        of its own then clears the anchor instead of inheriting it."""
         own = CarryDecision(scope.location, False, scope.source)
         if not roaming:
             return own
@@ -579,6 +608,9 @@ class ModuleCarry:
             return own
         if self._anchor is None or not (self.carry_s and 0 < float(self.carry_s) < math.inf):
             return own
+        if scene_change:
+            self._anchor = None
+            return CarryDecision(scope.location, False, scope.source, ended=scene_change)
         anchor_module, anchor_start, anchor_end = self._anchor
         if not self.resolver.exists(anchor_module) or self.resolver.is_no_capture(anchor_module):
             self._anchor = None  # review: a catalog refresh removed the module or made it private
