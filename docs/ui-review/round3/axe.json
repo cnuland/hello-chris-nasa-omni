@@ -1,0 +1,68 @@
+{
+ "inventory@1440": [],
+ "inv-person@1440": [],
+ "person-detail@1440": [],
+ "person-detail2@1440": [],
+ "laptop-detail@1440": [],
+ "bag-detail@1440": [],
+ "review@1440": [],
+ "review-dup@1440": [],
+ "overview@1440": [],
+ "chat@1440": [],
+ "add@1440": [],
+ "notfound@1440": [
+  {
+   "id": "page-has-heading-one",
+   "impact": "moderate",
+   "help": "Page should contain a level-one heading",
+   "n": 1,
+   "targets": [
+    "html"
+   ]
+  }
+ ],
+ "404@1440": [
+  {
+   "id": "page-has-heading-one",
+   "impact": "moderate",
+   "help": "Page should contain a level-one heading",
+   "n": 1,
+   "targets": [
+    "html"
+   ]
+  }
+ ],
+ "inventory@1024": [],
+ "inv-person@1024": [],
+ "person-detail@1024": [],
+ "person-detail2@1024": [],
+ "laptop-detail@1024": [],
+ "bag-detail@1024": [],
+ "review@1024": [],
+ "review-dup@1024": [],
+ "overview@1024": [],
+ "chat@1024": [],
+ "add@1024": [],
+ "notfound@1024": [
+  {
+   "id": "page-has-heading-one",
+   "impact": "moderate",
+   "help": "Page should contain a level-one heading",
+   "n": 1,
+   "targets": [
+    "html"
+   ]
+  }
+ ],
+ "404@1024": [
+  {
+   "id": "page-has-heading-one",
+   "impact": "moderate",
+   "help": "Page should contain a level-one heading",
+   "n": 1,
+   "targets": [
+    "html"
+   ]
+  }
+ ]
+}
