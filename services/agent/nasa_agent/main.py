@@ -88,6 +88,26 @@ def split_tokens(text: str) -> list[str]:
 
 #: AC-AGT-25: words per streamed chunk of the (already grounded) reply.
 WORDS_PER_CHUNK = 3
+#: AC-AGT-31: the longest pause between two chunks, whatever the target duration.
+MAX_CHUNK_DELAY_S = 0.12
+#: AC-AGT-31: the first frame is an SSE comment padded to this many bytes, so a proxy that holds small first writes
+#: flushes at once (comments are ignored by EventSource and by dashboard/src/lib/sse.ts).
+OPEN_PADDING_BYTES = 2048
+
+
+def open_comment() -> str:
+    head = ": stream open "
+    return head + " " * max(0, OPEN_PADDING_BYTES - len(head) - 2) + "\n\n"
+
+
+def chunk_delay(n_chunks: int, token_delay_s: float, target_s: float) -> float:
+    """AC-AGT-31: per-chunk pause so the whole reply streams over about ``target_s`` (at least ``token_delay_s``, at
+    most ``MAX_CHUNK_DELAY_S``); ``target_s`` 0 keeps the fixed ``token_delay_s``."""
+    if n_chunks <= 1:
+        return 0.0
+    if target_s <= 0:
+        return max(0.0, token_delay_s)
+    return max(token_delay_s, min(MAX_CHUNK_DELAY_S, target_s / (n_chunks - 1)))
 
 
 def reply_chunks(text: str, words: int = WORDS_PER_CHUNK) -> list[str]:
@@ -118,6 +138,7 @@ async def stream_chat_events(
     request_id: str,
     deadline_s: float = 45.0,
     token_delay_s: float = 0.0,
+    target_s: float = 0.0,
 ) -> AsyncIterator[str]:
     """SSE frames for one chat turn. ``run(on_event)`` runs the harness. Status events are forwarded as they happen;
     closing or cancelling this generator (client disconnect) cancels the run task and waits for it, so the in-flight
@@ -131,6 +152,7 @@ async def stream_chat_events(
     task = asyncio.create_task(run(on_event))
     getter: asyncio.Future | None = None
     try:
+        yield open_comment()  # AC-AGT-31: bytes reach the client before the loop has produced anything
         while True:
             getter = asyncio.ensure_future(queue.get())
             done, _ = await asyncio.wait({task, getter}, timeout=keepalive_s, return_when=asyncio.FIRST_COMPLETED)
@@ -152,9 +174,11 @@ async def stream_chat_events(
             )
             yield sse("error", error_body(exc, request_id, deadline_s))
             return
-        for i, chunk in enumerate(reply_chunks(result["reply"])):
-            if i and token_delay_s > 0:
-                await asyncio.sleep(token_delay_s)  # AC-AGT-25: paced so the UI animates the grounded reply
+        chunks = reply_chunks(result["reply"])
+        delay = chunk_delay(len(chunks), token_delay_s, target_s)
+        for i, chunk in enumerate(chunks):
+            if i and delay > 0:
+                await asyncio.sleep(delay)  # AC-AGT-25/31: paced so the UI visibly animates the grounded reply
             yield sse("token", {"text": chunk})
         yield sse("done", result)
         log.info("chat stream", extra={"request_id": request_id, "latency_ms": _ms(started), "status": 200})
@@ -272,6 +296,7 @@ def create_app(
                 lambda on_event: _run(body, request_id, on_event),
                 keepalive_s=settings.stream_keepalive_seconds,
                 token_delay_s=settings.stream_token_delay_s,
+                target_s=settings.stream_target_s,
                 request_id=request_id,
                 deadline_s=settings.turn_deadline_s,
             ),

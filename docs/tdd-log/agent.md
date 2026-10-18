@@ -596,3 +596,102 @@ give no window; a disconnect while pacing is safe.
 ## AC-AGT-26 rewrite stubs (live 2026-10-18)
 - **Red:** 1 of 3 failed (the live stub); 2 guards passed.
 - **Green:** 513 passed; ruff is clean. **Test changes:** none.
+
+## UI review round 3 fixes (docs/ui-review/round3: UI3-01 P1, UI3-10, UI3-04; PARTIAL UI2-16)
+
+Spec: AC-AGT-27..31 in docs/spec/30-agent.md. Tests: tests/test_ac_agt_27_31_round3.py (47 tests) with live
+fixtures in tests/live_round3.py (the 17 person tracks of the report, captured read-only 2026-10-18 03:30 UTC, the
+87dbd193 person "moved" event with a foreign actor, the ui-review-3 operator move, the deployed model's "4 people"
+draft). The fake inventory gained `offset` paging and a `max_page` server cap.
+
+### Root causes
+- **UI3-01 (people count):** no tool could count people. The model used `recent_changes`, which is the last hour by
+  default, returns at most 30 changes (fewer after the 800-token payload budget), and counted the `new_item` rows of
+  that page. Nothing in the harness checked numbers: the claim check looks at locations, times and actors only.
+- **UI3-10 (machine phrasing):** change lists were written by the model from raw JSON, so the wording followed the
+  field names (`new_item:`, `actor:`), changed between runs, and the system prompt's own example ("laptop: USOS,
+  22:51 UTC") taught bare codes and no date. "and N more" was a prompt instruction with no paging behind it.
+- **UI3-04 (person events):** perception stores a person track's own move with an `actor_desc` (often another
+  person's clothes), and the agent passed it through, so "person moved by person (spacesuit...)".
+- **UI2-16 (streaming):** not buffering. A live probe (`httpx` stream through the route and nginx, `/agent/chat/stream`)
+  showed every frame arriving on its own, 30 ms apart; the whole answer took 0.40 s (14.08 s -> 14.48 s) because the
+  pacing was 3 words / 30 ms, after a 14 s grounded LLM turn. It looked like "text at the end".
+
+### Red
+- 42 new tests first: collection error (no `nasa_agent.render`); then, with the module stubbed by the first draft,
+  18 failed (all harness/stream behaviour), 24 passed (tool level).
+- The same probe also caught a live latent bug: "5 laptops in the inventory" came from `where_is`, which is capped at
+  5. It was correct by coincidence (API total 5); with 8 laptops it would be wrong. Covered by
+  test_ac_agt_28_count_claim_from_a_capped_list_is_rejected.
+
+### Green
+- `people_seen` and `count_items` (tools.py): paged `GET /items` with `limit/offset` until `total`; per-module
+  grouping through the location tree; honest caveat; person citations only.
+- Harness: a step of only recent_changes/people_seen/count_items is rendered and the turn ends (one LLM call instead
+  of two for "what changed" and people questions); people counting questions always end with the `people_seen`
+  rendering (the harness calls it itself if the model did not); item counting questions run `count_items` with the
+  model's own filters; any count in a model reply must be a tool total (`count_unverified` fallback); paging
+  ("show more") is answered in code from the previous reply's header.
+- `nasa_agent/render.py`: operator-English lines, item lines, people/changes/count answers, show-more parsing and
+  the count-claim extractor. The AC-AGT-19 grounded summary now uses the same phrasing.
+- Streaming: padded opening SSE comment (2 KiB) and pacing to `AGENT_STREAM_TARGET_S` (1.5 s, 30-120 ms per chunk).
+  Verified with a real uvicorn server + streaming client (token span >= 0.5 s of a 0.8 s target, chunks flushed
+  separately).
+- Token budget: two more tools pushed the specs to 2480 tokens (> 2000, AC-AGT-15) and the prompt to 772 (> 650).
+  Fixed by dropping bounds/`additionalProperties`/integer defaults/nested descriptions from the LLM copy of the
+  schemas (validation unchanged) and tightening the prompt: specs 1964, prompt 571.
+
+### Test changes (superseded behaviour, not weakened checks)
+- Old tests that asserted the model's wording for a `recent_changes` answer now assert the deterministic rendering
+  (test_ac_agt_13 what_changed, test_ac_agt_20 applied filter, two in test_ac_agt_12_18_review). The payload-budget
+  review test keeps the model in the loop with a second, non-rendered tool in the same step.
+- Grounded-summary tests that looked for the short id ("a454e74e") now look for the operator-English line; the id is
+  still used when the label is unsafe ("Record [11111111]" tests unchanged).
+- Stream tests skip the new opening comment frame. Tool-name sets in test_02/test_09 include the two new tools.
+
+### Adversarial review (self, round 3)
+| # | Sev | Finding | Outcome |
+|---|---|---|---|
+| 1 | high | A count check that only trusts tool totals rejected correct sub-counts of a complete list ("2 laptops in USOS" when where_is returned all 5). | **Fixed.** Any number up to the total of a complete (uncapped) list is allowed. |
+| 2 | med | "How many drills should there be?" / "How many crew are expected?" would have been forced to count_items / people_seen, overriding the catalog answer. | **Fixed.** should/expected/supposed/normally/usually questions are catalog questions; expected_count values the model saw are allowed counts. |
+| 3 | med | Person appearances came from per-id lookups capped at 10, so busy pages showed bare "Person". | **Fixed.** One `GET /items?kind=person&seen_after=` per call, per-id lookups only for leftovers. |
+| 4 | med | The paging marker comes from a client-sent transcript, so it can be forged. | **Fixed/accepted.** Arguments are re-validated by the tool (7-day window, offset cap, location resolver); a failed page request is recorded in tool_calls and the normal loop answers. Read-only either way. |
+| 5 | med | A model reply mixing people data could still state the crew size ("the crew is 7 people"). | **Fixed.** People counting questions always end with the rendering; "7 people" is not a tool total. |
+| 6 | low | "count_claims" read location codes ending in S (USOS) as plural nouns and "two in USOS" as a count. | **Fixed.** All-caps words are never nouns; prepositions/verbs end the count phrase. |
+| 7 | low | Place names that already carry parentheses rendered as "Destiny (US Lab) (LAB1)". | **Fixed.** "Destiny (US Lab, LAB1)". |
+
+**Not changed (documented):**
+- A rendered `recent_changes` answer lists the window even when the question was narrower ("was the drill moved
+  today?"). It is complete and consistent; the model no longer summarises it.
+- Paging re-queries the window at minute precision, so a change at the window edge can shift a page by one.
+- `recent_changes` totals are bounded by its API pages (200 events, 200 new items, 100 reviews per window).
+- "How many people used the drill?" is a handling question and is not forced to people_seen (the model answers
+  from who_moved, still under the count check).
+
+### Live check (read-only API, 2026-10-18 03:46-03:48 UTC, new code run locally against the deployed API)
+- `people_seen()` = 25 tracks = `GET /items?kind=person` total 25 (USOS 17, NOD1 2, NOD3 2, ZVEZDA 2, COL1 1, CUP1 1).
+- The reviewer's flow (model calls recent_changes, writes "4 people") now answers "25 person tracks were seen
+  between 2026-10-18 00:00 and 2026-10-18 03:48 UTC: ..." with the caveat and 10 person citations.
+- "What changed in the last hour?" rendered "(showing 1-10 of 106)"; "show more" returned "(showing 11-20 of 106)"
+  with no LLM call. `count_items(q=laptop)` = 6 (USOS 3, NOD1 1, NOD2 1, NOD3 1). who_moved on person tracks has no
+  actor.
+
+### Final
+**560 passed** (was 513), ruff clean.
+
+### For other teams
+- **Deploy:** redeploy the agent. New optional env `AGENT_STREAM_TARGET_S` (default 1.5; 0 restores fixed 30 ms
+  pacing). No other config changes.
+- **Dashboard:** (1) `/chat/stream` now starts with an SSE comment `: stream open` padded to 2 KiB; `lib/sse.ts`
+  already ignores comments, please keep it that way. (2) Rendered lists continue numbering on later pages ("11. ...");
+  the Markdown renderer must honour an `<ol>` start number (CommonMark does). (3) Optional: turn the trailing "ask
+  'show more changes' to continue" into a button that sends "show more changes". (4) UI3-03/UI3-04: use the same
+  person phrasing as the agent ("Person (grey t-shirt, dark shorts) seen in Cupola (CUP1)", "left X", no actor).
+- **Inventory API:** please add `entity_kind` to `GET /events` rows (the agent uses it when present; today it infers
+  people from `entity_catalog_id` / item kind, and one live person event has `entity_catalog_id: null`). Consider
+  `actor_kind: "self"` (or null) for a person track's own move.
+- **Perception (UI3-04):** do not attach an `actor_desc` to a person track's own `moved` event; the agent now drops
+  it, but the dashboard and the API still show it. 17-25 tracks for one crew is the over-count the caveat describes.
+- **UI3-02 (not in this change):** `search_observations` in services/agent/nasa_agent/tools.py should filter private
+  windows once inventory-api exposes a `private` flag on `/search` hits; tell me the field name and I will add the
+  filter and test.

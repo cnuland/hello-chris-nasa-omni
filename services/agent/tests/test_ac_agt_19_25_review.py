@@ -6,7 +6,7 @@ from datetime import timedelta
 from nasa_agent.harness import NO_RECORD_REPLY, normalize_markdown, parse_time_window
 from tests.conftest import user
 from tests.fakes import FakeLLM, assistant_text, assistant_tools, tool_call
-from tests.live_round2 import LIVE_LAPTOPS, NOW, load_live
+from tests.live_round2 import NOW, load_live
 
 WHO = tool_call("who_moved", {"name": "drill", "event_types": ["used"]})
 
@@ -31,7 +31,7 @@ async def test_review_summary_does_not_echo_instruction_like_actor(make_harness,
     r = await make_harness(FakeLLM([assistant_tools(WHO), assistant_text("used by Bob")])).run(
         user("Who used the drill?"))
     assert "airlock" not in r["reply"] and "SYSTEM" not in r["reply"]
-    assert "a454e74e" in r["reply"]
+    assert "Drill used" in r["reply"] and "an unidentified person" in r["reply"]  # AC-AGT-29 phrasing
 
 
 # 3 (med): a time phrase that does not scope the question is not forced onto who_moved
@@ -69,7 +69,7 @@ async def test_review_cut_reply_without_facts_uses_summary(make_harness, fake_in
                    {"role": "assistant", "content": "Here are the laptops:\n1. laptop: USOS, 22:5",
                     "finish_reason": "length"}])
     r = await make_harness(llm).run(user("Where is the laptop right now?"))
-    assert LIVE_LAPTOPS[0][0][:8] in r["reply"] or "laptop [" in r["reply"]
+    assert "Laptop: last seen in" in r["reply"]  # AC-AGT-29 item line
     assert r["reply"] != "Here are the laptops (answer shortened; ask for more)"
 
 
@@ -101,4 +101,4 @@ async def test_review_event_without_location_is_not_placed(make_harness, fake_in
     fake_inventory.events[-2]["from_location"] = None
     r = await make_harness(FakeLLM([assistant_tools(WHO), assistant_text("used by the commander")])).run(
         user("Who used the drill?"))
-    assert "a454e74e" in r["reply"] and "USOS" not in r["reply"]
+    assert "Drill used by person (blue shirt, headset)" in r["reply"] and "USOS" not in r["reply"]

@@ -219,10 +219,12 @@ async def test_ac_agt_13_citations_carry_label_and_location(tb):
 
 # ---------------------------------------------------------------- harness (grounding)
 async def test_ac_agt_13_what_changed_question_is_grounded_and_cited(make_harness, tb):
-    answer = "In the last hour the pistol-grip drill was moved from LAB1P3 to LAB1S2 by crew member in blue shirt at 12:20Z."
-    llm = FakeLLM([assistant_tools(tool_call("recent_changes", {})), assistant_text(answer)])
+    llm = FakeLLM([assistant_tools(tool_call("recent_changes", {}))])
     res = await make_harness(llm).run(user("What changed in the last hour?"))
-    assert res["reply"] == answer
+    # AC-AGT-29: rendered deterministically (no second LLM call)
+    assert llm.calls == 1
+    assert ("2026-10-01 12:20 UTC: Pistol-grip drill moved from Lab port rack 3 (LAB1P3) to Lab starboard rack 2 "
+            "(LAB1S2) by person (blue shirt)") in res["reply"]
     assert any(c.get("entity_id") == E_DRILL for c in res["citations"])
 
 

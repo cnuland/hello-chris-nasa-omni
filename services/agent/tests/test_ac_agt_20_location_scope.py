@@ -87,7 +87,8 @@ async def test_ac_agt_20_applied_filter_is_stated_in_reply(make_harness, fake_in
     llm = FakeLLM([assistant_tools(tool_call("recent_changes", {"location": "Node 1"})),
                    assistant_text("One drill was moved at 01:00 UTC.")])
     r = await make_harness(llm).run(_conversation("What changed in Node 1 in the last hour?"))
-    assert r["reply"].startswith("In Node 1 Unity (NOD1): ")
+    # AC-AGT-29: recent_changes answers are rendered; the header names the applied filter
+    assert r["reply"].startswith("Changes in Node 1 Unity (NOD1) between ")
     assert r["tool_calls"][0]["arguments"] == {"location": "Node 1", "since": "2026-10-18T00:20:00Z"}
 
 

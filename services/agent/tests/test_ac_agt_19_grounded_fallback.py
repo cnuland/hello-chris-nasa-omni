@@ -57,8 +57,8 @@ async def test_ac_agt_19_rejected_wording_falls_back_to_grounded_summary(make_ha
     reply = r["reply"]
     assert reply != NO_RECORD_REPLY
     assert "commander" not in reply and "NOD3" not in reply and "21:10" not in reply
-    assert "a454e74e" in reply and "used" in reply
-    assert "in blue shirt, headset" in reply
+    # AC-AGT-29 operator English (no pasted ids; the citation carries the entity)
+    assert "Drill used in US Orbital Segment (USOS) by person (blue shirt, headset)" in reply
     assert "22:53 UTC" in reply and "USOS" in reply
     assert unsupported_claims(reply, _drill_evidence()) == [], "the fallback itself is grounded"
     assert any(c["entity_id"] == DRILL_USED for c in r["citations"]), "the fallback keeps the citations"

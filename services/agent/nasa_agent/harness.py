@@ -56,17 +56,28 @@ from nasa_agent.grounding import (
     catalog_evidence,
     catalog_facts_reply,
     evidence_text,
-    scrub_claims,
     unqualified_home_locations,
     unsupported_claims,
     usual_location_rewrite,
 )
 from nasa_agent.llm import LLMError, LLMTimeout
+from nasa_agent.render import (
+    change_line,
+    changes_reply,
+    count_claims,
+    count_reply,
+    is_count_question,
+    is_people_count_question,
+    is_show_more,
+    is_sighting_count_question,
+    item_line,
+    parse_page_marker,
+    people_reply,
+)
 from nasa_agent.tools import (
     GROUNDING_TOOLS,
-    MAX_CITATION_TEXT,
+    PEOPLE_CAVEAT,
     citation_key,
-    clean_text,
     evidence_view,
 )
 
@@ -99,7 +110,11 @@ TOOL_NUDGE = (
 )
 NO_ANSWER_PLACEHOLDER = "(no answer was given)"
 #: AC-AGT-20: tools whose `location` argument must come from the current message.
-SCOPED_TOOLS = frozenset({"recent_changes", "list_unknowns"})
+SCOPED_TOOLS = frozenset({"recent_changes", "list_unknowns", "people_seen", "count_items"})
+#: AC-AGT-29: a tool step made only of these ends the turn with their deterministic rendering (no further LLM call).
+RENDER_TOOLS = frozenset({"recent_changes", "people_seen", "count_items"})
+#: AC-AGT-20/22: tools whose since/until the harness sets from a relative window in the current message.
+WINDOWED_TOOLS = frozenset({"recent_changes", "people_seen"})
 RECENT_MAX_DAYS = timedelta(days=7)
 CLAMP_NOTE = "(Changes are only searched up to 7 days back.)"
 #: AC-AGT-20: the current message refers to an earlier place ("in there", "that module", "the same location").
@@ -127,6 +142,8 @@ TOOL_STATUS = {
     "search_observations": "Searching the video observations",
     "recall_memory": "Reading background memory",
     "lookup_catalog": "Checking the catalog",
+    "people_seen": "Counting person tracks",
+    "count_items": "Counting inventory items",
     "propose_update": "Preparing a proposed change",
 }
 
@@ -202,18 +219,21 @@ def fit_payload(payload: dict[str, Any], max_tokens: int) -> str:
     if estimate_tokens(text) <= max_tokens:
         return text
     data = payload.get("data")
-    changes = data.get("changes") if isinstance(data, dict) else None
+    list_key, at_key = ("tracks", "last_seen_at") if isinstance(data, dict) and "tracks" in data else ("changes", "at")
+    changes = data.get(list_key) if isinstance(data, dict) else None
     if isinstance(changes, list) and changes:
-        # recent_changes (AC-AGT-13): drop whole changes from the end, keep the structure and the scope
+        # recent_changes (AC-AGT-13) / people_seen tracks: drop whole rows from the end, keep the structure and scope
         lo, hi, best = 0, len(changes) - 1, None
         while lo <= hi:
             mid = (lo + hi) // 2
             sent = changes[:mid]
-            keys = {(c.get("entity_id"), c.get("at")) for c in sent if isinstance(c, dict)}
+            keys = {(c.get("entity_id"), c.get(at_key)) for c in sent if isinstance(c, dict)}
+            omitted_key = "omitted" if list_key == "changes" else "tracks_omitted"
             cand = json.dumps(
                 {
                     **payload,
-                    "data": {**data, "changes": sent, "omitted": len(changes) - mid + int(data.get("omitted") or 0)},
+                    "data": {**data, list_key: sent,
+                             omitted_key: len(changes) - mid + int(data.get(omitted_key) or 0)},
                     "citations": [c for c in payload.get("citations") or [] if (c.get("entity_id"), c.get("at")) in keys],
                     "truncated": True,
                 },
@@ -342,7 +362,7 @@ class AgentHarness:
         if name in SCOPED_TOOLS and loc is not None and not (isinstance(loc, str) and await place_is_named(loc)):
             args.pop("location")
             changed = True
-        if window is not None and name == "recent_changes":
+        if window is not None and name in WINDOWED_TOOLS:
             since, until = window
             floor = self._now() - RECENT_MAX_DAYS + timedelta(minutes=2)
             if since < floor:
@@ -358,6 +378,9 @@ class AgentHarness:
         elif window is not None and name == "who_moved" and args.get("since") is not None:
             # review 3: only a model-made since is replaced; a time phrase that does not scope "who" adds nothing
             args["since"] = _iso_z(window[0])
+            changed = True
+        elif window is not None and name == "count_items" and args.get("seen_after") is not None:
+            args["seen_after"] = _iso_z(window[0])
             changed = True
         if not changed:
             return call
@@ -426,6 +449,16 @@ class AgentHarness:
             reply_tokens=int(getattr(self.settings, "history_reply_tokens", 150)),
         )
         follow_up = len(history) > 1
+        page_calls: list[dict[str, Any]] = []  # a failed paging attempt stays visible in tool_calls
+        if follow_up and is_show_more(question):
+            # AC-AGT-29: "show more" after a paged, rendered list is answered in code (no LLM call)
+            previous = next((m["content"] for m in reversed(raw_history[:-1])
+                             if m["role"] == "assistant" and isinstance(m.get("content"), str)), "")
+            marker = parse_page_marker(previous, question)
+            if marker is not None:
+                paged = await self._next_page(marker, request_id, session_id, emit, started, page_calls)
+                if paged is not None:
+                    return paged
 
         block = await self._render_block(question, request_id)
         clock = f"Current time (UTC): {self._now().astimezone(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')}"
@@ -444,7 +477,7 @@ class AgentHarness:
         extra_steps = max(0, int(getattr(self.settings, "grounded_extra_steps", 1)))
         payload_budget = int(getattr(self.settings, "tool_result_token_budget", 800))
         turn: list[dict[str, Any]] = []
-        tool_calls: list[dict[str, Any]] = []
+        tool_calls: list[dict[str, Any]] = page_calls
         citations: list[dict[str, Any]] = []
         proposals: list[dict[str, Any]] = []
         evidence: list[Any] = []
@@ -459,6 +492,10 @@ class AgentHarness:
         applied_locations: list[str] = []  # location filters actually applied (AC-AGT-20)
         window = parse_time_window(question, self._now())  # AC-AGT-22
         notes: list[str] = []  # harness notes appended to the reply (AC-AGT-22 clamp)
+        allowed_counts: set[int] = set()  # tool totals of this turn (AC-AGT-28)
+        turn_results: list[tuple[str, Any]] = []  # (tool, ToolResult) with data, in order
+        rendered: list[tuple[str, Any]] = []  # AC-AGT-29: results answered by the deterministic renderer
+        non_render_data = False  # a grounding result of a tool outside RENDER_TOOLS
 
         async def place_is_named(location: str) -> bool:
             return await self._place_matches(question, location)
@@ -536,6 +573,7 @@ class AgentHarness:
                 break
             invalid_step_seen = invalid_step_seen or any(p is not None for p in pre)
             turn.append({"role": "assistant", "content": content, "tool_calls": requested})
+            step_results: list[tuple[str, Any]] = []
             for call, err in zip(requested, pre, strict=True):
                 name = call["function"]["name"]
                 raw_args = call["function"]["arguments"]
@@ -553,6 +591,12 @@ class AgentHarness:
                     request_id, tool_calls, name, raw_args, result, round((time.perf_counter() - t0) * 1000, 2)
                 )
                 content_json = fit_payload(result.to_message_payload(), payload_budget)
+                step_results.append((name, result))
+                if result.has_data:
+                    allowed_counts |= tool_totals(name, result, content_json)
+                    turn_results.append((name, result))
+                    if name in GROUNDING_TOOLS and name not in RENDER_TOOLS:
+                        non_render_data = True
                 if result.has_data and name == "lookup_catalog":
                     # Only the entries that survived the token budget reach the model: only they ground and are cited.
                     sent = _sent_catalog_entries(content_json)
@@ -610,6 +654,11 @@ class AgentHarness:
                 )
             if grounded and grounded_at is None:
                 grounded_at = step
+            if (step_results and not proposals and not non_render_data
+                    and all(n in RENDER_TOOLS and r.ok for n, r in step_results)):
+                rendered = step_results  # AC-AGT-29: deterministic answer, no further LLM call
+                stop_reason = "rendered"
+                break
 
         rejected = 0
         rewritten = 0
@@ -639,7 +688,9 @@ class AgentHarness:
             return grounded_summary_reply(records, _dedup(citations), names, all_evidence) if records else (
                 catalog_facts_reply(catalog_entries) if catalog_entries else None)
 
-        if not grounded:
+        if stop_reason == "rendered":
+            reply, citations = await self._render(rendered)
+        elif not grounded:
             if empty_unknowns and not proposals:
                 labels = [await self._verified_label(lid, question) if lid else None for lid in empty_unknowns]
                 reply = none_unknowns_reply(labels)  # AC-AGT-23: an honest empty answer, with its scope
@@ -689,6 +740,39 @@ class AgentHarness:
             reply = INVALID_TOOL_REPLY
         else:
             reply = STEP_LIMIT_REPLY
+
+        # AC-AGT-28: counting questions use an uncapped counting path, and every stated count is a tool total
+        counting = is_count_question(question)
+        people_r = _last(turn_results, "people_seen")
+        count_r = _last(turn_results, "count_items")
+        forced: str | None = None
+        if not proposals and is_people_count_question(question):
+            if people_r is None:
+                people_r = await self._forced_call("people_seen", await self._people_args(question, window, notes),
+                                                   request_id, tool_calls, emit)
+                forced = "people_count" if people_r is not None else None
+            if people_r is not None:
+                reply, citations = await self._render([("people_seen", people_r)])
+                grounded, rejected, model_reply = True, 0, False
+                fallback = fallback or forced
+        elif (not proposals and is_sighting_count_question(question) and count_r is None and not catalog_entries
+              and (args := derive_count_args(tool_calls))):
+            count_r = await self._forced_call("count_items", args, request_id, tool_calls, emit)
+            if count_r is not None:
+                reply, citations = await self._render([("count_items", count_r)])
+                grounded, rejected, model_reply, fallback = True, 0, False, fallback or "item_count"
+        if model_reply:
+            unverified = [n for n in count_claims(reply, counting=counting) if n not in allowed_counts]
+            if unverified:
+                model_reply, fallback = False, "count_unverified"
+                if people_r is not None or count_r is not None:
+                    reply, citations = await self._render(
+                        [r for r in (("people_seen", people_r), ("count_items", count_r)) if r[1] is not None])
+                else:
+                    reply = (await summary()) or NO_RECORD_REPLY
+                rejected = rejected or len(unverified)
+        if model_reply and people_r is not None and "non-biometric" not in reply:
+            reply = f"{reply.rstrip()}\n\n{PEOPLE_CAVEAT}"  # AC-AGT-27: the track caveat is never left out
         if model_reply and applied_locations:
             reply = await self._state_scope(reply, applied_locations)  # AC-AGT-20
         if model_reply:
@@ -708,6 +792,79 @@ class AgentHarness:
         self._log_turn(request_id, session_id, steps, tool_calls, skipped, grounded, rejected, rewritten, stop_reason,
                        prompt_tokens, nudged, started, fallback=fallback, finish_reason=finish_reason)
         return result
+
+    async def _render(self, results: list[tuple[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+        """AC-AGT-29: the deterministic operator-English answer for RENDER_TOOLS results, with its citations."""
+        names = await self._location_names()
+        texts: list[str] = []
+        cites: list[dict[str, Any]] = []
+        for name, result in results:
+            data = result.data if isinstance(result.data, dict) else {}
+            if name == "recent_changes":
+                if data.get("changes"):
+                    text, cited = changes_reply(data, result.citations, names)
+                elif data.get("offset"):
+                    text, cited = "There are no more changes in that window.", []
+                else:
+                    text, cited = none_found_reply([data]), []
+            elif name == "people_seen":
+                text, cited = people_reply(data, result.citations, names)
+            else:
+                text, cited = count_reply(data, names), []
+            texts.append(text)
+            cites += cited
+        return "\n\n".join(texts), _dedup(cites)
+
+    async def _forced_call(self, name: str, args: dict[str, Any], request_id: str, tool_calls: list[dict[str, Any]],
+                           emit) -> Any:
+        """A counting tool run by the harness itself (AC-AGT-28); the result, or None when it failed."""
+        raw = json.dumps(args)
+        await emit({"step": 0, "phase": "tool", "tool": name, "args_summary": self.toolbox.summarize_args(name, raw),
+                    "text": TOOL_STATUS.get(name, "Calling a tool")})
+        t0 = time.perf_counter()
+        result = await self.toolbox.call(name, raw)
+        self._record(request_id, tool_calls, name, raw, result, round((time.perf_counter() - t0) * 1000, 2))
+        return result if result.ok and result.has_data else None
+
+    async def _people_args(self, question: str, window, notes: list[str]) -> dict[str, Any]:
+        """people_seen arguments for a counting question: the AC-AGT-22 window (default: today) and the location
+        when the question names exactly one place."""
+        args: dict[str, Any] = {}
+        if window is not None:
+            since, until = window
+            floor = self._now() - RECENT_MAX_DAYS + timedelta(minutes=2)
+            if since < floor:
+                since = floor
+                if CLAMP_NOTE not in notes:
+                    notes.append(CLAMP_NOTE)
+            args["since"] = _iso_z(since)
+            if until is not None:
+                args["until"] = _iso_z(until)
+        try:
+            mentioned = await self.toolbox.mentioned_locations(question)
+        except Exception:  # noqa: BLE001 - no location filter then
+            mentioned = None
+        if mentioned and len(mentioned) == 1:
+            args["location"] = next(iter(mentioned))
+        return args
+
+    async def _next_page(self, marker: dict[str, Any], request_id: str, session_id: str | None, emit,
+                         started: float, tool_calls: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """AC-AGT-29: the next page of a rendered list, read back from the previous reply; None to use the LLM."""
+        now = self._now()
+        until = min(marker["until"], now)
+        if until <= marker["since"]:
+            return None
+        args: dict[str, Any] = {"since": _iso_z(marker["since"]), "until": _iso_z(until), "offset": marker["offset"]}
+        if marker.get("location"):
+            args["location"] = marker["location"]
+        result = await self._forced_call(marker["tool"], args, request_id, tool_calls, emit)
+        if result is None:
+            return None
+        reply, citations = await self._render([(marker["tool"], result)])
+        self._log_turn(request_id, session_id, 0, tool_calls, 0, True, 0, 0, "paged", [], False, started)
+        return {"request_id": request_id, "session_id": session_id, "reply": reply, "citations": citations,
+                "tool_calls": tool_calls, "proposals": []}
 
     async def _verified_label(self, location_id: str, question: str) -> str:
         """Review 8: a scope is printed only when it is a known location or the operator typed it."""
@@ -748,6 +905,62 @@ class AgentHarness:
                 "latency_ms": round((time.perf_counter() - started) * 1000, 2),
             },
         )
+
+
+def _last(results: list[tuple[str, Any]], name: str) -> Any:
+    return next((r for n, r in reversed(results) if n == name), None)
+
+
+def tool_totals(name: str, result: Any, content_json: str | None = None) -> set[int]:
+    """Numbers a reply may state as counts (AC-AGT-28): totals and per-module counts of this turn's tools, the API
+    ``total`` of an item query (never the length of a capped list) and the catalog ``expected_count`` of the entries
+    the model saw."""
+    data = result.data
+    out: set[int] = set()
+
+    def add(value: Any) -> None:
+        if isinstance(value, int) and not isinstance(value, bool):
+            out.add(value)
+
+    if name == "lookup_catalog":
+        for e in _sent_catalog_entries(content_json) if content_json else []:
+            add(e.get("expected_count"))
+        return out
+
+    if isinstance(data, dict):
+        for key in ("total_tracks", "total", "tracks_omitted", "omitted"):
+            add(data.get(key))
+        for m in data.get("by_module") or []:
+            if isinstance(m, dict):
+                add(m.get("count"))
+    if isinstance(result.scope, dict):
+        add(result.scope.get("total"))
+        total = result.scope.get("total")
+        if isinstance(data, list) and isinstance(total, int) and 0 <= total <= len(data):
+            out |= set(range(total + 1))  # a complete (uncapped) list: sub-counts of it are verifiable
+    if isinstance(data, dict) and isinstance(data.get("changes"), list) and not data.get("offset"):
+        total = data.get("total")
+        if isinstance(total, int) and 0 <= total <= len(data["changes"]):
+            out |= set(range(total + 1))
+    return out
+
+
+def derive_count_args(tool_calls: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """count_items arguments from the model's own item query of this turn (search_items filters, where_is name,
+    list_unknowns scope); None when there is none (AC-AGT-28)."""
+    for t in reversed(tool_calls):
+        args = t.get("arguments")
+        if not t.get("ok") or not isinstance(args, dict):
+            continue
+        if t.get("name") == "search_items" and isinstance(args.get("q"), str):
+            f = args.get("filters") if isinstance(args.get("filters"), dict) else {}
+            return {"q": args["q"], **{k: f[k] for k in ("kind", "status", "catalog_id", "location", "seen_after")
+                                       if f.get(k)}}
+        if t.get("name") == "where_is" and isinstance(args.get("name"), str):
+            return {"q": args["name"]}
+        if t.get("name") == "list_unknowns":
+            return {"status": ["unknown"], **({"location": args["location"]} if args.get("location") else {})}
+    return None
 
 
 def none_found_reply(scopes: list[dict[str, Any]]) -> str:
@@ -1021,63 +1234,8 @@ SUMMARY_LEAD = "Here is what the records show:"
 _ITEM_TOOLS = frozenset({"where_is", "search_items", "list_unknowns", "get_item"})
 
 
-def _when(value: Any) -> str | None:
-    dt = _parse_iso(value)
-    return f"{dt:%H:%M} UTC on {dt:%Y-%m-%d}" if dt else None
-
-
-def _safe_label(label: Any, entity_id: Any, own: dict[str, Any]) -> str:
-    short = f"[{str(entity_id)[:8]}]" if entity_id else ""
-    text = clean_text(label, MAX_CITATION_TEXT)
-    if text and unsupported_claims(text, json.dumps(own, default=str)):
-        text = None
-    return f"The {text} {short}".strip() if text else f"Record {short}".strip()
-
-
-def _place(lid: Any, names: dict[str, str | None]) -> str | None:
-    if not lid:
-        return None
-    name = names.get(lid)
-    return f"{lid}, {name}" if name else str(lid)
-
-
-_DANGLING_RE = re.compile(r"(?:\s+(?:in|at|on|to|from|into|near|by|the|of|and))+\s*$", re.IGNORECASE)
-
-
-_ACTOR_TEXT_RE = re.compile(r"[A-Za-z0-9 ,'()/-]{1,60}")
-_ACTION_RE = re.compile(r"[a-z_]{1,32}")
-MAX_ACTOR_WORDS = 7
-
-
-def _actor(value: Any) -> str:
-    """Actor text for the deterministic summary: scrubbed of places/times and allow-listed (short, plain words), so
-    free text from the pipeline/operator cannot carry instructions to the operator (review 2)."""
-    text = scrub_claims(clean_text(value))
-    if text:
-        text = _DANGLING_RE.sub("", text).strip(" ,;")  # "who put it in NOD3 at 09:00" -> "who put it"
-    if not text or not _ACTOR_TEXT_RE.fullmatch(text) or len(text.split()) > MAX_ACTOR_WORDS:
-        return "an unidentified person"
-    if re.match(r"(?:in|wearing|with)\b", text, re.IGNORECASE):
-        return f"person {text}"
-    return text
-
-
-def _event_sentence(label: str, ev: dict[str, Any], names: dict[str, str | None], fallback_loc: Any = None) -> str:
-    kind = str(ev.get("event_type") or ev.get("change") or "handled").replace("_", " ")
-    frm, to = ev.get("from_location"), ev.get("to_location")
-    when = _when(ev.get("occurred_at") or ev.get("at"))
-    actor = ev.get("actor_desc") if "actor_desc" in ev else ev.get("actor")
-    if kind == "moved" and (frm or to):
-        route = (f" from {frm}" if frm else "") + (f" to {to}" if to else "")
-        where = ""
-    else:
-        route = ""
-        place = _place(frm or to or fallback_loc, names)
-        where = f" ({place})" if place else ""
-    return f"{label} was {kind}{route} by {_actor(actor)}" + (f" at {when}" if when else "") + f"{where}."
-
-
 def _summary_lines(records: list[tuple[str, Any]], names: dict[str, str | None]) -> list[str]:
+    """AC-AGT-19 summary lines in the AC-AGT-29 operator English (an event never gets the item's current place)."""
     lines: list[str] = []
     for name, data in records:
         if name == "who_moved" and isinstance(data, list):
@@ -1085,39 +1243,21 @@ def _summary_lines(records: list[tuple[str, Any]], names: dict[str, str | None])
                 if not isinstance(entry, dict):
                     continue
                 for ev in entry.get("moves") or []:
-                    own = {k: ev.get(k) for k in ("from_location", "to_location", "occurred_at")}
-                    label = _safe_label(entry.get("label"), entry.get("entity_id"), own)
-                    lines.append(_event_sentence(label, ev, names))  # review 9: never the item's current place
+                    if isinstance(ev, dict):
+                        lines.append(change_line({
+                            **ev, "change": ev.get("event_type"), "at": ev.get("occurred_at"),
+                            "actor": ev.get("actor_desc"), "entity_id": entry.get("entity_id"),
+                            "label": entry.get("label"), "subject_kind": entry.get("subject_kind"),
+                            "appearance": entry.get("appearance")}, names))
         elif name == "recent_changes" and isinstance(data, dict):
-            for c in data.get("changes") or []:
-                if not isinstance(c, dict):
-                    continue
-                own = {k: c.get(k) for k in ("from_location", "to_location", "location", "at")}
-                label = _safe_label(c.get("label"), c.get("entity_id"), own)
-                where = _place(c.get("location"), names)
-                when = _when(c.get("at"))
-                if c.get("change") == "new_item":
-                    lines.append(f"{label} was first seen" + (f" in {where}" if where else "")
-                                 + (f" at {when}" if when else "") + ".")
-                elif c.get("change") == "review_resolved":
-                    action = c.get("action") if isinstance(c.get("action"), str) else None
-                    action = action if action and _ACTION_RE.fullmatch(action) else None
-                    lines.append(f"A review of {label[0].lower()}{label[1:]} was resolved"
-                                 + (f" ({action})" if action else "") + f" by {_actor(c.get('actor'))}"
-                                 + (f" at {when}" if when else "") + (f" ({where})" if where else "") + ".")
-                else:
-                    lines.append(_event_sentence(label, c, names, c.get("location")))
+            lines += [change_line(c, names) for c in data.get("changes") or [] if isinstance(c, dict)]
+        elif name == "people_seen" and isinstance(data, dict):
+            lines += [item_line({**t, "kind": "person", "last_location": t.get("location"),
+                                 "last_location_name": t.get("location_name")}, names)
+                      for t in data.get("tracks") or [] if isinstance(t, dict)]
         elif name in _ITEM_TOOLS:
-            for item in data if isinstance(data, list) else [data]:
-                if not isinstance(item, dict):
-                    continue
-                own = {k: item.get(k) for k in ("last_location", "last_location_name", "last_seen_at")}
-                label = _safe_label(item.get("label"), item.get("entity_id"), own)
-                lid = item.get("last_location")
-                where = f"{lid}, {item['last_location_name']}" if lid and item.get("last_location_name") else lid
-                when = _when(item.get("last_seen_at"))
-                lines.append(f"{label} was last seen" + (f" in {where}" if where else "")
-                             + (f" at {when}" if when else "") + ".")
+            lines += [item_line(item, names) for item in (data if isinstance(data, list) else [data])
+                      if isinstance(item, dict)]
     return list(dict.fromkeys(lines))
 
 

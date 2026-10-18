@@ -249,3 +249,83 @@
 - After the usual-stowage rewrite (AC-AGT-18), kept fragments that are only a lead-in ending in ':' (optionally
   followed by a bare list marker such as "1." or "-") are dropped, because their content was removed. Seen live:
   "...usually kept in the following location: 1." Tests: tests/test_ac_agt_26_rewrite_stubs.py.
+
+## UI review round 3 chatbot fixes (docs/ui-review/round3/REPORT.md UI3-01, UI3-10, UI3-04; PARTIAL UI2-16)
+
+- AC-AGT-27 **`people_seen(since?, until?, location?, offset?)`** (UI3-01, P1: "How many people have been seen today, and
+  where?" answered "4 people" from a capped, last-hour recent_changes page; the API held 17 person tracks). A read and
+  grounding tool.
+  - `since` defaults to the start of the current UTC day (`Toolbox.now`); it must not be in the future or more than
+    7 days back. `until` (optional) must be after `since` and not in the future. `location` is resolved like
+    `recent_changes` (id, display name, module alias; unknown -> validation error, no data call).
+  - Source: `GET /items?kind=person&seen_after=<since>&sort=-last_seen_at&limit=200&offset=…` (plus `location`),
+    paged with `offset` until the response `total` is reached (at most 2000 rows). Rows that are not `kind=person`,
+    are merged/dismissed, were last seen before `since`, or (with `until`) were first seen at/after `until` are
+    dropped; tracks are de-duplicated by entity_id.
+  - Returns `{since, until, location, location_name, total_tracks, by_module:[{location, location_name, count}],
+    tracks:[{entity_id, appearance, location, location_name, first_seen_at, last_seen_at}], offset, tracks_omitted,
+    complete, caveat}`. `by_module` groups each track's last location under its module (the nearest `kind=module`
+    ancestor, else the location itself), ordered by count. `tracks` is the page of at most 30 tracks from `offset`,
+    newest first. `complete` is false when the scan stopped at the row cap (then `total_tracks` is the API `total`).
+  - `caveat`: tracks are approximate and non-biometric (built from clothing/appearance), one person can appear as
+    several tracks (changed clothes, changed modules), so the number may over-count people. The crew size is not
+    known to the system and is never stated.
+  - Citations are the person tracks of the page (`{entity_id, at=last_seen_at, label, location, location_name}`).
+- AC-AGT-28 **Counting questions use an uncapped counting path** (UI3-01).
+  - `count_items(q?, kind?, status?, catalog_id?, location?, seen_after?)` (read + grounding tool) pages `GET /items`
+    like `people_seen` and returns `{total, by_module, complete, filters}`.
+  - The routing prompt says: "how many / count / number of" people -> `people_seen`; items -> `count_items`; never
+    count rows of a list (lists are capped).
+  - Enforced in code. A *counting question* ("how many", "count", "number of") about people (people, persons, crew,
+    astronauts, anyone...; not a handling question such as "how many people used the drill") always ends with the
+    deterministic `people_seen` answer: the harness runs `people_seen` itself (window from AC-AGT-22, else today;
+    location only when the question names exactly one place) if the model did not. A counting question about items
+    without `count_items` data runs `count_items` with the model's own `search_items` filters / `where_is` name /
+    `list_unknowns` scope when there is one.
+  - **Count claims**: a model reply may state a count ("<number> <plural noun>", and in a counting question any bare
+    number other than times, dates, durations, location ids and list markers) only if the number is a tool total of
+    this turn: `people_seen` total/by-module counts, `count_items` total/by-module counts, the API `total` of the
+    `where_is` / `search_items` / `list_unknowns` query, the `recent_changes` total, a catalog `expected_count` the
+    model saw, or any number up to the total of a complete (uncapped) list of this turn. Otherwise the reply is
+    replaced (counting data -> its deterministic answer; else the grounded summary, AC-AGT-19); the turn log records
+    `fallback: "count_unverified"`.
+  - A model reply that uses `people_seen` data always carries the track caveat (appended when missing).
+  - "How many should there be / are expected" (should, expected, supposed, normally, usually) is a catalog question:
+    no counting path is forced for it.
+  - Token budget: the specs sent to the LLM omit length/number bounds, `additionalProperties: false`, integer defaults
+    and nested model descriptions (pydantic still validates them; AC-AGT-3 feeds violations back), so the two new
+    tools fit the AC-AGT-15 bound (tool specs <= 2000 tokens, system prompt <= 650).
+- AC-AGT-29 **Deterministic operator-English rendering** (UI3-10: "new_item: …", "moved: person (actor: …)", formats
+  differing between runs, no dates, bare module codes, "and 50 more" with nothing to follow).
+  - A tool step whose calls are all `recent_changes`, `people_seen` or `count_items` (all ok), in a turn with no other
+    grounding data, ends the turn with the deterministic rendering (no further LLM call; `stop: "rendered"`).
+  - Line format: `YYYY-MM-DD HH:MM UTC: <Subject> <verb phrase>`; places as "Node 3 Tranquility (NOD3)" (bare id when
+    the name is unknown); actors as "by operator <name>" (operator source / review resolver) or "by person
+    (<appearance>)" (leading "wearing"/"in"/"crew member" removed); a move without a destination reads "moved out of
+    <from>". Example: "2026-10-18 03:14 UTC: Laptop moved from Node 3 Tranquility (NOD3) to Node 1 Unity (NOD1) by
+    operator ui-review-3". New items: "New laptop seen in Node 2 Harmony (NOD2)".
+  - Lists show at most 10 lines under a header that carries the window and the range, e.g. "Changes between
+    2026-10-18 02:20 and 2026-10-18 03:20 UTC (showing 1-10 of 52):", and end with "and N more; ask 'show more
+    changes' to continue." (people: 'show more people').
+  - **Paging:** a follow-up that only asks for more ("show more", "more", "next", "continue", "show more changes")
+    after such a reply is answered in code without the LLM: the window, location and range are read back from the
+    previous reply and the tool is called again with `offset` (`recent_changes` and `people_seen` accept `offset`;
+    `recent_changes` returns `total` and `offset`).
+  - The AC-AGT-19 grounded summary and the item lines use the same phrasing ("Laptop: last seen in Node 1 Unity
+    (NOD1) at 2026-10-18 03:14 UTC"); the short id is shown only when the label is unsafe ("Record [1234abcd]").
+- AC-AGT-30 **Person events are not objects moved by an actor** (UI3-04).
+  - `recent_changes` marks a change whose entity is a person (`entity_kind`, a person catalog id from `GET /catalog`
+    category `person`, or the item's `kind`) with `subject_kind: "person"` and `appearance` (the track description,
+    from one `GET /items?kind=person&seen_after=<since>` request, then `GET /items/{id}` for at most 10 entities
+    still unknown), and drops its `actor` (a person's own move has no separate actor; a differing
+    actor description is a data conflict, not another person). `who_moved` does the same for person entities.
+  - Rendering: "Person (grey t-shirt, dark shorts) seen in Cupola (CUP1)" (arrival), "... left US Orbital Segment
+    (USOS)" (no destination), "... left X and was seen in Y", "... first seen in X" (new track); never "moved by".
+- AC-AGT-31 **Visible token streaming** (PARTIAL UI2-16: the first text arrived at 17.1 s of 17.3 s). Root cause: a
+  live probe through the route and nginx showed every SSE frame arriving separately (no buffering), but at 0.03 s per
+  3-word chunk a whole answer streamed in about 0.4 s. Now:
+  - The stream opens with an SSE comment padded to 2 KiB (`: stream open …`), sent before the loop starts, so any
+    proxy that holds small first writes flushes and the client sees bytes immediately.
+  - Token pacing targets `AGENT_STREAM_TARGET_S` (default 1.5 s) for the whole reply: per-chunk delay =
+    target / chunks, at least `AGENT_STREAM_TOKEN_DELAY_S` (default 0.03 s) and at most 0.12 s. 0 disables the target.
+  - Tested with a real uvicorn server and a streaming HTTP client that measures token frame arrival times.

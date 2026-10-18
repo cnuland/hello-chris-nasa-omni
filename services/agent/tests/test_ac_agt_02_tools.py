@@ -29,7 +29,7 @@ from tests.fakes import (
 
 EXPECTED_READ = {
     "search_items", "get_item", "item_history", "where_is", "who_moved", "recent_changes", "list_unknowns",
-    "inventory_stats", "search_observations", "recall_memory", "lookup_catalog",
+    "inventory_stats", "search_observations", "recall_memory", "lookup_catalog", "people_seen", "count_items",
 }
 
 

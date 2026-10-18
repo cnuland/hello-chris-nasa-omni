@@ -125,6 +125,7 @@ async def test_ac_agt_25_disconnect_while_pacing_stops_cleanly():
         return {"reply": " ".join(["w"] * 200), "citations": []}
 
     gen = stream_chat_events(run, keepalive_s=5, request_id="r", token_delay_s=0.05)
+    assert (await asyncio.wait_for(gen.__anext__(), 2)).startswith(": stream open")  # AC-AGT-31
     first = await asyncio.wait_for(gen.__anext__(), 2)
     assert first.startswith("event: token")
     await gen.aclose()

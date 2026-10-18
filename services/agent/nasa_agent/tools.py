@@ -37,6 +37,8 @@ READ_TOOLS: tuple[str, ...] = (
     "search_observations",
     "recall_memory",
     "lookup_catalog",
+    "people_seen",
+    "count_items",
 )
 WRITE_TOOLS: tuple[str, ...] = ("propose_update",)
 #: Tools whose data are citable inventory facts and may ground an answer (AC-AGT-4). inventory_stats (bare counts),
@@ -53,6 +55,8 @@ GROUNDING_TOOLS = frozenset(
         "list_unknowns",
         "search_observations",
         "lookup_catalog",
+        "people_seen",
+        "count_items",
     }
 )
 #: PATCH /items fields that the contract allows to be null.
@@ -101,6 +105,19 @@ MAX_LABEL_LOOKUPS = 10
 #: free text (labels, actors) fed to the model / UI: whitespace-collapsed and capped.
 MAX_FREE_TEXT = 120
 MAX_CITATION_TEXT = 80
+#: people_seen / count_items paging over GET /items (AC-AGT-27/28): rows per request and the scan cap.
+SCAN_PAGE = 200
+MAX_SCAN_ROWS = 2000
+MAX_PEOPLE_TRACKS = 30
+PEOPLE_MAX_WINDOW = timedelta(days=7)
+#: catalog ids treated as people when GET /catalog is unavailable (AC-AGT-30).
+DEFAULT_PERSON_CATALOG_IDS = frozenset({"crew-member"})
+#: AC-AGT-27: always shown with person-track counts. The crew size is unknown to the system and never stated.
+PEOPLE_CAVEAT = (
+    "Person tracks are approximate and non-biometric: they are built from clothing and appearance, not identity, so "
+    "one person can appear as several tracks (for example after changing clothes or moving between modules) and "
+    "this may over-count people."
+)
 
 #: Words of module names that do not name a place on their own (AC-AGT-20).
 _GENERIC_PLACE_WORDS = frozenset({
@@ -181,6 +198,23 @@ class RecentChangesArgs(_Args):
         None, min_length=1, max_length=64, description="Only changes in this location_id or module name (and below)"
     )
     types: list[ChangeType] | None = Field(None, min_length=1, max_length=10, description="Default: all change types")
+    offset: int = Field(0, ge=0, le=10_000)
+
+
+class PeopleSeenArgs(_Args):
+    since: AwareDatetime | None = None
+    until: AwareDatetime | None = None
+    location: str | None = Field(None, min_length=1, max_length=64)
+    offset: int = Field(0, ge=0, le=10_000)
+
+
+class CountItemsArgs(_Args):
+    q: str | None = Field(None, min_length=1, max_length=200)
+    kind: Literal["object", "person"] | None = None
+    status: list[Status] | None = None
+    catalog_id: str | None = Field(None, min_length=1, max_length=64)
+    location: str | None = Field(None, min_length=1, max_length=64)
+    seen_after: AwareDatetime | None = None
 
 
 class NoArgs(_Args):
@@ -363,6 +397,35 @@ def _strip_titles(schema: Any) -> Any:
     return schema
 
 
+#: JSON-schema keywords left out of the specs sent to the LLM (AC-AGT-15/28 token budget). pydantic still enforces
+#: them when the arguments are validated, and a violation is fed back to the model as a tool error (AC-AGT-3).
+_LLM_SCHEMA_DROP = frozenset({"minLength", "maxLength", "minimum", "maximum", "minItems", "maxItems"})
+
+
+def _llm_compact(schema: Any, *, in_properties: bool = False) -> Any:
+    """Drop numeric/length bounds, ``additionalProperties: false``, integer defaults and nested model descriptions
+    (property names are kept even when they collide with a keyword)."""
+    if isinstance(schema, list):
+        return [_llm_compact(v) for v in schema]
+    if not isinstance(schema, dict):
+        return schema
+    out = {}
+    for k, v in schema.items():
+        if in_properties:
+            out[k] = _llm_compact(v)
+            continue
+        if k in _LLM_SCHEMA_DROP or (k == "additionalProperties" and v is False):
+            continue
+        if k == "default" and isinstance(v, int) and not isinstance(v, bool):
+            continue
+        if k == "$defs" and isinstance(v, dict):
+            out[k] = {name: _llm_compact({dk: dv for dk, dv in d.items() if dk != "description"})
+                      if isinstance(d, dict) else d for name, d in v.items()}
+            continue
+        out[k] = _llm_compact(v, in_properties=k == "properties")
+    return out
+
+
 def _compact_optional(schema: Any, keep_nullable: frozenset[str] = frozenset()) -> Any:
     """An optional field (``default: null``) is described by its non-null branch alone and without the default
     (omitting it means "not set"), so ``anyOf: [X, {type: null}]`` becomes X. Properties named in ``keep_nullable``
@@ -478,6 +541,24 @@ def _slim_catalog(row: Any) -> dict[str, Any] | None:
     }
 
 
+_PERSONISH = frozenset({"person", "crew member", "crew-member", "crewmember", "astronaut"})
+
+
+def _total(page: Any) -> int | None:
+    value = page.get("total") if isinstance(page, dict) else None
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+_APPEARANCE_LEAD_RE = re.compile(r"^(?:(?:a|an|wearing|dressed\s+in|in|with)\b\s*)+", re.IGNORECASE)
+
+
+def _appearance(text: str | None) -> str | None:
+    """Track description without a leading "wearing" / "in a" (UI3-04: "wearing a blue shirt" -> "blue shirt")."""
+    if not text:
+        return None
+    return _APPEARANCE_LEAD_RE.sub("", text).strip(" ,;") or None
+
+
 def _live(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [i for i in items if i.get("status") not in HIDDEN_STATUSES]
 
@@ -579,6 +660,20 @@ class Toolbox:
                 self._lookup_catalog,
             ),
             _ToolDef(
+                "people_seen",
+                "How many people (person tracks) were seen since a time (default: today UTC), per module, with "
+                "appearance and last sighting. For every people count / who was seen question.",
+                PeopleSeenArgs,
+                self._people_seen,
+            ),
+            _ToolDef(
+                "count_items",
+                "Exact item count (not capped) by q/kind/status/catalog_id/location/seen_after, per module. For every "
+                "item count question.",
+                CountItemsArgs,
+                self._count_items,
+            ),
+            _ToolDef(
                 "propose_update",
                 "Propose a correction to an item (label, description, catalog_id, "
                 "last_location, status, attributes, needs_review). Returns a pending proposal that an operator "
@@ -604,6 +699,8 @@ class Toolbox:
     def parameters_schema(self, name: str) -> dict[str, Any]:
         schema = _strip_titles(self._tools[name].model.model_json_schema())
         schema = _compact_optional(schema, frozenset() if self._tools[name].read_only else NULLABLE_PROPOSAL_FIELDS)
+        schema = _llm_compact(schema)
+        schema.pop("description", None)  # the tool description says it
         schema.setdefault("properties", {})
         schema["type"] = "object"
         return schema
@@ -875,8 +972,76 @@ class Toolbox:
         return self._catalog[1]
 
     async def _resolve(self, name: str, *, limit: int = MAX_RESOLVE) -> list[dict[str, Any]]:
+        return (await self._resolve_page(name, limit=limit))[0]
+
+    async def _resolve_page(self, name: str, *, limit: int = MAX_RESOLVE) -> tuple[list[dict[str, Any]], int | None]:
         page = await self.inventory.list_items({"q": name, "limit": limit})
-        return _live(page.get("items", []))[:limit]
+        return _live(page.get("items", []))[:limit], _total(page)
+
+    async def _scan_items(self, params: list[tuple[str, Any]]) -> tuple[list[dict[str, Any]], int, bool]:
+        """GET /items paged with limit/offset until the response ``total`` is reached (at most ``MAX_SCAN_ROWS``).
+        ``params`` are (key, value) pairs (repeated keys allowed). Returns (rows, API total, complete)."""
+        rows: list[dict[str, Any]] = []
+        total = 0
+        offset = 0
+        while True:
+            page = await self.inventory.list_items([*params, ("limit", SCAN_PAGE), ("offset", offset)])
+            items = [i for i in (page.get("items") or []) if isinstance(i, dict)]
+            api_total = _total(page)
+            total = api_total if api_total is not None else max(total, offset + len(items))
+            rows += items
+            offset += len(items)
+            if not items or offset >= total:
+                return rows, total, True
+            if offset >= MAX_SCAN_ROWS:
+                return rows, total, False
+
+    async def module_of(self, location_id: Any) -> str | None:
+        """The nearest ``kind=module`` ancestor-or-self of a location (else the location itself)."""
+        if not location_id:
+            return None
+        try:
+            locs = await self.locations()
+        except InventoryError:
+            return str(location_id)
+        cur, seen = locs.get(str(location_id)), set()
+        while cur is not None and cur.location_id not in seen:
+            if cur.kind == "module":
+                return cur.location_id
+            seen.add(cur.location_id)
+            cur = locs.get(cur.parent_id) if cur.parent_id else None
+        return str(location_id)
+
+    async def _by_module(self, rows: list[dict[str, Any]], names: dict[str, str | None]) -> list[dict[str, Any]]:
+        counts: dict[str | None, int] = {}
+        for r in rows:
+            key = await self.module_of(r.get("last_location"))
+            counts[key] = counts.get(key, 0) + 1
+        ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0] or "~"))
+        return [{"location": k, "location_name": names.get(k) if k else None, "count": n} for k, n in ordered]
+
+    async def person_catalog_ids(self) -> frozenset[str]:
+        """catalog ids whose category is ``person`` (GET /catalog, cached); a default when the catalog is down."""
+        try:
+            ids = frozenset(e["catalog_id"] for e in await self.catalog() if e.get("category") == "person")
+        except InventoryError:
+            return DEFAULT_PERSON_CATALOG_IDS
+        return ids or DEFAULT_PERSON_CATALOG_IDS
+
+    def _window(self, since: datetime | None, until: datetime | None, default_since: datetime,
+                max_back: timedelta) -> tuple[datetime, datetime]:
+        now = self.now()
+        since = since or default_since
+        if since > now + timedelta(minutes=1):
+            raise _Invalid("since: must not be in the future")
+        if since < now - max_back:
+            raise _Invalid(f"since: at most {max_back.days} days back")
+        end = until or now
+        if until is not None and end > now + timedelta(minutes=1):
+            raise _Invalid("until: must not be in the future")
+        if end <= since:
+            raise _Invalid("until: must be after since")
+        return since, end
 
     # ------------------------------------------------------------ handlers
     async def _search_items(self, a: SearchItemsArgs):
@@ -900,7 +1065,7 @@ class Toolbox:
         if not explicit_status:
             items = _live(items)
         data = [_slim_item(i) for i in items]
-        return data, [_cite_item(i) for i in data]
+        return data, [_cite_item(i) for i in data], {"total": _total(page)}
 
     async def _get_item(self, a: EntityArgs):
         item = await self.inventory.get_item(str(a.entity_id))
@@ -937,7 +1102,7 @@ class Toolbox:
         return data, [_cite_entity(a.entity_id, t.get("at")) for t in data[:10]]
 
     async def _where_is(self, a: NameArgs):
-        items = await self._resolve(a.name)
+        items, total = await self._resolve_page(a.name)
         data = [
             {
                 k: i.get(k)
@@ -957,7 +1122,7 @@ class Toolbox:
             for i in items
         ]
         by_id = {i.get("entity_id"): i for i in items}
-        return data, [_cite_item(by_id.get(i["entity_id"], i)) for i in data]
+        return data, [_cite_item(by_id.get(i["entity_id"], i)) for i in data], {"total": total}
 
     async def _who_moved(self, a: WhoMovedArgs):
         items = await self._resolve(a.name, limit=MAX_HANDLER_ENTITIES)
@@ -988,8 +1153,13 @@ class Toolbox:
             if entry is None:
                 entry = {"entity_id": item["entity_id"], "label": item.get("label"),
                          "last_location": item.get("last_location"), "moves": []}
+                if item.get("kind") == "person":
+                    entry["subject_kind"] = "person"
+                    entry["appearance"] = clean_text(item.get("description"))
                 index[item["entity_id"]] = entry
                 data.append(entry)
+            if item.get("kind") == "person":
+                move = {**move, "actor_desc": None}  # AC-AGT-30: a person's own track event has no actor
             entry["moves"].append(move)
             where = move.get("to_location") or move.get("from_location") or item.get("last_location")
             citations.append(_cite_item(item, move.get("occurred_at"), location=where,
@@ -997,17 +1167,7 @@ class Toolbox:
         return data, citations
 
     async def _recent_changes(self, a: RecentChangesArgs):
-        now = self.now()
-        since = a.since or now - RECENT_DEFAULT_WINDOW
-        if since > now + timedelta(minutes=1):
-            raise _Invalid("since: must not be in the future")
-        if since < now - RECENT_MAX_WINDOW:
-            raise _Invalid("since: at most 7 days back")
-        until = a.until or now
-        if a.until is not None and until > now + timedelta(minutes=1):
-            raise _Invalid("until: must not be in the future")
-        if until <= since:
-            raise _Invalid("until: must be after since")
+        since, until = self._window(a.since, a.until, self.now() - RECENT_DEFAULT_WINDOW, RECENT_MAX_WINDOW)
         location = None
         if a.location:
             location = await self._resolve_or_invalid(a.location)
@@ -1054,9 +1214,10 @@ class Toolbox:
         def loc_name(lid: Any, given: Any = None) -> str | None:
             return clean_text(given) or (names.get(lid) if lid else None)
 
+        person_ids = await self.person_catalog_ids()
         changes: list[dict[str, Any]] = []
         for e in evs:
-            changes.append({
+            change = {
                 "change": e.get("event_type"), "event_id": e.get("event_id"), "entity_id": e.get("entity_id"),
                 "label": clean_text(e.get("entity_label")),
                 "from_location": e.get("from_location"),
@@ -1064,17 +1225,26 @@ class Toolbox:
                 "to_location": e.get("to_location"),
                 "to_location_name": loc_name(e.get("to_location"), e.get("to_location_name")),
                 "actor": clean_text(e.get("actor_desc")), "at": e.get("occurred_at"), "source": e.get("source"),
-            })
+            }
+            if e.get("actor_kind") in ("operator", "person"):
+                change["actor_kind"] = e["actor_kind"]
+            if e.get("entity_kind") == "person" or e.get("entity_catalog_id") in person_ids:
+                change["subject_kind"] = "person"
+            changes.append(change)
         added = {e.get("entity_id") for e in evs if e.get("event_type") == "added"}
         for i in items:
             if i.get("entity_id") in added:
                 continue  # an operator add is already listed as its `added` event
-            changes.append({
+            change = {
                 "change": "new_item", "entity_id": i.get("entity_id"), "label": clean_text(i.get("label")),
                 "status": i.get("status"), "location": i.get("last_location"),
                 "location_name": loc_name(i.get("last_location"), i.get("last_location_name")),
                 "at": i.get("first_seen_at"),
-            })
+            }
+            if i.get("kind") == "person":
+                change["subject_kind"] = "person"
+                change["appearance"] = clean_text(i.get("description"))
+            changes.append(change)
         for r in reviews:
             subject = r.get("subject") if isinstance(r.get("subject"), dict) else {}
             resolution = r.get("resolution") if isinstance(r.get("resolution"), dict) else {}
@@ -1086,15 +1256,43 @@ class Toolbox:
                 "at": r.get("resolved_at"),
             })
         changes.sort(key=lambda c: _parse_ts(c.get("at")) or datetime.min.replace(tzinfo=UTC), reverse=True)
-        omitted = max(0, len(changes) - MAX_RECENT_CHANGES)
-        changes = changes[:MAX_RECENT_CHANGES]
-        missing = [c["entity_id"] for c in changes if c.get("entity_id") and not c.get("label")]
+        total = len(changes)
+        changes = changes[a.offset:a.offset + MAX_RECENT_CHANGES]
+        omitted = max(0, total - a.offset - len(changes))
+        # person subjects (AC-AGT-30): kind and appearance from one GET /items?kind=person for the window
+        def personish(c: dict[str, Any]) -> bool:
+            return c["change"] != "new_item" and (
+                c.get("subject_kind") == "person" or (c.get("label") or "").lower() in _PERSONISH)
+
+        if any(personish(c) for c in changes):
+            page = await self.inventory.list_items({"kind": "person", "seen_after": _iso_z(since), "limit": SCAN_PAGE})
+            people = {str(i.get("entity_id")): i for i in page.get("items") or [] if isinstance(i, dict)}
+            for c in changes:
+                person = people.get(str(c.get("entity_id"))) if personish(c) else None
+                if person is not None:
+                    c["subject_kind"] = "person"
+                    c["appearance"] = clean_text(person.get("description"))
+        # missing labels and still-unknown subjects from GET /items/{id} (at most MAX_LABEL_LOOKUPS)
+        missing = [c["entity_id"] for c in changes if c.get("entity_id") and c["change"] != "new_item" and (
+            not c.get("label") or (personish(c) and not c.get("appearance")))]
         if missing:
             found = await self._labels(missing)
             for c in changes:
                 item = found.get(c.get("entity_id"))
-                if item and not c.get("label"):
+                if not item:
+                    continue
+                if not c.get("label"):
                     c["label"] = clean_text(item.get("label"))
+                if item.get("kind") == "person":
+                    c["subject_kind"] = "person"
+                if c.get("subject_kind") == "person":
+                    c["appearance"] = clean_text(item.get("description"))
+        for c in changes:
+            if c.get("subject_kind") == "person":
+                # a person's own track event has no separate actor; a differing actor text is a data conflict
+                c["actor"] = None
+                c.pop("actor_kind", None)
+                c.setdefault("appearance", None)
         citations = []
         for c in changes:
             where = c.get("to_location") or c.get("from_location") or c.get("location")
@@ -1102,10 +1300,75 @@ class Toolbox:
             citations.append(_cite_entity(c.get("entity_id"), c.get("at"), label=c.get("label"), location=where,
                                           location_name=where_name))
         data: dict[str, Any] = {"since": _iso_z(since), "until": _iso_z(until), "location": location,
-                                "changes": changes}
+                                "total": total, "offset": a.offset, "changes": changes}
         if omitted:
             data["omitted"] = omitted
         return data, citations
+
+    async def _people_seen(self, a: PeopleSeenArgs):
+        now = self.now()
+        midnight = now.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        since, until = self._window(a.since, a.until, midnight, PEOPLE_MAX_WINDOW)
+        location = await self._resolve_or_invalid(a.location) if a.location else None
+        params: dict[str, Any] = {"kind": "person", "seen_after": _iso_z(since), "sort": "-last_seen_at"}
+        if location:
+            params["location"] = location
+        rows, api_total, complete = await self._scan_items(list(params.items()))
+        tracks: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            eid = r.get("entity_id")
+            if not eid or eid in tracks or r.get("kind", "person") != "person" or r.get("status") in HIDDEN_STATUSES:
+                continue
+            last, first = _parse_ts(r.get("last_seen_at")), _parse_ts(r.get("first_seen_at"))
+            if last is not None and last < since:
+                continue
+            if a.until is not None and first is not None and first >= until:
+                continue
+            tracks[str(eid)] = r
+        names = await self.location_names()
+        ordered = sorted(tracks.values(), key=lambda r: _parse_ts(r.get("last_seen_at")) or datetime.min.replace(
+            tzinfo=UTC), reverse=True)
+        page = ordered[a.offset:a.offset + MAX_PEOPLE_TRACKS]
+        out_tracks = []
+        citations = []
+        for r in page:
+            lid = r.get("last_location")
+            appearance = clean_text(r.get("description"))
+            out_tracks.append({
+                "entity_id": r.get("entity_id"), "appearance": _appearance(appearance),
+                "location": lid, "location_name": clean_text(r.get("last_location_name")) or names.get(lid),
+                "first_seen_at": r.get("first_seen_at"), "last_seen_at": r.get("last_seen_at"),
+            })
+            citations.append(_cite_entity(r.get("entity_id"), r.get("last_seen_at"),
+                                          label=f"Person ({_appearance(appearance)})" if appearance else "Person",
+                                          location=lid, location_name=out_tracks[-1]["location_name"]))
+        total = len(ordered) if complete else max(api_total, len(ordered))
+        data = {
+            "since": _iso_z(since), "until": _iso_z(until), "location": location,
+            "location_name": names.get(location) if location else None, "total_tracks": total,
+            "by_module": await self._by_module(ordered, names), "tracks": out_tracks, "offset": a.offset,
+            "tracks_omitted": max(0, len(ordered) - a.offset - len(page)), "complete": complete,
+            "caveat": PEOPLE_CAVEAT,
+        }
+        return data, citations
+
+    async def _count_items(self, a: CountItemsArgs):
+        location = await self._resolve_or_invalid(a.location) if a.location else None
+        filters = a.model_dump(mode="json", exclude_none=True)
+        if location:
+            filters["location"] = location
+        params: list[tuple[str, Any]] = []
+        for key, value in filters.items():
+            params += [(key, v) for v in value] if key == "status" else [(key, value)]
+        rows, api_total, complete = await self._scan_items(params)
+        if not a.status:
+            rows = _live(rows)
+        rows = [r for r in rows if a.kind is None or r.get("kind", a.kind) == a.kind]
+        unique = list({str(r.get("entity_id")): r for r in rows if r.get("entity_id")}.values())
+        names = await self.location_names()
+        total = len(unique) if complete else max(api_total, len(unique))
+        return {"total": total, "by_module": await self._by_module(unique, names), "complete": complete,
+                "filters": filters}, []
 
     async def _list_unknowns(self, a: ListUnknownsArgs):
         params: dict[str, Any] = {"status": "unknown", "limit": 100}
@@ -1135,7 +1398,7 @@ class Toolbox:
             }
             for i in items
         ]
-        return data, [_cite_item(i) for i in data], {"location": location}
+        return data, [_cite_item(i) for i in data], {"location": location, "total": _total(page)}
 
     async def _inventory_stats(self, a: NoArgs):
         return await self.inventory.stats(), []

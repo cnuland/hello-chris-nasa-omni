@@ -112,6 +112,8 @@ async def test_ac_agt_16_client_disconnect_cancels_loop_and_llm_request(make_har
     harness = make_harness(llm)
     gen = stream_chat_events(lambda on_event: harness.run(user("where is the drill?"), on_event=on_event),
                              keepalive_s=0.05, request_id="req-1")
+    opening = await asyncio.wait_for(gen.__anext__(), 2)
+    assert opening.startswith(": stream open")  # AC-AGT-31 padded comment
     first = await asyncio.wait_for(gen.__anext__(), 2)
     assert first.startswith("event: status")
     await asyncio.wait_for(llm.started.wait(), 2)

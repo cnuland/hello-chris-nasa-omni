@@ -37,6 +37,7 @@ class Settings:
     turn_deadline_s: float = 45.0  # AGENT_TURN_DEADLINE_S: wall-clock budget of one chat turn's LLM calls
     history_reply_tokens: int = 150  # AGENT_HISTORY_REPLY_TOKENS: cap per earlier assistant reply (AC-AGT-12)
     stream_token_delay_s: float = 0.03  # AGENT_STREAM_TOKEN_DELAY_S: pause between streamed reply chunks (AC-AGT-25)
+    stream_target_s: float = 1.5  # AGENT_STREAM_TARGET_S: whole-reply streaming duration target, 0 = off (AC-AGT-31)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -82,6 +83,7 @@ class Settings:
             turn_deadline_s=num("AGENT_TURN_DEADLINE_S", cls.turn_deadline_s, float),
             history_reply_tokens=num("AGENT_HISTORY_REPLY_TOKENS", cls.history_reply_tokens, int),
             stream_token_delay_s=num("AGENT_STREAM_TOKEN_DELAY_S", cls.stream_token_delay_s, float, allow_zero=True),
+            stream_target_s=num("AGENT_STREAM_TARGET_S", cls.stream_target_s, float, allow_zero=True),
         )
 
     @property

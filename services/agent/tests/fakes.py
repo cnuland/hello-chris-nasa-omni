@@ -174,6 +174,8 @@ class FakeInventory:
         self.reject_types = False
         #: when True GET /events adds entity_label (the newer API); default mirrors the deployed API (no label)
         self.event_labels = False
+        #: server-side page cap for GET /items (None = honour `limit`); exercises offset paging
+        self.max_page: int | None = None
         self.transport = httpx.MockTransport(self.handler)
 
     # -- helpers for assertions
@@ -297,7 +299,10 @@ class FakeInventory:
             items = [i for i in items if i["confidence"] >= float(q["min_confidence"][0])]
         items.sort(key=lambda i: i["last_seen_at"] or "", reverse=True)
         limit = int(q.get("limit", ["50"])[0])
-        return {"items": items[:limit], "total": len(items)}
+        offset = int(q.get("offset", ["0"])[0])
+        if self.max_page:
+            limit = min(limit, self.max_page)  # simulate a server-side page cap
+        return {"items": items[offset:offset + limit], "total": len(items)}
 
 
 def _z(value: str) -> str:

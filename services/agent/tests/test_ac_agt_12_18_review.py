@@ -40,8 +40,10 @@ async def test_review_scope_fields_do_not_ground_claims_next_to_real_changes(mak
     llm = FakeLLM([assistant_tools(tool_call("recent_changes", {"location": "LAB1"})),
                    assistant_text("The camera was moved to LAB1 at 11:40.")])
     res = await make_harness(llm).run(user("What changed in the lab?"))
-    # AC-AGT-19: the draft is replaced by the deterministic summary of the real changes (never the scope's 11:40)
-    assert "11:40" not in res["reply"] and "camera" not in res["reply"].lower()
+    # AC-AGT-29: the answer is the deterministic rendering of the real changes; the draft is never used (the window
+    # in the header is the tool's own scope, stated as such)
+    assert "camera" not in res["reply"].lower() and "LAB1 at 11:40" not in res["reply"]
+    assert res["reply"].startswith("Changes in Destiny (US Lab, LAB1) between 2026-10-01 11:40 and")
     assert res["reply"] != NO_RECORD_REPLY and "12:20 UTC" in res["reply"]
 
 
@@ -54,7 +56,9 @@ async def test_review_large_recent_changes_payload_drops_whole_changes(make_harn
                                       "from_location": "LAB1P3", "to_location": "LAB1S2",
                                       "occurred_at": f"2026-10-01T12:{n:02d}:30Z", "confidence": 0.8,
                                       "source": "pipeline"})
-    llm = FakeLLM([assistant_tools(tool_call("recent_changes", {})), assistant_text("Many uses of the drill.")])
+    # a second, non-rendered tool in the step keeps the model in the loop (AC-AGT-29), so the payload is sent
+    llm = FakeLLM([assistant_tools(tool_call("recent_changes", {}), tool_call("lookup_catalog", {"q": "wrench"})),
+                   assistant_text("Many uses of the drill.")])
     res = await make_harness(llm, settings=replace(plain_settings, tool_result_token_budget=800)).run(
         user("What changed in the last hour?"))
     msg = json.loads(next(m for m in llm.requests[1]["messages"] if m["role"] == "tool")["content"])
@@ -79,9 +83,14 @@ async def test_review_actor_text_cannot_ground_location_or_time(make_harness, tb
 
 async def test_review_actor_text_still_grounds_the_actor(make_harness, tb):
     answer = "The pistol-grip drill was moved by crew member in blue shirt at 12:20Z."
-    llm = FakeLLM([assistant_tools(tool_call("recent_changes", {})), assistant_text(answer)])
-    res = await make_harness(llm).run(user("Who moved things in the last hour?"))
+    llm = FakeLLM([assistant_tools(tool_call("who_moved", {"name": "drill"})), assistant_text(answer)])
+    res = await make_harness(llm).run(user("Who moved the drill in the last hour?"))
     assert res["reply"] == answer
+    # AC-AGT-29: a recent_changes answer is rendered, with the actor in operator English
+    llm = FakeLLM([assistant_tools(tool_call("recent_changes", {}))])
+    res = await make_harness(llm).run(user("Who moved things in the last hour?"))
+    assert "Pistol-grip drill moved from Lab port rack 3 (LAB1P3) to Lab starboard rack 2 (LAB1S2) by person " \
+           "(blue shirt)" in res["reply"]
 
 
 # ---------------------------------------------------------------- 4. timeout records reply does not echo claims
@@ -108,6 +117,7 @@ async def test_review_stream_close_leaves_no_pending_tasks(make_harness):
     harness = make_harness(llm)
     before = asyncio.all_tasks()
     gen = stream_chat_events(lambda cb: harness.run(user("q"), on_event=cb), keepalive_s=10, request_id="r")
+    await asyncio.wait_for(gen.__anext__(), 2)  # AC-AGT-31 padded opening comment
     await asyncio.wait_for(gen.__anext__(), 2)
     await asyncio.wait_for(llm.started.wait(), 2)
     pending = asyncio.ensure_future(gen.__anext__())  # blocked inside asyncio.wait (no event, long keepalive)

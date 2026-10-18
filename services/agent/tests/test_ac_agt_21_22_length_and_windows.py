@@ -174,7 +174,7 @@ async def test_ac_agt_22_text_tool_call_on_final_step_is_never_shown(make_harnes
     llm = FakeLLM([assistant_tools(tool_call("who_moved", {"name": "drill", "event_types": ["used"]})),
                    assistant_text(TEXT_CALL)], default=assistant_text(TEXT_CALL))
     r = await make_harness(llm).run(user("Who used the drill?"))
-    assert "{" not in r["reply"] and "a454e74e" in r["reply"]
+    assert "{" not in r["reply"] and "Drill used" in r["reply"]
 
 
 async def test_ac_agt_22_text_tool_call_without_data_is_invalid_reply(make_harness):
