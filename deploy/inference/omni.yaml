@@ -25,7 +25,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata: {name: omni, namespace: nasa-inference, labels: {app: omni}}
 spec:
-  replicas: 1
+  replicas: 0   # retired 2026-10-18: perception uses Gemma 4 (US-origin, QUESTIONS #31); kept for A/B comparisons
   strategy: {type: Recreate}
   selector: {matchLabels: {app: omni}}
   template:
