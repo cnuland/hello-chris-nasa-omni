@@ -52,15 +52,46 @@ def _number(value: Any) -> bool:
     return isinstance(value, int | float) and not isinstance(value, bool) and not math.isnan(value)
 
 
-def load_thresholds(path: str | Path) -> dict[str, Threshold]:
-    """Parse thresholds.yaml. Raises FileNotFoundError when absent and ValueError when malformed."""
-    p = Path(path)
+# Top-level section of thresholds.yaml with report-only targets (AC-EVAL-10): never gated, see load_report_only.
+REPORT_ONLY_KEY = "report_only"
+
+
+def _read_yaml(p: Path) -> Any:
     try:
-        data = yaml.safe_load(p.read_text())
+        return yaml.safe_load(p.read_text())
     except yaml.YAMLError as exc:
         raise ValueError(f"{p}: invalid YAML ({exc})") from exc
+
+
+def load_thresholds(path: str | Path) -> dict[str, Threshold]:
+    """Parse thresholds.yaml (the gated metrics; the ``report_only`` section is skipped). Raises FileNotFoundError
+    when absent and ValueError when malformed."""
+    p = Path(path)
+    data = _read_yaml(p)
+    if isinstance(data, dict):
+        data = {k: v for k, v in data.items() if k != REPORT_ONLY_KEY}
     if not isinstance(data, dict) or not data:
         raise ValueError(f"{p}: expected a non-empty mapping metric -> {{min|max: number}}")
+    return _parse_thresholds(p, data)
+
+
+def load_report_only(path: str | Path, section: str) -> dict[str, Threshold]:
+    """Report-only targets ``report_only.<section>`` of thresholds.yaml (same metric -> {min|max} format, validated
+    the same way); {} when the section is absent. These are never gated."""
+    p = Path(path)
+    data = _read_yaml(p)
+    block = (data or {}).get(REPORT_ONLY_KEY) if isinstance(data, dict) else None
+    if block is None:
+        return {}
+    spec = block.get(section) if isinstance(block, dict) else block
+    if spec is None:
+        return {}
+    if isinstance(spec, dict):
+        return _parse_thresholds(p, spec)
+    raise ValueError(f"{p}: {REPORT_ONLY_KEY}.{section}: expected a mapping metric -> {{min|max: number}}")
+
+
+def _parse_thresholds(p: Path, data: Mapping[str, Any]) -> dict[str, Threshold]:
     out: dict[str, Threshold] = {}
     for metric, spec in data.items():
         if not isinstance(spec, dict) or not spec:

@@ -64,6 +64,16 @@ eval: | $(EVAL)/.venv
 		--target local --db-prefix $(EVAL_DB_PREFIX) && \
 	.venv/bin/python -m nasa_eval gate
 
+# Real-video location eval (docs/spec/50-eval.md AC-EVAL-10): scores the live run of the NASA tour against its
+# caption module timeline. REPORT-ONLY (needs the live cluster, never a CI gate); read-only GETs on EVAL_REAL_API,
+# or EVAL_REAL_ARGS="--export export.json" (see `python -m nasa_eval.real.score_run --help`). Report: eval/reports/real.
+EVAL_REAL_API ?= https://dashboard-nasa-app.apps.bgrr25lx.eastus.aroapp.io/api
+EVAL_REAL_SRT ?= $(HOME)/nasa-media/iss-tour/tour.srt
+EVAL_REAL_ARGS ?= --api $(EVAL_REAL_API)
+.PHONY: eval-real
+eval-real: | $(EVAL)/.venv
+	cd $(EVAL) && .venv/bin/python -m nasa_eval.real.score_run $(EVAL_REAL_ARGS) --srt "$(EVAL_REAL_SRT)"
+
 # ------------------------------------------------------------------------------------------------ lint
 lint: | $(PY_VENVS) $(UI)/node_modules
 	cd $(API) && .venv/bin/ruff check .

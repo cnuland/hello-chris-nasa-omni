@@ -660,3 +660,32 @@ Details in `docs/tdd-log/integration.md` §1. Summary:
     database is dropped, `source == "replay"` and every window was posted.
 - **Result:** 329 passed, 1 skipped (by design), 1 deselected. `make test` passes in `eval/`.
 - **Proposal:** add `false_merge_rate: {max: 0.05}` to `thresholds.yaml`. A twin swap passed the current gates.
+
+## AC-EVAL-10 real-video location eval (2026-10-18, eval engineer)
+
+Why: every gate ran on synthetic scenes, and real-model failures slipped past them (omni repeats, revisit
+duplicates, people only in `people[]`). The NASA tour captions give free module-level ground truth.
+
+- **Spec first:** AC-EVAL-10 in `docs/spec/50-eval.md`.
+- **Red:** `tests/test_ac_eval_10_srt_truth.py` (21 tests: SRT parsing with BOM/CRLF/malformed blocks, seed-derived
+  aliases, title vs description cues, unmapped modules, segment boundaries, the real `tour.srt` sequence) and
+  `tests/test_ac_eval_10_score_run.py` (15 tests: a hand-computed six-window run, alignment offset, loop wrap, modal
+  tie-break, empty run, httpx `MockTransport` fake API with paging and read-only GETs, JSON export incl. a window
+  without sightings, malformed export, read-only export SQL, reports, CLI, report-only thresholds). Both failed on
+  import (no `nasa_eval.real`).
+- **Green:** `nasa_eval/real/srt_truth.py`, `nasa_eval/real/score_run.py`; `gate.load_thresholds` skips the new
+  `report_only` section and `gate.load_report_only` reads it; `thresholds.yaml` `report_only.real_video`
+  (`window_location_acc >= 0.7`); `make eval-real` (top-level Makefile, eval section). 401 passed, 1 skipped;
+  ruff clean; `make eval` still passes.
+- **Design notes:**
+  - The tour also names Quest Airlock, the PMAs and Poisk, which the seed has no location for. They start
+    *unmapped* segments (not scored), so Cupola or Nauka are not wrongly stretched over them.
+  - After the Poisk title (09:00) only topic cards follow (International Partnership, ECLSS, Crew Earth
+    Observations, ...). The Poisk segment therefore runs to the end of the video and those windows are not scored.
+    The truth there is unknown: ECLSS is probably in Node 3, and the model said NOD3 at 10:55.
+  - The API has no window list, so API mode rebuilds windows from sighting times. On the live run it matched the
+    psql export window for window (40 vs 41: one window was created between the two reads).
+- **First live measurement** (Gemma 4 tour run, 2026-10-18 03:02–03:22 UTC, 40 windows, 2 passes):
+  `window_location_acc` 0.391 (9/23 scored), `module_coverage` 0.667 (6/9). All 14 misses are `unresolved`: the
+  window's sightings sit at segment level `USOS`. No window predicted a wrong module. The bottleneck is resolving
+  the location hint to a module, not confusing modules. Target 0.7 missed (report-only).

@@ -17,3 +17,9 @@ person_tracks_per_person: {max: 1.5}
 sleep_window_media: {max: 0}
 # ... and records no person sighting there (perception AC-PER-36: nobody is tracked inside a private zone).
 sleep_window_person_sightings: {max: 0}
+# Real-video eval on the NASA ISS tour (docs/spec/50-eval.md AC-EVAL-10, `make eval-real`): REPORT-ONLY targets,
+# never gated (`gate` skips `report_only`; scoring needs the live cluster). The report lists each as met / missed.
+report_only:
+  real_video:
+    # windows whose modal sighting module equals the caption module at the window's mid time / scored windows
+    window_location_acc: {min: 0.7}

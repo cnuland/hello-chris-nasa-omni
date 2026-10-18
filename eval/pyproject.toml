@@ -35,7 +35,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["nasa_eval"]
+packages = ["nasa_eval", "nasa_eval.real"]
 
 [tool.setuptools.package-data]
 nasa_eval = ["schemas/*.json"]
