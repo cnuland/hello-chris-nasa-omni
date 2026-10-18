@@ -189,3 +189,14 @@ I need from you.
     - **Rest of the US-origin stack, planned:** chat Qwen3-8B → Gemma 4 12B QAT-W4A16 (text-only fp16 is fine on
       T4); ASR Qwen3-ASR → Whisper large-v3-turbo (MIT). Decision (DiffusionGemma), OWLv2 (Google) and DINOv2 (Meta)
       are already US-origin.
+32. **Chatbot after round 2, live on Gemma 4 chat (2026-10-18).** All 5 standard questions in one conversation were
+    answered correctly in 10–21 s; round 2 had 3 wrong, at up to 64 s. One P3 left: the "usual stowage" rewrite plus
+    list renumbering leaves a garbled tail ("…is usually kept in the following location: 1.").
+33. **Gemma run findings (in progress under TDD).**
+    1. **Person tracks regressed to 0.** Gemma reports people only in `people[]`, with good non-biometric
+       descriptions ("blue flight suit with American flag patch"). The reconciler only built person entities from
+       "person" objects, which Qwen also listed.
+    2. **Privacy gap.** Gemma described "dark hair, sleeping in a blue sleeping bag" in Harmony, the module with the
+       crew quarters. The window was not flagged no_capture. The fix adds sleep cues to the fail-closed privacy rule.
+       The footage is NASA's public tour video, so nothing private has leaked, but the policy must catch this.
+       **Need:** confirm NASA wants sleep cues treated as crew quarters (it will also catch stowed sleeping bags).
