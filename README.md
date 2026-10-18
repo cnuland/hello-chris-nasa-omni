@@ -14,17 +14,23 @@ Station* tour video. This is experimental; known limits are listed below and in 
 
 | Namespace | Component | What it does |
 |---|---|---|
-| `nasa-inference` | **vLLM-Omni** serving Qwen2.5-Omni-7B, thinker only (fp16, TP2 on T4) | Takes 6 frames + audio per window and returns a structured observation: objects, people, events, location hint |
-| | **Qwen3-ASR-1.7B** (vLLM) | Speech transcript of record |
-| | **Qwen3-8B-AWQ** (vLLM, tool calling) | Chatbot / inventory agent |
+| `nasa-inference` | **Gemma 4 12B** (Google, Apache-2.0), plain vLLM, fp32 TP4 on T4 | Perception omni model. Takes 6 frames + speech audio per window and returns a structured observation: objects with boxes, people (appearance only), events, location hint |
+| | **Gemma 4 12B QAT-W4A16** (vLLM, gemma4 tool parser) | Chatbot / inventory agent |
+| | **Whisper large-v3-turbo** (OpenAI, MIT) | Speech transcript of record |
 | | **DiffusionGemma-26B INT8** (vLLM TP4) + structured decision server | Decision model: "same object or new?" and speech-act classification, with calibrated probabilities |
-| `nasa-app` | **perception** (Python, own T4) | ffmpeg ingest, then OWLv2 detection + DINOv2 embeddings, then omni window, then the closed-world reconciler (dedup), then the inventory API |
-| | **inventory-api** (FastAPI) | Source-of-truth API: items, review queue, merges with full undo detail, events, search, media |
-| | **agent** (+ MCP server) | Grounded chatbot that cites entity, window and catalog IDs; refuses ungrounded answers; inventory-first "dreaming" memory |
-| | **dashboard** (React + nginx) | Inventory with filters, review queue, overview and events, add/edit items, chat |
+| `nasa-app` | **perception** (Python, own T4) | ffmpeg ingest, then OWLv2 (Google) detection + DINOv2 (Meta) embeddings, then Gemma window, then closed-world reconciler (dedup, revisit, person tracks, privacy), then the inventory API |
+| | **inventory-api** (FastAPI) | Source-of-truth API: items, review queue, merge and unmerge, ranked duplicate candidates, events, search, media |
+| | **agent** (+ MCP server) | Grounded chatbot. It cites items, windows and catalog entries, works out time windows itself, and falls back to answers built only from tool data; MCP attach point for OpenClaw Enterprise |
+| | **dashboard** (React + nginx) | Inventory with filters, review queue (side-by-side duplicates, merge/undo, bbox overlays), overview, add/edit, chat with live status |
 | `nasa-data` | **Postgres 16 + pgvector** (CloudNativePG, 2 instances) | Inventory database, the source of truth |
-| | **RustFS** (S3, Apache-2.0) | Frames, crops, evidence images, raw omni replies, operator photos |
+| | **RustFS** (S3, Apache-2.0) | Frames, crops, evidence images, raw model replies, operator photos |
 | `opendatahub` | **Open Data Hub 3.3** | KServe (RawDeployment), dashboard, TrustyAI, model registry |
+
+**Every model is US-origin** (Google, OpenAI, Meta). Qwen2.5-Omni was the first omni model and is retired (kept at 0
+replicas for A/B tests). On 8 NASA windows Gemma 4 gave 0 whole-frame junk boxes out of 50 objects, against Qwen's
+35 of 73, and named specific ISS hardware. NVIDIA Cosmos Reason is post-trained from Qwen-VL; see
+`research/07-us-models.md` for that and for the Nemotron 3 Nano Omni option on GB10. **Production target:** a Dell GB10
+on the ISS. A single-node, untested profile with a memory budget and checklist is in [`deploy/gb10/`](deploy/gb10/).
 
 The design, requirements (R1 to R12) and decisions are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The
 research behind it (vLLM-Omni realtime, tracking and dedup, audio fusion, the ISS domain, agent memory, decision
@@ -70,16 +76,34 @@ make lint
 
 | Suite | Tests |
 |---|---|
-| inventory-api | 336 |
-| perception | 717 |
-| agent | 340 |
-| eval | 340 |
-| dashboard | 190 |
-| end-to-end | 19 |
+| inventory-api | 450 |
+| perception | 824 |
+| agent | 513 |
+| eval | 365 |
+| dashboard | 341 |
+| end-to-end | 27 |
 
-The eval gates are duplicate rate, pairwise F1, location accuracy, unknown recall, sighting recall and chatbot QA. They
-include omni profiles that reproduce the real model's behaviour seen on the cluster: repeating objects in every frame,
-and replies cut off at the token limit.
+**Product review loop.** A Playwright reviewer agent drives the live dashboard, takes screenshots and judges them
+against the diagram and specs (`docs/ui-review/`). Each round's findings become spec amendments, failing tests, fixes
+and redeploys.
+
+| Round | Result |
+|---|---|
+| 1 | 22 findings (3 P1) |
+| 2 | 14 of 22 fixed, 0 regressions, 17 new findings |
+| Round-2 fixes (live check) | the five standard chat questions now answer correctly in one conversation, in 10–21 s, down from up to 64 s |
+
+The eval gates cover:
+- duplicate rate and pairwise F1;
+- location accuracy;
+- unknown recall and sighting recall;
+- **revisit duplication** (the same scene again after 15 min);
+- **person-track recall**;
+- **no media from sleep-cue (crew quarters) windows**;
+- chatbot QA.
+
+They include omni profiles that copy real model behaviour seen on the cluster: objects repeated in every frame,
+replies cut off at the token limit, and people reported only in `people[]`.
 
 ## Deploying
 
