@@ -221,3 +221,12 @@ I need from you.
     **0 wrong modules**. The 4 remaining misses are unresolved: Zarya ×2, Columbus ×1, Zvezda ×1. Inventory now
     spreads across real modules, not USOS. 2 of 31 windows were private, sleep cue plus hold.
     **Open:** person tracks still over-count (21 tracks); a cross-module continuity fix is under TDD.
+37. **P1 face crop (UI4-01), handled 2026-10-18 about 05:00 UTC.**
+    - **What happened:** a misplaced Gemma/OWLv2 "window" box cropped a crew member's face. The crop was stored,
+      embedded and shown in the review queue.
+    - **Purged:** the S3 object (URL now 404), the exemplar, the snapshot and the review image (replaced with a
+      privacy placeholder), with an audit row.
+    - **Perception paused** until the prevention fix is deployed: object crops overlapping any person region are
+      dropped, along with a structure denylist.
+    - **Need:** NASA's policy on whole frames that show faces. They are stored today, as the system's evidence of
+      record; crops of faces are never allowed.
