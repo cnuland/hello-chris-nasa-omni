@@ -22,6 +22,17 @@ export interface Item {
   review_reason?: string | null;
   last_moved_by?: string | null;
   last_moved_at?: string | null;
+  /** Latest moved/used/handed_over event (UI review AC-UI-12). Optional: older APIs omit it. */
+  last_handled?: LastHandled | null;
+  /** When / by whom last_location was last set (operator edit or pipeline). Operator edits no longer bump last_seen_at. */
+  location_set_at?: string | null;
+  location_set_by?: string | null;
+}
+
+export interface LastHandled {
+  event_type?: string | null;
+  actor_desc?: string | null;
+  occurred_at?: string | null;
 }
 
 export interface ItemPage {
@@ -40,6 +51,11 @@ export interface Event {
   confidence?: number;
   evidence_url?: string | null;
   source?: string;
+  /** Joined display fields (AC-UI-18); optional. */
+  entity_label?: string | null;
+  entity_catalog_id?: string | null;
+  from_location_name?: string | null;
+  to_location_name?: string | null;
 }
 
 export interface ItemDetail extends Item {
@@ -54,6 +70,11 @@ export interface TimelineEntry {
   location_id?: string | null;
   summary?: string;
   image_url?: string | null;
+  /** If the API collapses repeated rows itself, the number of rows this entry stands for (AC-UI-17). */
+  count?: number;
+  /** Collapsed entries only: time of the oldest folded audit. */
+  first_at?: string | null;
+  audit_ids?: string[];
 }
 
 export interface CatalogItem {
@@ -74,13 +95,41 @@ export interface Location {
   display_name: string;
 }
 
+/** Compact entity summary attached to review items (AC-UI-13). Every field is optional except entity_id. */
+export interface ReviewEntity {
+  entity_id: string;
+  label?: string | null;
+  catalog_id?: string | null;
+  status?: string | null;
+  last_location?: string | null;
+  last_location_name?: string | null;
+  last_seen_at?: string | null;
+  confidence?: number | null;
+  thumbnail_url?: string | null;
+  /** Older payloads carry full Items (snapshot_url instead of thumbnail_url). */
+  snapshot_url?: string | null;
+  sighting_count?: number | null;
+}
+
+export interface ReviewCandidate extends ReviewEntity {
+  similarity?: number | null;
+}
+
+/** Normalised [x1, y1, x2, y2] in 0..1 relative to image_url. */
+export type BBox = [number, number, number, number];
+
 export interface ReviewItem {
   review_id: string;
   kind: string;
   entity_id?: string | null;
   candidate_ids?: string[];
-  candidates?: Item[];
-  image_url: string;
+  candidates?: ReviewCandidate[];
+  /** stored = candidate_ids expanded; suggested = server's nearest same-class items; none. */
+  candidates_source?: 'stored' | 'suggested' | 'none' | null;
+  subject?: ReviewEntity | null;
+  image_bbox?: BBox | null;
+  created_at?: string | null;
+  image_url: string | null;
   description: string;
   observed_at: string;
   location_id?: string | null;
@@ -148,8 +197,19 @@ export interface ChatResponse {
 /** Events emitted by POST /agent/chat/stream (SSE): `event: token` {text}, `event: done` ChatResponse, `event: error` {detail}. */
 export type ChatStreamEvent =
   | { type: 'token'; text: string }
+  /** Progress while the agent works (AC-UI-21): optional free text and/or the tool being called. */
+  | { type: 'status'; text?: string; tool?: string }
   | { type: 'done'; response: ChatResponse }
   | { type: 'error'; detail: string };
+
+/** Review queue filters (AC-UI-16). Keys map 1:1 to GET /review params. */
+export interface ReviewFilters {
+  kind?: string;
+  location?: string;
+  q?: string;
+  sort?: 'observed_at' | 'created_at';
+  order?: 'asc' | 'desc';
+}
 
 /** Inventory filter state (AC-UI-2/3). Keys map 1:1 to GET /items query params. */
 export interface Filters {

@@ -21,6 +21,7 @@ export default function AddItemPage() {
   const [catalogId, setCatalogId] = useState('');
   const [description, setDescription] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [touched, setTouched] = useState<{ label?: boolean; location?: boolean }>({});
   const [operator, setOperator] = useOperator();
 
   const preview = useMemo(() => (image ? URL.createObjectURL(image) : null), [image]);
@@ -40,6 +41,10 @@ export default function AddItemPage() {
   };
 
   const valid = !!image && label.trim() !== '' && location !== '';
+  // AC-UI-23 (UI-20): explain every missing required field once touched, and next to the (disabled) submit button.
+  const labelErr = touched.label && !label.trim();
+  const locationErr = touched.location && !location;
+  const missing = [!image && 'an image', !label.trim() && 'a label', !location && 'a location'].filter(Boolean) as string[];
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -73,7 +78,7 @@ export default function AddItemPage() {
       <form className="card form" aria-label="Add item" noValidate onSubmit={submit}>
         <div className="field">
           <label htmlFor="a-image">Image</label>
-          <input id="a-image" type="file" accept="image/*" aria-describedby="a-image-msg" required onChange={onImage} />
+          <input id="a-image" type="file" accept="image/*" aria-describedby="a-image-msg" aria-invalid={!image} required onChange={onImage} />
           {!image && (
             <p id="a-image-msg" className="field-error">
               {imageRejected ? 'Image is required: the chosen file is not an image.' : 'Image is required.'}
@@ -84,14 +89,20 @@ export default function AddItemPage() {
         <div className="grid2">
           <div className="field">
             <label htmlFor="a-label">Label</label>
-            <input id="a-label" value={label} required onChange={(e) => setLabel(e.target.value)} />
+            <input id="a-label" value={label} required aria-invalid={labelErr || undefined}
+              aria-describedby={labelErr ? 'a-label-msg' : undefined}
+              onBlur={() => setTouched((t) => ({ ...t, label: true }))} onChange={(e) => setLabel(e.target.value)} />
+            {labelErr && <p id="a-label-msg" className="field-error">Label is required.</p>}
           </div>
           <div className="field">
             <label htmlFor="a-location">Location</label>
-            <select id="a-location" value={location} required onChange={(e) => setLocation(e.target.value)}>
+            <select id="a-location" value={location} required aria-invalid={locationErr || undefined}
+              aria-describedby={locationErr ? 'a-location-msg' : undefined}
+              onBlur={() => setTouched((t) => ({ ...t, location: true }))} onChange={(e) => setLocation(e.target.value)}>
               <option value="">Choose a location…</option>
               <LocationOptions options={locationOptions} />
             </select>
+            {locationErr && <p id="a-location-msg" className="field-error">Location is required.</p>}
           </div>
           <div className="field">
             <label htmlFor="a-catalog">Catalog</label>
@@ -110,7 +121,12 @@ export default function AddItemPage() {
           <input id="a-operator" value={operator} autoComplete="name" onChange={(e) => setOperator(e.target.value)} />
         </div>
         <div className="actions">
-          <button type="submit" className="primary" disabled={!valid || submitting}>Add item</button>
+          <button type="submit" className="primary" disabled={!valid || submitting} aria-describedby={missing.length ? 'a-missing' : undefined}>
+            Add item
+          </button>
+          {missing.length > 0 && (
+            <p id="a-missing" className="muted small">{`To add the item, provide ${missing.join(', ')}.`}</p>
+          )}
         </div>
       </form>
     </div>

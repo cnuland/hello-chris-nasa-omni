@@ -10,7 +10,9 @@ import {
   DEFAULT_SORT, KINDS, PAGE_SIZE, SEARCH_DEBOUNCE_MS, SORT_KEYS, STATUSES, filtersFromSearch, filtersToItemsQuery,
   filtersToSearch,
 } from '../lib/filters';
-import { formatRelative, formatUtc, isoToLocalInput, localInputToIso } from '../lib/format';
+import { Timestamp } from '../components/Timestamp';
+import { LastHandledCell } from '../components/LastHandled';
+import { isoToLocalInput, localInputToIso } from '../lib/format';
 import { useLocations } from '../state/reference';
 import { useToasts } from '../state/toasts';
 
@@ -24,6 +26,10 @@ const SORT_LABELS: Record<SortKey, string> = {
 };
 
 const DASH = '—';
+const QUICK_RANGES = [
+  { label: 'Last 1 h', ms: 3600_000 },
+  { label: 'Last 24 h', ms: 24 * 3600_000 },
+];
 
 function ItemRow({ item }: { item: Item }) {
   return (
@@ -53,10 +59,43 @@ function ItemRow({ item }: { item: Item }) {
         )}
       </td>
       <td>
-        <span title={formatUtc(item.last_seen_at) || undefined}>{formatRelative(item.last_seen_at)}</span>
+        <Timestamp iso={item.last_seen_at} stacked />
       </td>
-      <td>{item.last_moved_by || <span className="muted">{DASH}</span>}</td>
+      <td><LastHandledCell item={item} /></td>
     </tr>
+  );
+}
+
+/** "YYYY-MM-DD HH:MM" (or with a T) typed as UTC -> ISO, undefined while incomplete/invalid. */
+function typedUtcToIso(v: string): string | undefined {
+  const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})$/.exec(v.trim());
+  return m ? localInputToIso(`${m[1]}T${m[2]}`) : undefined;
+}
+
+/** AC-UI-23 (UI-15): 24-hour UTC text entry instead of the locale datetime picker; commits once complete or cleared. */
+function UtcInput({ id, label, value, onCommit }: { id: string; label: string; value?: string; onCommit: (iso?: string) => void }) {
+  const shown = isoToLocalInput(value).replace('T', ' ');
+  const [text, setText] = useState(shown);
+  useEffect(() => setText(shown), [shown]);
+  const invalid = text.trim() !== '' && !typedUtcToIso(text);
+  return (
+    <div className="field">
+      <label htmlFor={id}>{label}</label>
+      <input id={id} type="text" inputMode="numeric" placeholder="YYYY-MM-DD HH:MM" value={text} spellCheck={false}
+        aria-invalid={invalid} aria-describedby={`${id}-hint`}
+        onChange={(e) => {
+          const v = e.target.value;
+          setText(v);
+          if (!v.trim()) onCommit(undefined);
+          else {
+            const iso = typedUtcToIso(v);
+            if (iso) onCommit(iso);
+          }
+        }} />
+      <span id={`${id}-hint`} className={invalid ? 'field-error' : 'muted small'}>
+        {invalid ? 'Use YYYY-MM-DD HH:MM (24 h, UTC).' : '24 h, UTC'}
+      </span>
+    </div>
   );
 }
 
@@ -128,6 +167,12 @@ export default function InventoryPage() {
     update({ status: STATUSES.filter((x) => cur.has(x)) });
   };
 
+  const hasFilters = filtersToSearch({ ...filters, sort: undefined, offset: undefined }).toString() !== '';
+  const resetFilters = () => {
+    setText('');
+    setParams(filtersToSearch({ sort: filters.sort }));
+  };
+
   const offset = filters.offset ?? 0;
   const total = page?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -165,20 +210,23 @@ export default function InventoryPage() {
           <div className="range-row">
             <input
               id="f-conf" type="range" min={0} max={1} step={0.05} value={filters.min_confidence ?? 0}
+              aria-valuetext={`${Math.round((filters.min_confidence ?? 0) * 100)}%`}
               onChange={(e) => update({ min_confidence: Number(e.target.value) || undefined })}
             />
             <span className="muted" aria-hidden="true">{`${Math.round((filters.min_confidence ?? 0) * 100)}%`}</span>
           </div>
         </div>
-        <div className="field">
-          <label htmlFor="f-after">Seen after (UTC)</label>
-          <input id="f-after" type="datetime-local" value={isoToLocalInput(filters.seen_after)}
-            onChange={(e) => update({ seen_after: localInputToIso(e.target.value) })} />
-        </div>
-        <div className="field">
-          <label htmlFor="f-before">Seen before (UTC)</label>
-          <input id="f-before" type="datetime-local" value={isoToLocalInput(filters.seen_before)}
-            onChange={(e) => update({ seen_before: localInputToIso(e.target.value) })} />
+        <UtcInput id="f-after" label="Seen after (UTC)" value={filters.seen_after} onCommit={(iso) => update({ seen_after: iso })} />
+        <UtcInput id="f-before" label="Seen before (UTC)" value={filters.seen_before} onCommit={(iso) => update({ seen_before: iso })} />
+        <div className="field quick-ranges" role="group" aria-label="Quick time ranges">
+          <span className="field-label" aria-hidden="true">Quick range</span>
+          <div className="actions-inline">
+            {QUICK_RANGES.map((r) => (
+              <button key={r.label} type="button" onClick={() => update({ seen_after: new Date(Date.now() - r.ms).toISOString(), seen_before: undefined })}>
+                {r.label}
+              </button>
+            ))}
+          </div>
         </div>
         <fieldset className="field status-group">
           <legend>Status</legend>
@@ -189,15 +237,20 @@ export default function InventoryPage() {
             </label>
           ))}
         </fieldset>
-        <label className="check field">
-          <input type="checkbox" checked={filters.needs_review ?? false} onChange={(e) => update({ needs_review: e.target.checked || undefined })} />
-          Needs review
-        </label>
+        <div className="field needs-review-field">
+          <label className="check">
+            <input type="checkbox" checked={filters.needs_review ?? false} onChange={(e) => update({ needs_review: e.target.checked || undefined })} />
+            Needs review
+          </label>
+        </div>
         <div className="field">
           <label htmlFor="f-sort">Sort</label>
           <select id="f-sort" value={filters.sort ?? DEFAULT_SORT} onChange={(e) => update({ sort: e.target.value as SortKey })}>
             {SORT_KEYS.map((k) => <option key={k} value={k}>{SORT_LABELS[k]}</option>)}
           </select>
+        </div>
+        <div className="field">
+          <button type="button" disabled={!hasFilters} onClick={resetFilters}>Reset filters</button>
         </div>
       </form>
 
@@ -216,7 +269,7 @@ export default function InventoryPage() {
               <th scope="col">Confidence</th>
               <th scope="col">Last location</th>
               <th scope="col">Last seen</th>
-              <th scope="col">Moved by</th>
+              <th scope="col">Last handled</th>
             </tr>
           </thead>
           <tbody>

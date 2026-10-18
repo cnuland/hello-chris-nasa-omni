@@ -231,3 +231,99 @@ guard.
   GET /items/{id}.
 - **Agent contract:** the dashboard sets `operator` (human) and `note: "via agent proposal <proposal_id>"` on confirm and
   drops any model-supplied operator/note. This matches `ProposalFields`' docstring. No contract change is needed.
+
+## UI-review fixes (2026-10-17, developer)
+
+Input: `docs/ui-review/REPORT.md`, `findings.json` and the screenshots (live Playwright review). Spec: new
+AC-UI-11 to AC-UI-23 in `docs/spec/40-dashboard.md`, with AC-UI-1/4/7/8 amended. API fields used come from the
+contract in progress (`contracts/openapi/inventory-api.yaml`, inventory-api agent). All of them are optional, and
+every AC is tested with and without them.
+
+### Result
+
+**269 tests in 16 files: 269 passed, 0 failed, 0 skipped** (`npx vitest run`, three runs in a row all green). The
+previous count was 190; 79 tests were added in 4 new files:
+
+| File | Tests |
+|---|---|
+| `tests/ac_ui_11_12_23_inventory_polish.test.tsx` | 20 |
+| `tests/ac_ui_12_17_18_detail_overview.test.tsx` | 11 |
+| `tests/ac_ui_13_16_review_ui.test.tsx` | 27 |
+| `tests/ac_ui_19_22_chat_ui.test.tsx` | 21 |
+
+`npx tsc --noEmit -p .` and `npm run typecheck` are clean. `npm run build` succeeds.
+
+**Red evidence.** The new and amended test files were run against a clean `HEAD` checkout of `dashboard/` (temporary
+git worktree, with sessionStorage cleared in setup):
+
+- the review and chat files fail at import (`FrameImage`, `lib/markdown`, `state/chatSession` do not exist);
+- the other files fail 36 of 52 tests (19/20 inventory, 11/11 detail/overview, 5 amended review tests, 1 amended
+  edit test).
+
+The one inventory test that passed is a negative guard ("no Location set fact without `location_set_*`").
+
+**Amended existing tests** (intended behaviour changes):
+
+- `ac_ui_07`: dismiss now goes through the confirm step (`dismissCard` helper). The merge button is named "Merge
+  subject into this: <label> …".
+- `ac_ui_05`: the "Movements" list is now "Activity".
+- `tests/setup.ts` also clears sessionStorage and the item cache after each test.
+
+### Findings -> fix -> tests
+
+| Finding | Pri | Fix | Tests |
+|---|---|---|---|
+| UI-03 duplicate cards cannot support a merge | P1 | `DuplicateCompare` puts the subject (`subject`, or cached GET /items/{entity_id}) next to a candidate grid. Each shows: thumbnail (`thumbnail_url` → `snapshot_url`), label link, short id, catalog, location name + code, UTC + relative last seen, confidence bar, sightings, similarity. Each candidate has a uniquely named "Merge subject into this" button (`merge_into`). "Not a duplicate (keep both)" posts `assign_catalog` with the subject catalog and label: the contract has no keep action, and `dismiss` would mark the subject dismissed. The empty state says so and links to an inventory search. `candidates_source: suggested` is labelled. | `ac_ui_13_16` AC-UI-13 ×9 |
+| UI-04 moved-by fragments, only `moved` shown | P2 | Column "Last handled" from `last_handled` (verb + `actorPhrase` + UTC), falling back to `last_moved_*`. Detail "Activity" lists every event type, newest first: "from A to an unknown location" (no `?`), names + codes, evidence frame with lightbox. | `ac_ui_11_12_23` AC-UI-12 ×7, `ac_ui_12_17_18` AC-UI-12 ×3 |
+| UI-07 relative-only time, UTC hover-only | P2 | `Timestamp` shows `<time>` "YYYY-MM-DD HH:MM UTC" plus the relative time visibly (full seconds kept in `title`). Used in the inventory, detail facts, review cards and tiles, overview feed and citation chips. | `ac_ui_11_12_23` AC-UI-11 ×3 (+ assertions in review/overview/chat files) |
+| UI-08 whole frames, no box, no enlarge | P2 | `FrameImage`: validated `image_bbox` overlay (CSSOM percentages, CSP-safe), 320 px review images, click-to-enlarge `Lightbox`. The lightbox has `role=dialog`, `aria-modal`, focus on Close, a Tab trap, Esc/backdrop/Close to close, and returns focus to the trigger. Also used for the detail hero and activity evidence. | `ac_ui_13_16` AC-UI-14 ×5 |
+| UI-09 operator edit looks like a sighting | P2 (UI part) | Facts now show "Last sighting" (last_seen_at) and "Location set by X at T" (`location_set_by/at`) separately. The API no longer bumps last_seen_at on edits (inventory-api agent). | `ac_ui_11_12_23` ×2 |
+| UI-10 one-click dismiss, consequence unstated | P2 | "Dismiss…" opens an inline confirm step whose text depends on the kind: it marks the item dismissed and hides it from the default inventory; on duplicates it suggests keep both; with no entity, no item is affected. Cancel closes the step. | `ac_ui_13_16` AC-UI-15 ×4, `ac_ui_07` amended |
+| UI-11 no filters, sort or item link | P2 | Kind tabs with `/stats` counts (aria-pressed), location select, debounced search, created/observed × newest/oldest sort. URL-backed and 1:1 to GET /review params. `X-Total-Count` drives "Showing N of M"; without it the filters are applied client-side. "Open item" and "History" (`#history`, scrolls) links. A ref-based URL merge stops the debounced search from overwriting a newer sort. | `ac_ui_13_16` AC-UI-16 ×9 |
+| UI-12 history flooded by pipeline audits | P2 | `groupTimeline` folds consecutive identical audit rows ("14 × update by pipeline"), adds up API `count`/`first_at` (the API collapses by default), and has a disclosure for the folded rows. Kind filter chips with counts. | `ac_ui_12_17_18` AC-UI-17 ×5 |
+| UI-13 overview ids and fragments | P2 | `entity_label` (falling back to "item <short id>"), `*_location_name` (falling back to codes), `actorPhrase`, one-sided routes "to/from/at X", no route when both ends are missing, `Timestamp`. | `ac_ui_12_17_18` AC-UI-18 ×3 |
+| UI-06 raw Markdown and opaque citations | P2 | `lib/markdown.tsx`: safe subset built from React elements only. Raw HTML stays text and Markdown links never become anchors. Only cited UUIDs become item links named by label. Citation chips read "label (location) · time" via the `state/itemCache` (60 s TTL, failures cached as null). | `ac_ui_19_22` AC-UI-19 ×7, AC-UI-20 ×3 |
+| UI-05 no visible progress (UI part) | P2 | `role=status` "Thinking: looking up the inventory…" with elapsed seconds (aria-hidden, so it is not re-announced) and tools from optional SSE `status` / `tool_call` / `tool` / `tool_start` events (validated). "Looked up with: …" from `tool_calls`. Stop button aborts and keeps partial text marked "Stopped". | `ac_ui_19_22` AC-UI-21 ×4 |
+| UI-02 errors only as a toast (UI part) | P1 (UI part) | In-stream `error` and HTTP failures also appear inline in the conversation ("The agent could not answer: …"). | `ac_ui_19_22` AC-UI-21 ×1 |
+| UI-14 conversation lost on navigation | P2 | `state/chatSession.ts` stores messages and a `session_id` in sessionStorage (`nasa-omni.chat.v1`). An interrupted stream is restored as a failed question. "New chat" clears it and makes a new session id. | `ac_ui_19_22` AC-UI-22 ×4 |
+| UI-19 failed request loses the question | P3 | The question is marked "No answer" with Retry, which drops the failed turn and resends. | `ac_ui_19_22` AC-UI-22 ×1 |
+| UI-01 follow-ups fail (UI mitigation) | P1 (UI part) | Requests now carry `session_id` and only completed turns (no error, stopped or failed turns), capped at 40 messages / 60 000 characters and starting with a user turn. The root cause (agent tool loop with history) is the agent agent's. | `ac_ui_19_22` buildHistory + session tests |
+| UI-15 locale 12 h date pickers | P3 | 24 h `YYYY-MM-DD HH:MM` UTC text inputs (commit when complete or cleared, inline format error) plus quick ranges "Last 1 h / 24 h". | `ac_ui_11_12_23` ×3, existing `ac_ui_02` time-range test unchanged |
+| UI-17 snapshot cropped | P3 | `.thumb-lg` / `.thumb-md` use `object-fit: contain`. Frames render at their natural aspect. | CSS only (jsdom does no layout) |
+| UI-18 malformed id gives a generic error | P3 | A non-UUID id shows "Item not found." without a request; 422 is treated like 404. | `ac_ui_11_12_23` ×2 |
+| UI-20 add form explains only the image | P3 | "Label is required" / "Location is required" on blur, with `aria-invalid` and `aria-describedby`. The disabled submit is described by "To add the item, provide …". | `ac_ui_11_12_23` ×2 |
+| UI-21 filter bar polish | P3 | `aria-valuetext` on the slider, a "Reset filters" button (keeps sort), a "Skip to content" link to `<main id="main">`, and the needs-review checkbox wrapped and aligned like the other fields. | `ac_ui_11_12_23` ×3 |
+
+### Deferred (not dashboard-side)
+
+- **UI-01 / UI-02 / UI-05 root causes** (agent forgets tools with history, no events tool, buffered tokens): agent
+  agent. The dashboard already renders progressive tokens and any `status` events the agent starts to send.
+- **UI-16** case-insensitive label sort: inventory-api (`ORDER BY lower(label)`). The dashboard passes `sort=label`.
+- **UI-22** split a person track: needs a pipeline fix and a new API endpoint. There is no UI without the endpoint.
+
+### Adversarial self-review
+
+- **XSS:**
+  - Markdown, model text, labels, descriptions and actor text are all React text nodes.
+  - Tests cover `<img onerror>`, `<script>` and `javascript:` links, in the renderer and end to end.
+  - A source scan asserts that no raw-HTML API is used.
+  - The bbox style values are clamped numbers.
+  - SSE tool names must match `^[A-Za-z0-9_.-]{1,64}$`.
+- **CSP:** no inline scripts. The styles are CSSOM properties (allowed under `style-src 'self'`). The spinner uses a
+  CSS keyframe in `theme.css` and respects `prefers-reduced-motion`.
+- **a11y:**
+  - Every new control is labelled; the existing labelled-controls tests still pass.
+  - Accessible names are unique where buttons repeat (merge, open item, history), and keep the visible text first
+    (label-in-name).
+  - The lightbox follows the dialog pattern.
+  - The status counter is aria-hidden to avoid live-region chatter.
+  - The kind tabs and chips use `aria-pressed`.
+- **Error states:**
+  - Subject load failure: "details unavailable".
+  - Review list failure: toast plus an empty state; filtered empty has its own text.
+  - Corrupt sessionStorage: a fresh chat.
+  - The cache stores failures, so there are no retry storms.
+- **Layout at 1024 px:** no browser in this environment, so this was checked by reading the CSS only. Below 1400 px
+  the review list is one column. Below 1100 px the duplicate compare stacks, the review filters use 2 columns and the
+  candidate grid auto-fills 180 px tiles. The table stays in `.table-wrap` (`overflow-x: auto`). A Playwright re-run
+  of the reviewer's 1024 px pass is recommended.

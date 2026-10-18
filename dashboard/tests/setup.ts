@@ -4,6 +4,7 @@ import { cleanup } from '@testing-library/react';
 import { encodeMultipart } from './multipart';
 import { afterAll, afterEach, beforeAll, vi } from 'vitest';
 import { resetRequests, server } from './server';
+import { clearItemCache } from '../src/state/itemCache';
 
 process.env.TZ = 'UTC';
 
@@ -46,5 +47,7 @@ afterEach(() => {
   resetRequests();
   vi.useRealTimers();
   window.localStorage.clear();
+  window.sessionStorage.clear();
+  clearItemCache();
 });
 afterAll(() => server.close());

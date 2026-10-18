@@ -8,19 +8,28 @@ export const REVIEW_COUNT_REFRESH_MS = 30_000;
 
 interface ReviewCountApi {
   count: number | null;
+  /** open_reviews_by_kind from /stats (kind tab counts on the review page, AC-UI-16). */
+  byKind: Record<string, number> | null;
   refresh: () => void;
 }
 
-const ReviewCountContext = createContext<ReviewCountApi>({ count: null, refresh: () => {} });
+const ReviewCountContext = createContext<ReviewCountApi>({ count: null, byKind: null, refresh: () => {} });
 
 export function ReviewCountProvider({ children }: { children: ReactNode }) {
   const [count, setCount] = useState<number | null>(null);
+  const [byKind, setByKind] = useState<Record<string, number> | null>(null);
 
   const seq = useRef(0);
   const refresh = useCallback(() => {
     const mine = ++seq.current; // only the latest request may set the count (no stale overwrite)
     getStats()
-      .then((s) => mine === seq.current && setCount(Object.values(s.open_reviews_by_kind ?? {}).reduce((a, b) => a + (Number(b) || 0), 0)))
+      .then((s) => {
+        if (mine !== seq.current) return;
+        const kinds: Record<string, number> = {};
+        for (const [k, v] of Object.entries(s.open_reviews_by_kind ?? {})) kinds[k] = Number(v) || 0;
+        setByKind(kinds);
+        setCount(Object.values(kinds).reduce((a, b) => a + b, 0));
+      })
       .catch((e) => log.debug('review count unavailable', { error: String(e) }));
   }, []);
 
@@ -31,7 +40,7 @@ export function ReviewCountProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(timer);
   }, [refresh]);
 
-  const api = useMemo(() => ({ count, refresh }), [count, refresh]);
+  const api = useMemo(() => ({ count, byKind, refresh }), [count, byKind, refresh]);
   return <ReviewCountContext.Provider value={api}>{children}</ReviewCountContext.Provider>;
 }
 

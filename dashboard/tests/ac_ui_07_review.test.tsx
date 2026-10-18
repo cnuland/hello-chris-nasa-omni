@@ -11,6 +11,12 @@ import { fakeTimers, findItem, findReviewCard, findToast, renderApp } from './re
 
 const resolvePath = (id: string) => `/api/review/${id}/resolve`;
 
+/** AC-UI-15: Dismiss is two-step (Dismiss… then Confirm dismiss). */
+async function dismissCard(user: ReturnType<typeof renderApp>['user'], card: HTMLElement) {
+  await user.click(within(card).getByRole('button', { name: /^dismiss/i }));
+  await user.click(within(card).getByRole('button', { name: /confirm dismiss/i }));
+}
+
 async function openReview(operator = 'alice') {
   const r = renderApp('/review');
   await findReviewCard(ID.rvUnknown);
@@ -101,7 +107,7 @@ describe('AC-UI-7 classify as catalog item (searchable select)', () => {
   test('AC-UI-7 actions require an operator name (API requires operator)', async () => {
     const { user } = await openReview('');
     const card = await findReviewCard(ID.rvUnknown);
-    const btn = within(card).getByRole('button', { name: /dismiss/i }) as HTMLButtonElement;
+    const btn = within(card).getByRole('button', { name: /^dismiss/i }) as HTMLButtonElement;
     if (!btn.disabled) await user.click(btn);
     await new Promise((r) => setTimeout(r, 50));
     expect(requestsTo('POST', resolvePath(ID.rvUnknown))).toHaveLength(0);
@@ -116,7 +122,7 @@ describe('AC-UI-7 classify as catalog item (searchable select)', () => {
     );
     const { user } = await openReview();
     const card = await findReviewCard(ID.rvUnknown);
-    await user.click(within(card).getByRole('button', { name: /dismiss/i }));
+    await dismissCard(user, card);
     const toast = await findToast(/already resolved/i);
     expect(toast.closest('[role="alert"]')).toBeNull(); // info, not an error
     await waitFor(() => expect(screen.queryByTestId(`review-${ID.rvUnknown}`)).toBeNull());
@@ -131,10 +137,10 @@ describe('AC-UI-7 classify as catalog item (searchable select)', () => {
     );
     const { user } = await openReview();
     const card = await findReviewCard(ID.rvUnknown);
-    await user.click(within(card).getByRole('button', { name: /dismiss/i }));
+    await dismissCard(user, card);
     expect(await findToast(/invalid action payload/i)).toBeInTheDocument();
     expect(screen.getByTestId(`review-${ID.rvUnknown}`)).toBeInTheDocument();
-    expect(within(card).getByRole('button', { name: /dismiss/i })).toBeEnabled();
+    expect(within(card).getByRole('button', { name: /confirm dismiss/i })).toBeEnabled();
   });
 });
 
@@ -186,7 +192,7 @@ describe('AC-UI-7 merge into a candidate', () => {
   test('AC-UI-7 merge posts merge_into with the chosen candidate and removes the card', async () => {
     const { user } = await openReview();
     const card = await findReviewCard(ID.rvDup);
-    await user.click(within(card).getByRole('button', { name: /merge into pistol-grip drill/i }));
+    await user.click(within(card).getByRole('button', { name: /merge subject into this: pistol-grip drill/i }));
     await waitFor(() => expect(requestsTo('POST', resolvePath(ID.rvDup))).toHaveLength(1));
     expect(requestsTo('POST', resolvePath(ID.rvDup))[0].body).toMatchObject({
       action: 'merge_into', target_entity_id: ID.drill, operator: 'alice',
@@ -205,7 +211,7 @@ describe('AC-UI-7 dismiss', () => {
   test('AC-UI-7 dismiss posts action=dismiss and removes the card', async () => {
     const { user } = await openReview();
     const card = await findReviewCard(ID.rvLow);
-    await user.click(within(card).getByRole('button', { name: /dismiss/i }));
+    await dismissCard(user, card);
     await waitFor(() => expect(requestsTo('POST', resolvePath(ID.rvLow))).toHaveLength(1));
     expect(requestsTo('POST', resolvePath(ID.rvLow))[0].body).toMatchObject({ action: 'dismiss', operator: 'alice' });
     await waitFor(() => expect(screen.queryByTestId(`review-${ID.rvLow}`)).toBeNull());
@@ -234,7 +240,7 @@ describe('AC-UI-7 nav badge', () => {
     );
     const { user } = await openReview();
     await waitFor(() => expect(navReviewLink()).toHaveTextContent(/\b3\b/));
-    await user.click(within(await findReviewCard(ID.rvLow)).getByRole('button', { name: /dismiss/i }));
+    await dismissCard(user, await findReviewCard(ID.rvLow));
     await waitFor(() => expect(navReviewLink()).toHaveTextContent(/\b2\b/));
   });
 });

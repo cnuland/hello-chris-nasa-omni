@@ -50,6 +50,7 @@ export default function App() {
     <ToastProvider>
       <ReviewCountProvider>
         <div className="shell">
+          <a className="skip-link" href="#main">Skip to content</a>
           <header className="topbar">
             <div className="brand">
               <span className="brand-mark" aria-hidden="true">◉</span>
@@ -58,7 +59,7 @@ export default function App() {
             </div>
             <Nav />
           </header>
-          <main className="content">
+          <main className="content" id="main" tabIndex={-1}>
             <RouteBoundary>
             <Routes>
               <Route path="/" element={<InventoryPage />} />

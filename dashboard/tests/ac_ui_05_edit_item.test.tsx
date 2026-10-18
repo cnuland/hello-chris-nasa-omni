@@ -186,7 +186,7 @@ describe('AC-UI-5 review round 1', () => {
     expect(requestsTo('PATCH', patchPath)[0].body).toEqual({ status: 'provisional', operator: 'carol' });
   });
 
-  test('AC-UI-5 after a save the item is reloaded so Movements and last moved by are current', async () => {
+  test('AC-UI-5 after a save the item is reloaded so Activity and last handled are current', async () => {
     let saved = false;
     const newMove = {
       event_id: 'e0000000-0000-4000-8000-0000000000f1', event_type: 'moved', entity_id: ID.drill,
@@ -208,9 +208,9 @@ describe('AC-UI-5 review round 1', () => {
     const { user, form } = await openEdit();
     await user.selectOptions(within(form).getByLabelText(/location/i), 'NOD2D4');
     await user.click(within(form).getByRole('button', { name: /save/i }));
-    const moves = await screen.findByRole('list', { name: /movements/i });
+    const moves = await screen.findByRole('list', { name: /activity/i });
     await waitFor(() => expect(moves).toHaveTextContent(/operator dave/));
-    expect(screen.getAllByText(/operator dave/).length).toBeGreaterThanOrEqual(2); // movement + last moved by
+    expect(screen.getAllByText(/operator dave/).length).toBeGreaterThanOrEqual(2); // activity line + last handled
     expect(requestsTo('GET', `/api/items/${ID.drill}`).length).toBeGreaterThanOrEqual(2);
   });
 });

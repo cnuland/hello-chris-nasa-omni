@@ -48,3 +48,60 @@ export function localInputToIso(value: string): string | undefined {
 export function humanize(s: string | null | undefined): string {
   return (s ?? '').replace(/_/g, ' ');
 }
+
+/** "2026-10-17 21:42 UTC" (minute precision for lists and cards; empty for missing/invalid input). AC-UI-11. */
+export function formatUtcMinute(iso: string | null | undefined): string {
+  const full = formatUtc(iso);
+  return full ? `${full.slice(0, 16)} UTC` : '';
+}
+
+/** First 8 characters of an id ("163e1c50"). */
+export function shortId(id: string | null | undefined): string {
+  return (id ?? '').slice(0, 8);
+}
+
+/** "Node 1 Unity (NOD1)"; just the code when the name is unknown; '' when there is no location. */
+export function locationLabel(code: string | null | undefined, name?: string | null): string {
+  if (!code) return name?.trim() || '';
+  const n = name?.trim();
+  return n && n !== code ? `${n} (${code})` : code;
+}
+
+const PERSON_HEADS = new Set([
+  'a', 'an', 'the', 'person', 'people', 'crew', 'crewmember', 'crewmate', 'astronaut', 'cosmonaut', 'man', 'woman',
+  'someone', 'operator', 'pipeline', 'engineer', 'commander', 'member', 'human', 'figure', 'individual', 'user',
+  'he', 'she', 'they', 'robot', 'astrobee',
+]);
+const QUALIFIER_HEADS = new Set(['wearing', 'in', 'with', 'holding', 'dressed', 'carrying', 'using', 'having']);
+
+/**
+ * Turns the pipeline's free-text actor description into a phrase that reads after "by" (AC-UI-12):
+ *   "astronaut in blue suit" -> unchanged; "wearing a blue tank top" -> "person wearing a blue tank top";
+ *   "Blue shirt, black shorts" -> "person (blue shirt, black shorts)"; empty -> "an unknown person".
+ * Plain text only: callers render it as a React text node, never as HTML.
+ */
+export function actorPhrase(desc: string | null | undefined): string {
+  const d = (desc ?? '').replace(/\s+/g, ' ').trim().replace(/[.;:,]+$/, '');
+  if (!d) return 'an unknown person';
+  const lowerFirst = /^[A-Z][a-z]/.test(d) ? d[0].toLowerCase() + d.slice(1) : d;
+  const head = lowerFirst.split(/[\s,]/, 1)[0].toLowerCase();
+  if (PERSON_HEADS.has(head)) return lowerFirst;
+  if (QUALIFIER_HEADS.has(head)) return `person ${lowerFirst}`;
+  return `person (${lowerFirst})`;
+}
+
+/** Event type -> past-tense verb: moved -> "moved", handed_over -> "handed over", picked_up -> "picked up". */
+export function eventVerb(type: string | null | undefined): string {
+  const t = (type ?? '').trim().toLowerCase();
+  if (!t) return 'handled';
+  return humanize(t);
+}
+
+export function capitalize(s: string): string {
+  return s ? s[0].toUpperCase() + s.slice(1) : s;
+}
+
+/** "Used by astronaut in blue suit" (no time; callers render the time as a <time>). */
+export function handledPhrase(type: string | null | undefined, actor: string | null | undefined): string {
+  return `${capitalize(eventVerb(type))} by ${actorPhrase(actor)}`;
+}

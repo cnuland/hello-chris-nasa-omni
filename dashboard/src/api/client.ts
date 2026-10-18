@@ -2,7 +2,7 @@
 // and the nginx container route them to the configured upstreams, so no URLs or credentials live in the bundle.
 import type {
   CatalogItem, ChatMessage, ChatStreamEvent, Event, Filters, Item, ItemDetail, ItemPage, ItemPatch, Location,
-  ResolveRequest, ReviewItem, Stats, TimelineEntry,
+  ResolveRequest, ReviewFilters, ReviewItem, Stats, TimelineEntry,
 } from './types';
 import { filtersToItemsQuery } from '../lib/filters';
 import { SSEParser } from '../lib/sse';
@@ -88,6 +88,25 @@ export const createItem = (form: FormData): Promise<Item> => json(`${API_BASE}/i
 export const REVIEW_MAX_LIMIT = 500;
 export const listReview = (status = 'open', limit = REVIEW_MAX_LIMIT): Promise<ReviewItem[]> =>
   json(`${API_BASE}/review${qs(new URLSearchParams({ status, limit: String(limit) }))}`);
+export interface ReviewPage {
+  items: ReviewItem[];
+  /** X-Total-Count when the API sends it (AC-UI-16), else null. */
+  total: number | null;
+}
+/** GET /review with the queue filters (kind, location, q, sort, order) and the total from X-Total-Count. */
+export async function listReviewPage(f: ReviewFilters = {}, limit = REVIEW_MAX_LIMIT, signal?: AbortSignal): Promise<ReviewPage> {
+  const p = new URLSearchParams({ status: 'open', limit: String(limit) });
+  if (f.kind) p.set('kind', f.kind);
+  if (f.location) p.set('location', f.location);
+  if (f.q?.trim()) p.set('q', f.q.trim());
+  if (f.sort) p.set('sort', f.sort);
+  if (f.order) p.set('order', f.order);
+  const res = await request(`${API_BASE}/review${qs(p)}`, { signal });
+  const body = (await res.json()) as unknown;
+  const header = res.headers.get('x-total-count');
+  const total = header !== null && /^\d+$/.test(header.trim()) ? Number(header) : null;
+  return { items: Array.isArray(body) ? (body as ReviewItem[]) : [], total };
+}
 export const resolveReview = (id: string, body: ResolveRequest): Promise<unknown> =>
   json(`${API_BASE}/review/${encodeURIComponent(id)}/resolve`, jsonBody('POST', body));
 export const listCatalog = (): Promise<CatalogItem[]> => json(`${API_BASE}/catalog`);
@@ -104,9 +123,10 @@ export async function streamChat(
   messages: ChatMessage[],
   onEvent: (e: ChatStreamEvent) => void,
   signal?: AbortSignal,
+  sessionId?: string,
 ): Promise<void> {
   const res = await request(`${AGENT_BASE}/chat/stream`, {
-    ...jsonBody('POST', { messages }),
+    ...jsonBody('POST', sessionId ? { messages, session_id: sessionId } : { messages }),
     headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
     signal,
   });
