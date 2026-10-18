@@ -1,0 +1,206 @@
+[
+ {
+  "id": "UI6-01",
+  "priority": "P2",
+  "title": "History frames lose their boxes: every timeline thumbnail and its lightbox say 'Whole frame: there is no box', although every object sighting has a bbox",
+  "page": "/items/<id>#history",
+  "steps": "Open laptop 19c96a34 or m-bag 7a4c756d. Look at the SIGHTING thumbnails in History, then click one.",
+  "expected": "Each sighting frame draws its own box (solid or dashed), as the hero does, so the operator can see which object each sighting refers to.",
+  "actual": "0 boxes are drawn in the timeline (0 of 4 frames for 19c96a34, 0 of 11 for 7a4c756d), and the lightbox says 'Whole frame: there is no box for this object'. The API has a box for 80 of 80 public object sightings. Cause: ItemDetailPage.tsx (around line 466) builds ctx.sightings with filter(typeof x.sighting_id === 'string'), but GET /items/{id} returns sighting_id as an integer (96), while /history returns the id as a string ('96'). So the map is empty and every bbox is undefined.",
+  "suggested_fix": "Key the map by String(x.sighting_id) and look it up with String(e.id). Add a test that uses a numeric sighting_id fixture.",
+  "files": [
+   "dashboard/src/pages/ItemDetailPage.tsx"
+  ],
+  "screenshots": [
+   "shots/ui5-06-history-lightbox-1440.png",
+   "shots/walk-04-history-lightbox.png",
+   "shots/mbag-detail-1440.png"
+  ]
+ },
+ {
+  "id": "UI6-02",
+  "priority": "P2",
+  "title": "Same-class re-identification ignores colour and escapes the cross-module rule when one side is only 'USOS': bags and a 'blue shirt' track absorb different objects and people",
+  "page": "/items/7a4c756d…, /items/1e8251b6…, /items/8b4c0819…",
+  "steps": "Open m-bag 7a4c756d and read the sighting descriptions. Open person 1e8251b6. Open laptop 8b4c0819.",
+  "expected": "One entity per physical object. A white bag and a blue bag are not the same m-bag. A cross-module (or module-to-segment) match on a generic class needs a strong embedding match.",
+  "actual": "7a4c756d has 8 sightings described as 'white storage bag', 'large grey fabric bag', 'blue storage bag attached to wall', 'large blue storage bag hanging on the right' and 'white storage bag attached to a rack' (a Kibo frame). 776b4a82 goes white, then blue, then green. 10fbe099 goes white, then blue. Person 1e8251b6 'blue shirt' has 12 sightings in JPM1, NOD1, ZVEZDA, NAUKA, USOS and CUP1, described as a tank top, tan pants, long hair and short hair, so it is several people. Laptop 8b4c0819 (private LAB1 window at 07:51) was matched to a laptop in a public Node 1 frame at 08:07. Almost all of these second sightings are labelled 'USOS', so the new strong-match-across-modules rule never fires.",
+  "suggested_fix": "Treat a segment-only sighting as 'module unknown' and apply the same strong-match threshold as a cross-module match. Veto a match when the descriptions name conflicting colours (white, blue, green, grey) for bags or clothing. Cap how far a person track can travel between modules per minute.",
+  "files": [
+   "services/perception/perception/reconciler.py",
+   "services/perception/perception/people.py"
+  ],
+  "screenshots": [
+   "shots/mbag-detail-1440.png",
+   "shots/boxcheck-sheet-3.png",
+   "shots/boxcheck-sheet-4.png",
+   "shots/moved-laptop-1440.png"
+  ]
+ },
+ {
+  "id": "UI6-03",
+  "priority": "P2",
+  "title": "Locations get worse on the tour's second pass: 72% of sightings after 08:00 are segment-only, and recognisable Kibo frames are filed under 'USOS'",
+  "page": "/overview, /api/stats, chat Q5",
+  "steps": "Compare /api/stats by_location_level at 08:05 and 08:18. Open the unknown orange sphere a52ea4a4 (frame 080431) and the white bag 77647231 (frame 080500).",
+  "expected": "A module for most sightings, especially for frames that match an earlier frame already located to a module (same view, same caption).",
+  "actual": "Segment-only sightings: 36 of 73 (49%) between 07:46 and 07:59, and 56 of 78 (72%) after 08:00. Segment-only items: 36 of 75 at 08:05, then 47 of 86 (55%) at 08:18. Frames 080431, 080500 and 080501 show the same Kibo views as 074930 and 075000 (JAXA rack, 'Science on all sides' caption), but are labelled USOS. As a result, 'What unknown objects are in Kibo?' lists only 1 of the 2 orange spheres, and the Kibo CTB comes back as an unknown 'white bag'.",
+  "suggested_fix": "Use visual similarity to the frames already located to a module (frame embedding nearest neighbour) as a location source. Keep the module carry going through the second pass of a known tour. Report segment-only sightings in the Overview so the demo audience is not surprised.",
+  "files": [
+   "services/perception/perception/locations.py",
+   "services/perception/perception/omni.py"
+  ],
+  "screenshots": [
+   "shots/overview-full-1440.png",
+   "shots/boxcheck-sheet-2.png",
+   "shots/chat-q5.png"
+  ]
+ },
+ {
+  "id": "UI6-04",
+  "priority": "P2",
+  "title": "Empty spacesuits become person tracks (3 of 18 tracks), which inflates 'how many people' and the person duplicate reviews",
+  "page": "/?kind=person, /review?kind=possible_duplicate, chat Q7",
+  "steps": "Filter the inventory to people. Open 91672559, 4ce46008 and 1b59a01c. Compare them with the unknowns ac8ac3cf and fc97d45e (frame 075300).",
+  "expected": "A stowed EMU is an object (or an unknown). Person tracks are crew only.",
+  "actual": "'Person: astronaut in white spacesuit' (91672559), 'Person: white suit, blue gloves' (4ce46008) and 'Person: spacesuit with black and grey components' (1b59a01c) are person tracks. The same suits are also open unknowns 'spacesuit' (ac8ac3cf, fc97d45e). The Overview event 'Person: spacesuit with black and grey components seen in USOS' and chat Q7 ('18 person tracks') count them. Each one also triggers a 'more tracks than expected crew' duplicate review.",
+  "suggested_fix": "Reject person detections whose description names a suit, EMU or spacesuit with no visible head or face (or that overlap an unknown labelled spacesuit), or route them to object handling. Add an 'EMU / spacesuit' catalog item so these can be classified.",
+  "files": [
+   "services/perception/perception/people.py",
+   "services/perception/perception/labels.py"
+  ],
+  "screenshots": [
+   "shots/inv-person-1440.png",
+   "shots/overview-full-1440.png",
+   "shots/review-unknown-1440.png"
+  ]
+ },
+ {
+  "id": "UI6-05",
+  "priority": "P2",
+  "title": "'Not inventory' decisions are not remembered: structure comes back on the next pass, and the queue keeps growing (21 unknowns in 32 minutes)",
+  "page": "/review?kind=unknown_object",
+  "steps": "Mark 'insulated hose' (6388e99f, frame 075900) as Not inventory. Wait for the second pass. Look at 93eee1d5 'white padded tube' (frame 081000).",
+  "expected": "A duct that the operator has marked as structure is not raised again. The queue settles once the tour repeats.",
+  "actual": "The same white duct comes back as 'white padded tube: a thick white insulated tube running through the module' 10 minutes after the dismissal. Other structure or fixed equipment still in the queue: 'grey device' (the treadmill display, ZVEZDA), 'grey equipment box … mounted below the first one', and 'white covering … over equipment'. 21 unknowns were raised between 07:46 and 08:18. 4 of the 18 still open are structure, and 2 of the 18 are worn by crew (UI6-07).",
+  "suggested_fix": "Store an exemplar embedding for each not_inventory resolution and suppress new unknowns that match it (with the same label family) near that location. Add 'tube', 'duct', 'covering', 'mounted' and 'treadmill display' style qualifiers to the structure rules.",
+  "files": [
+   "services/perception/perception/decision.py",
+   "services/perception/perception/labels.py",
+   "services/inventory-api/inventory_api/routers/review.py"
+  ],
+  "screenshots": [
+   "shots/walk-10-bulk-confirm.png",
+   "shots/walk-11-after-bulk.png",
+   "shots/boxcheck-new-unknowns.png"
+  ]
+ },
+ {
+  "id": "UI6-06",
+  "priority": "P2",
+  "title": "Catalog labels contradict the model's own description, so 'Who used the drill?' answers from an object that is not a drill",
+  "page": "/items/1bfe7717…, /items/78f65158…, chat Q3",
+  "steps": "Ask 'Who used the drill?'. Open drill 1bfe7717 (frame 080032) and 'ball' 78f65158 (COL1).",
+  "expected": "A detector or catalog label is kept only when it agrees with the description. Otherwise the object becomes an unknown, or a low-confidence item flagged for review.",
+  "actual": "Drill 1bfe7717 is described as 'a black handheld vacuum cleaner being used by a person'. The person in the frame holds a large black camera with a long lens, and the solid box sits on a small orange object at the left edge. Chat Q3 states 'A crew member wearing a grey t-shirt and dark shorts used the drill … at 08:00'. 78f65158 is catalogued as 'Orange ball' but described as 'orange handled tool attached to a rail'. Wrench fc43f2b2 ('orange handled tool') has its box on a black strip. Across 66 boxes checked, 13 are wrong.",
+  "suggested_fix": "Check the catalog class against the description (zero-shot text match). If they disagree, keep the item provisional with needs_review and give the reason 'label and description disagree'. In chat, add a confidence caveat when an answer rests on a single 0.9 detector link with a disagreeing description.",
+  "files": [
+   "services/perception/perception/decision.py",
+   "services/perception/perception/detector.py",
+   "services/agent/nasa_agent/tools.py"
+  ],
+  "screenshots": [
+   "shots/chat-q3.png",
+   "shots/boxcheck-sheet-2.png",
+   "shots/boxcheck-sheet-1.png"
+  ]
+ },
+ {
+  "id": "UI6-07",
+  "priority": "P3",
+  "title": "Items worn by crew are raised as unknowns (wristwatch, yellow helmet), so the review card is a close-up of a crew member's face",
+  "page": "/review?kind=unknown_object",
+  "steps": "Open the unknown 'wristwatch' (406b20a0, frame 080235) and 'yellow helmet' (b689d1a2, frame 075700).",
+  "expected": "Personal or worn items inside a person region are not inventory unknowns. Whole frames are allowed, but they should not be raised just to inventory a crew member's watch.",
+  "actual": "The wristwatch card is a whole frame filled by a crew member's face, with a dashed box on the wrist. The yellow helmet is on a cosmonaut's head. Neither sighting has person_overlap set.",
+  "suggested_fix": "Suppress unknowns whose box is mostly inside a person box, or whose label is clothing or worn gear (watch, helmet, headset, glasses).",
+  "files": [
+   "services/perception/perception/decision.py"
+  ],
+  "screenshots": [
+   "shots/review-unknown-1440.png",
+   "shots/unknown-watch-1440.png"
+  ]
+ },
+ {
+  "id": "UI6-08",
+  "priority": "P3",
+  "title": "A module-to-parent-segment change is reported as a move, from a private-window sighting: 'Laptop moved from Destiny (LAB1) to US Orbital Segment'",
+  "page": "/overview, chat Q4, /items/8b4c0819…",
+  "steps": "Ask 'What changed in the last hour?'. Look at the Overview events.",
+  "expected": "Destiny is inside USOS, so a later USOS-only sighting is a loss of precision, not a move. Also, the Overview and chat should say the same thing.",
+  "actual": "The chat shows '08:06 UTC: Laptop moved from Destiny (US Lab, LAB1) to US Orbital Segment (USOS)'. The Overview shows 'MOVED Laptop 8b4c0819 moved in US Orbital Segment (USOS)'. Both sightings came from private windows (07:51 and 08:06).",
+  "suggested_fix": "Do not emit 'moved' when to_location is an ancestor of from_location. Format moved events the same way in the Overview and the agent.",
+  "files": [
+   "services/inventory-api/inventory_api/routers/ingest.py",
+   "dashboard/src/pages/OverviewPage.tsx"
+  ],
+  "screenshots": [
+   "shots/chat-q4.png",
+   "shots/overview-full-1440.png",
+   "shots/moved-laptop-1440.png"
+  ]
+ },
+ {
+  "id": "UI6-09",
+  "priority": "P3",
+  "title": "The downgrade hold pairs the kept module with a later timestamp: 'seen in Cupola at 08:10' when the Cupola sighting was at 08:07",
+  "page": "chat Q6",
+  "steps": "Ask 'Who was in the Cupola?'. Compare with the sightings of 1e8251b6.",
+  "expected": "Each row gives the time of the sighting in that place (08:07:05).",
+  "actual": "The answer is 'Person (blue shirt, dark hair): seen in Cupola (CUP1) at 2026-10-18 08:10 UTC'. The 08:10:05 sighting is USOS (frame 081005); last_location stayed CUP1 because of the 600 s hold, and last_seen_at moved on.",
+  "suggested_fix": "people_seen with a location should report max(seen_at) of the sightings at that location, not last_seen_at.",
+  "files": [
+   "services/agent/nasa_agent/tools.py"
+  ],
+  "screenshots": [
+   "shots/chat-q6.png",
+   "shots/cupola-frames.png"
+  ]
+ },
+ {
+  "id": "UI6-10",
+  "priority": "P3",
+  "title": "Private-window items multiply on each pass (5 m-bags, then 5 new CTBs and a laptop in NOD2), and the change list repeats identical rows",
+  "page": "/, chat 'show more changes'",
+  "steps": "Filter the inventory to NOD2. Ask 'show more changes'.",
+  "expected": "A private area adds at most the items it really holds, once. Identical rows are collapsed ('5 cargo transfer bags seen in NOD2').",
+  "actual": "NOD2 has 12 imageless items: 5 m-bags and a CTB from the 07:50 window, then 5 new CTBs and a laptop from the 08:05 window, probably the same bags. They cannot be reviewed or merged, because they have no image. Page 2 of the changes shows 5 identical 'New cargo transfer bag seen in Node 2 Harmony (NOD2)' lines.",
+  "suggested_fix": "In private windows, re-use existing entities by class and location (count-capped) instead of creating new ones. Collapse identical change rows in recent_changes.",
+  "files": [
+   "services/inventory-api/inventory_api/routers/ingest.py",
+   "services/agent/nasa_agent/tools.py"
+  ],
+  "screenshots": [
+   "shots/chat-q8.png",
+   "shots/private-laptop-1440.png"
+  ]
+ },
+ {
+  "id": "UI6-11",
+  "priority": "P3",
+  "title": "The person 'Last seen' row repeats the location and time, and its '·' separator wraps onto a line of its own",
+  "page": "/items/<person>, inventory 'Last handled' column",
+  "steps": "Open person c06578b6 at 1440 or 1024 px. Look at the inventory rows for people.",
+  "expected": "'Last seen in US Orbital Segment (USOS) · 08:08 UTC' on one line, or the row is dropped, because Last location and Last sighting already give this.",
+  "actual": "The text is 'Last seen in US Orbital Segment (USOS)', then a lone '·' line, then the timestamp, under a label that also says 'Last seen'. The inventory column shows the same.",
+  "suggested_fix": "Render the separator inline (white-space: nowrap on the group) or drop it. Hide the row on the detail page for people.",
+  "files": [
+   "dashboard/src/components/LastHandled.tsx"
+  ],
+  "screenshots": [
+   "shots/person-detail-1024x768-fold.png",
+   "shots/inventory-1440.png"
+  ]
+ }
+]

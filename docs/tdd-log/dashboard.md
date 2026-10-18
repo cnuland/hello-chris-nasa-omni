@@ -693,3 +693,7 @@ Viewports: 1024×768 and 1440×1000. Results were the same at both sizes:
   agent.
 - **UI5-07, UI5-08** (chat paging, empty answers and citations): agent.
 - **Label casing in chat:** citation chips and chat text keep the agent's labels. Only rows and card titles changed.
+
+## AC-UI-55 history boxes (UI6-01, round 6)
+- **Red:** 1 of 2 failed (the integer-id case); the string-id guard passed.
+- **Green:** 473 passed; typecheck and build are clean.

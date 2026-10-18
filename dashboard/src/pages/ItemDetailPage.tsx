@@ -145,7 +145,8 @@ function TimelineRow({ g, ctx }: { g: TimelineGroup; ctx: RowContext }) {
   const e = g.entry;
   const label = ctx.label;
   const folded = g.count > 1;
-  const sighting = e.kind === 'sighting' && e.id ? ctx.sightings.get(e.id) : undefined;
+  // UI6-01: the API returns integer sighting ids; key and look up as strings on both sides
+  const sighting = e.kind === 'sighting' && e.id != null ? ctx.sightings.get(String(e.id)) : undefined;
   const text = rowText(g, ctx);
   return (
     <li className={`tl tl-${e.kind}`}>
@@ -463,7 +464,9 @@ export default function ItemDetailPage() {
     lastLocationName: item.last_location_name,
     events: new Map((item.events ?? []).filter((e) => e.event_id).map((e) => [e.event_id as string, e])),
     sightings: new Map(
-      (item.sightings ?? []).filter((x) => x && typeof x.sighting_id === 'string').map((x) => [x.sighting_id as string, x]),
+      (item.sightings ?? [])
+        .filter((x) => x && (typeof x.sighting_id === 'string' || typeof x.sighting_id === 'number'))
+        .map((x) => [String(x.sighting_id), x]),
     ),
   };
   const isMerged = item.status === 'merged' || !!item.merged_into;

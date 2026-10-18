@@ -311,3 +311,8 @@ No API field is added or required in this round.
     Resolved reviews (and 409, already resolved) leave the queue. A success toast reads "Marked N items as station
     structure (not inventory) …"; failures keep their cards and give an error toast "F of N could not be marked …".
   Tests: tests/ui5_round5.test.tsx, scripts/ui_check.py `round5`.
+
+### AC-UI-55 History boxes with integer sighting ids (UI6-01)
+- Sighting ids are normalised to strings when building the sighting map and when looking up a history entry's
+  sighting, so history frames draw the API box whether ids are integers (live API) or strings.
+  Tests: tests/ui6_history_boxes.test.tsx.

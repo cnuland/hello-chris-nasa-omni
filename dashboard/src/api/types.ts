@@ -92,7 +92,7 @@ export interface Event {
 }
 
 export interface Sighting {
-  sighting_id?: string;
+  sighting_id?: string | number;  // UI6-01: the detail API returns integers
   seen_at?: string;
   location_id?: string | null;
   frame_url?: string | null;
