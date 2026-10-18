@@ -165,3 +165,82 @@
     home location, plus dangling current-position sentences that name no location.
   - The sentence is followed by the provable catalog fields of those entries ("catalog expected count: N", "tracked
     as stock counts" when `is_fungible`), then the kept sentences of the model's reply.
+
+## UI review round 2 chatbot fixes (docs/ui-review/round2/REPORT.md UI2-01..04, UI2-08, UI2-12, UI2-16)
+
+- AC-AGT-19 **Grounding rejections never look like missing data** (UI2-01, P1: "Who used the drill?" answered "I don't
+  have a record of that." although who_moved returned the `used` event of drill a454e74e by "in blue shirt,
+  headset").
+  - Generic person-role words are not actor claims: "crew member", "crewmember", "astronaut", "individual",
+    "somebody", "described as", quotes. They are dropped before the every-content-word check, like "person". The
+    words describing appearance (shirt colour, headset...) are still checked against the evidence.
+  - When the claim check rejects the model's wording but this turn's grounding tools returned records, the reply is
+    a deterministic grounded summary built from the tool data (`grounded_summary_reply`), never `NO_RECORD_REPLY`:
+    - who_moved: "The drill [a454e74e] was used by person in blue shirt, headset at 22:53 UTC on 2026-10-17 (USOS,
+      US Orbital Segment)." (`moved` events say "from X to Y"; actor text is scrubbed of locations/times);
+    - recent_changes: "<change> <label> [id8] ... at HH:MM UTC";
+    - item results (where_is, search_items, get_item, list_unknowns): "<label> [id8]: <location> (<name>), last seen
+      HH:MM UTC on <date>";
+    - other records: label (location) at HH:MM UTC from the citations;
+    - actor text is shown only if, after scrubbing, it is at most 7 plain words (letters, digits, spaces, `,'()/-`,
+      60 characters), else "an unidentified person"; a review action only if it is a `snake_case` name; an event
+      without its own location gets no place (never the item's current location);
+    - catalog-only data: the deterministic usual-stowage reply (AC-AGT-11).
+    At most 5 records are listed, then "(showing the first k of n; ask for more)". A label that carries a
+    location/time/actor claim of its own is replaced by the short id. The summary keeps the turn's citations.
+  - The turn log records `fallback: "grounded_summary"` and the number of rejected claims (never their text).
+- AC-AGT-20 **Location scope only from the current message** (UI2-02, P1: "What changed in the last hour?" was
+  scoped to USOS from an earlier answer).
+  - For `recent_changes` and `list_unknowns`, the harness removes a `location` argument unless the current user
+    message names **that** place or a place above it: a known location id, display name, module alias or distinctive
+    module-name word ("the lab", "Unity") via the cached `GET /locations` ("Node N" and location-id patterns when it is
+    unavailable), or the message refers to an earlier place ("in there", "that module", "same module", "that
+    location", "same place", "that zone"). Existential "Are there any ...?" is not a reference. The tool runs, and `tool_calls` records, the
+    arguments actually used.
+  - When a location filter was applied, the reply states it: if the reply names neither the location id nor its
+    display name, the harness prefixes "In <name> (<id>): ".
+  - When the only data of the turn is an empty `recent_changes` window, the reply is always the deterministic "No
+    changes were recorded [in <id>] between <since> and <until> UTC." (the model's wording could still name a
+    stripped scope: ids without a digit such as "USOS" are invisible to the lexical claim check).
+- AC-AGT-21 **Planned answer length** (UI2-03: answers cut mid-word at the 400-token cap).
+  - The system prompt asks for at most 5 items, one line each ("laptop: USOS, 22:51 UTC"), and "and N more" when there
+    are more.
+  - The LLM client passes the completion's `finish_reason` on the returned message. When the final answer has
+    `finish_reason == "length"`, the harness cuts it at the last complete list item, line or sentence, removes dangling
+    Markdown (a complete last line is dropped too), and appends "(showing the first k of n; ask for more)" for a list (k = list items kept, n = distinct
+    records cited in the turn) or "(answer shortened; ask for more)" otherwise. The cut text then goes through the
+    claim check. If no list item, time or location survives the cut, the reply is the grounded summary (AC-AGT-19).
+- AC-AGT-22 **Relative time windows are computed in code** (UI2-04).
+  - `parse_time_window(message, now)` reads the current user message (UTC clock injected via `Toolbox.now`): "last /
+    past hour", "last / past N minutes / hours / days", "half an hour", "today", "yesterday" (00:00 to 24:00 UTC
+    yesterday), "since HH:MM" / "since 10am" (today, or yesterday when that time is still ahead).
+  - When the message has such a phrase, the harness sets `since` (and `until` for "yesterday") on `recent_changes`,
+    and replaces a model-made `since` on `who_moved` (it adds none: "Who used the drill? I need it today" is not
+    time-scoped). Without a phrase the model's arguments stand. "since 10am yesterday" is yesterday 10:00; "the day
+    before yesterday" and "<unit> of yesterday" are not parsed (the model's arguments stand).
+  - A window longer than the tool's 7 days is clamped to 7 days (minus 2 minutes of clock slack) and the reply says
+    "(Changes are only searched up to 7 days back.)".
+  - `recent_changes` accepts an optional `until` (aware ISO time, after `since`, not in the future; default now).
+  - Malformed tool-call output gets one repair attempt, then a clear error:
+    - a tool call written as text (a JSON object `{"name": <tool>, "arguments": {...}}`, optionally in
+      `<tool_call>` tags) is run as a real tool call; on the final (`tool_choice="none"`) step it is never shown
+      to the operator: the reply is the grounded summary, or `INVALID_TOOL_REPLY` without data;
+    - invalid tool-call arguments are fed back once as a tool error (AC-AGT-3); a second invalid step ends with
+      `INVALID_TOOL_REPLY`;
+    - a malformed assistant message is asked for again once; a second malformed message is an `LLMError` (502 JSON
+      `{detail, kind: "llm", retryable, request_id}`), never a non-JSON body.
+- AC-AGT-23 **Empty unknown-object lists are answered honestly** (UI2-08).
+  - `list_unknowns(location)` resolves ids, display names and module aliases with the same resolver as
+    `recent_changes` ("Node 1" -> NOD1). An unknown location is a validation error naming module ids; if `GET
+    /locations` is unavailable the value is passed through.
+  - An empty result answers deterministically: "There are no unknown objects in Node 1 Unity (NOD1)." (or "There are
+    no unknown objects on record." without a location), not `NO_RECORD_REPLY`. A passed-through scope that is neither
+    a known location nor typed by the operator is printed as "the requested location".
+- AC-AGT-24 **Chat Markdown** (UI2-12). The prompt asks for one flat numbered list. In the final reply, the harness
+  renumbers top-level ordered list items (1-3 digit numbers; fenced code untouched) 1..n across blank lines and folds indented sub-bullets into their parent
+  item ("; "), so the list renders as one `<ol>`. ISO-Z timestamps in the reply become "YYYY-MM-DD HH:MM UTC" (the
+  dashboard format).
+- AC-AGT-25 **Paced token stream** (UI2-16). The grounding-first design stays (AC-AGT-16): tokens are sent only after
+  the check. `/chat/stream` now sends the grounded reply in chunks of a few words with `AGENT_STREAM_TOKEN_DELAY_S`
+  (default 0.03 s) between them, so the UI animates it. The token texts still concatenate to `done.reply`. A client
+  disconnect during pacing stops the stream; no further work runs (the loop has finished).

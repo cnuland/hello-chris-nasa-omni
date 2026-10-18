@@ -23,11 +23,11 @@ spec:
           env:
             - {name: CAMERA_ID, value: cam-handheld}   # NASA tour footage is handheld: location comes from hints
             - {name: PERCEPTION_DEVICE, value: cuda}
-            - {name: PERCEPTION_STRIDE_S, value: "12"}   # T4 sizing: omni ~20 s/window (QUESTIONS #26); objects persist, short handovers may fall between windows
+            - {name: PERCEPTION_STRIDE_S, value: "30"}   # Gemma 4 fp32 on T4 ~60 s/window (QUESTIONS #31): a 6-frame window every 30 s of video, ~2x slower than real time
             - {name: VIDEO_SOURCE, value: "/media/sample.mp4"}
             - {name: INVENTORY_API_URL, value: "http://inventory-api.nasa-app.svc:8080"}
-            - {name: OMNI_URL, value: "http://omni.nasa-inference.svc:8000"}
-            - {name: OMNI_MODEL, value: omni}
+            - {name: OMNI_URL, value: "http://gemma4.nasa-inference.svc:8000"}   # Google Gemma 4 12B (US-origin), QUESTIONS #31
+            - {name: OMNI_MODEL, value: gemma4}
             - {name: DECISION_URL, value: "http://dgemma.nasa-inference.svc:8011"}
             - {name: DECISION_MODEL, value: dgemma}
             - {name: DECISION_TIMEOUT_S, value: "20"}   # DiffusionGemma on 4xT4, max-num-seqs 1: requests queue

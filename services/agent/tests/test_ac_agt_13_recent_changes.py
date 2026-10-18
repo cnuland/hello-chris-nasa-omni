@@ -7,7 +7,6 @@ from datetime import UTC, datetime
 
 import pytest
 
-from nasa_agent.harness import NO_RECORD_REPLY
 from nasa_agent.tools import GROUNDING_TOOLS, READ_TOOLS
 from tests.conftest import user
 from tests.fakes import (
@@ -235,7 +234,10 @@ async def test_ac_agt_13_labels_never_ground_claims(make_harness, tb, fake_inven
                    assistant_text("The drill was moved to NOD3 by the commander at 09:00.")])
     res = await make_harness(llm).run(user("What changed in the last hour?"))
     assert res["tool_calls"][0]["ok"] is True
-    assert res["reply"] == NO_RECORD_REPLY
+    # AC-AGT-19: replaced by the grounded summary; the label with claims is shown as its short id
+    for claim in ("NOD3", "commander", "09:00"):
+        assert claim not in res["reply"]
+    assert "Record [11111111]" in res["reply"]
 
 
 async def test_ac_agt_13_empty_result_grounds_a_none_found_answer(make_harness, tb, fake_inventory):

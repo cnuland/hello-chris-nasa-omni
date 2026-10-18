@@ -244,7 +244,8 @@ async def test_ac_agt_02_list_unknowns_everywhere(toolbox):
 
 
 async def test_ac_agt_02_list_unknowns_empty_location(toolbox):
-    r = await toolbox.call("list_unknowns", {"location": "COL1"})
+    # AC-AGT-23: COL1 is not a location of the fake dataset (now a validation error); NOD3 exists and has none
+    r = await toolbox.call("list_unknowns", {"location": "NOD3"})
     assert r.ok and not r.has_data
 
 

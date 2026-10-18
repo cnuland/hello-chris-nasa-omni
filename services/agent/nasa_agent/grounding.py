@@ -5,7 +5,8 @@ grounding tools. Checked claim types (deterministic, conservative):
 
 - location ids (``LAB1S2``, ``NOD3``, ``JPM1F5`` ...) and "Node N" module names;
 - clock times (``09:00``, ``12:30Z``) and ISO dates (``2026-10-01``);
-- actors in "<moved|taken|placed|...> ... by <actor>" phrases: every content word of the actor must appear.
+- actors in "<moved|taken|placed|...> ... by <actor>" phrases: every content word of the actor must appear (generic
+  person-role words such as "crew member" or "described as" are not content words, AC-AGT-19).
 
 Catalog facts (AC-AGT-11): only the structured fields of ``lookup_catalog`` entries (``catalog_evidence``) count as
 evidence; operator-entered free text (display name, synonyms, category) never supports a claim. A location that only a
@@ -35,6 +36,13 @@ ACTOR_RE = re.compile(
 )
 _WORD_RE = re.compile(r"[a-z0-9]+")
 _STOPWORDS = frozenset({"a", "an", "the", "in", "with", "wearing", "of", "who", "was", "is", "someone", "person"})
+#: Generic person-role words (AC-AGT-19): the system prompt itself asks for "crew member in blue shirt", so "crew
+#: member" / "described as" are not actor claims. Appearance words (shirt colour, headset...) are still checked.
+ROLE_WORDS = frozenset({
+    "crew", "member", "members", "crewmember", "crewmate", "astronaut", "individual", "somebody", "people", "persons",
+    "described", "as", "identified", "seen", "unidentified", "unknown",
+})
+_ACTOR_IGNORED = _STOPWORDS | ROLE_WORDS
 
 
 _SCRUB_RES = (re.compile(LOCATION_ID_RE.pattern, re.IGNORECASE), NODE_RE, TIME_RE, DATE_RE)
@@ -74,7 +82,7 @@ def unsupported_claims(reply: str, evidence: str) -> list[str]:
         if date not in evidence:
             out.append(date)
     for actor in ACTOR_RE.findall(reply):
-        content = [w for w in _WORD_RE.findall(actor.lower()) if w not in _STOPWORDS]
+        content = [w for w in _WORD_RE.findall(actor.lower()) if w not in _ACTOR_IGNORED]
         if content and any(w not in words for w in content):
             out.append(f"by {actor.strip()}")
     return out
@@ -169,11 +177,29 @@ def usual_location_reply(entries: list[dict[str, Any]]) -> str:
     parts = []
     for e in entries:
         where = e["home_location"] + (f" ({e['home_location_name']})" if e.get("home_location_name") else "")
-        name = e.get("display_name")
-        if not name or unsupported_claims(name, evidence_text(catalog_evidence([e]))):
-            name = e["catalog_id"]
+        name = _catalog_name(e)
         parts.append(", ".join([f"{name} [{e['catalog_id']}] is usually kept in {where}", *catalog_facts(e)]))
     return f"{USUAL_LOCATION_LEAD} " + "; ".join(parts) + "."
+
+
+def _catalog_name(entry: dict[str, Any]) -> str:
+    name = entry.get("display_name")
+    if not name or unsupported_claims(name, evidence_text(catalog_evidence([entry]))):
+        return entry["catalog_id"]
+    return name
+
+
+def catalog_facts_reply(entries: list[dict[str, Any]]) -> str | None:
+    """AC-AGT-19: deterministic catalog answer when the model's wording is rejected: usual stowage locations (as
+    ``usual_location_reply``) plus the provable fields of entries without a home location. None if nothing is
+    provable."""
+    homes = [e for e in entries if e.get("home_location")]
+    parts = [usual_location_reply(homes)] if homes else []
+    rest = [", ".join([f"{_catalog_name(e)} [{e['catalog_id']}]", *catalog_facts(e)])
+            for e in entries if not e.get("home_location") and catalog_facts(e)]
+    if rest:
+        parts.append("From the catalog: " + "; ".join(rest) + ".")
+    return " ".join(parts) or None
 
 
 def kept_sentences(reply: str, homes: list[dict[str, Any]], entries: list[dict[str, Any]]) -> str:

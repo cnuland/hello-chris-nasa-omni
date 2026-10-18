@@ -4,7 +4,7 @@
 Streaming design (SSE contract: docs/spec/30-agent.md AC-AGT-16): while the tool loop runs ``/chat/stream`` sends
 ``status`` events (phase llm/tool/checking) and SSE comment keepalives (``: keepalive``) every
 ``AGENT_STREAM_KEEPALIVE_S`` seconds. The reply is only known after the grounding check (AC-AGT-4), so it is then sent
-as word-chunked ``token`` events and ``done``; failures are one ``error`` event ``{detail, kind, retryable,
+as ``token`` events of a few words, paced by ``AGENT_STREAM_TOKEN_DELAY_S`` (AC-AGT-25), and ``done``; failures are one ``error`` event ``{detail, kind, retryable,
 request_id}``. A client disconnect cancels the loop task and with it the in-flight LLM request.
 """
 
@@ -86,6 +86,16 @@ def split_tokens(text: str) -> list[str]:
     return chunks or [text]
 
 
+#: AC-AGT-25: words per streamed chunk of the (already grounded) reply.
+WORDS_PER_CHUNK = 3
+
+
+def reply_chunks(text: str, words: int = WORDS_PER_CHUNK) -> list[str]:
+    """``split_tokens`` grouped into chunks of a few words (they still concatenate back to ``text``)."""
+    tokens = split_tokens(text)
+    return ["".join(tokens[i:i + words]) for i in range(0, len(tokens), words)] or [text]
+
+
 def sse(event: str, data: Any) -> str:
     return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
 
@@ -107,6 +117,7 @@ async def stream_chat_events(
     keepalive_s: float,
     request_id: str,
     deadline_s: float = 45.0,
+    token_delay_s: float = 0.0,
 ) -> AsyncIterator[str]:
     """SSE frames for one chat turn. ``run(on_event)`` runs the harness. Status events are forwarded as they happen;
     closing or cancelling this generator (client disconnect) cancels the run task and waits for it, so the in-flight
@@ -141,7 +152,9 @@ async def stream_chat_events(
             )
             yield sse("error", error_body(exc, request_id, deadline_s))
             return
-        for chunk in split_tokens(result["reply"]):
+        for i, chunk in enumerate(reply_chunks(result["reply"])):
+            if i and token_delay_s > 0:
+                await asyncio.sleep(token_delay_s)  # AC-AGT-25: paced so the UI animates the grounded reply
             yield sse("token", {"text": chunk})
         yield sse("done", result)
         log.info("chat stream", extra={"request_id": request_id, "latency_ms": _ms(started), "status": 200})
@@ -258,6 +271,7 @@ def create_app(
             stream_chat_events(
                 lambda on_event: _run(body, request_id, on_event),
                 keepalive_s=settings.stream_keepalive_seconds,
+                token_delay_s=settings.stream_token_delay_s,
                 request_id=request_id,
                 deadline_s=settings.turn_deadline_s,
             ),

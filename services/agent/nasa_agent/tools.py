@@ -19,7 +19,7 @@ from typing import Any, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from nasa_agent.grounding import scrub_claims
+from nasa_agent.grounding import LOCATION_ID_RE, NODE_RE, scrub_claims
 from nasa_agent.inventory_block import _Location, module_aliases
 from nasa_agent.inventory_client import InventoryError
 
@@ -102,6 +102,12 @@ MAX_LABEL_LOOKUPS = 10
 MAX_FREE_TEXT = 120
 MAX_CITATION_TEXT = 80
 
+#: Words of module names that do not name a place on their own (AC-AGT-20).
+_GENERIC_PLACE_WORDS = frozenset({
+    "node", "module", "the", "segment", "orbital", "service", "logistics", "pressurized", "multipurpose",
+    "permanent", "russian", "research", "mini", "laboratory",
+})
+
 Status = Literal["confirmed", "provisional", "unknown", "merged", "dismissed"]
 
 
@@ -170,6 +176,7 @@ ChangeType = Literal[
 
 class RecentChangesArgs(_Args):
     since: AwareDatetime | None = Field(None, description="ISO-8601 time with zone; default: one hour ago")
+    until: AwareDatetime | None = None
     location: str | None = Field(
         None, min_length=1, max_length=64, description="Only changes in this location_id or module name (and below)"
     )
@@ -241,6 +248,8 @@ class ToolResult:
     error_kind: str | None = None
     #: [{"entity_id": ..., "at": ...}], [{"window_id": ..., "at": ...}] or [{"catalog_id": ..., "at"?: ...}]
     citations: list[dict[str, Any]] = field(default_factory=list)
+    #: query scope actually applied (list_unknowns: {"location": resolved id or None}; AC-AGT-20/23)
+    scope: dict[str, Any] | None = None
 
     @property
     def has_data(self) -> bool:
@@ -532,9 +541,8 @@ class Toolbox:
             ),
             _ToolDef(
                 "recent_changes",
-                "What changed in the last hour / since a time / today: handling events (moved, used, added...), "
-                "new items and resolved reviews with label, location, actor and time. since: ISO time (default one "
-                "hour ago, max 7 days back).",
+                "What changed in the last hour (default) or since/until a time (max 7 days back): events "
+                "(moved, used, added...), new items, resolved reviews; label, location, actor, time.",
                 RecentChangesArgs,
                 self._recent_changes,
             ),
@@ -676,8 +684,12 @@ class Toolbox:
         if isinstance(args, ToolResult):
             return args
         tool = self._tools[name]
+        scope = None
         try:
-            data, citations = await tool.handler(args)
+            out = await tool.handler(args)
+            data, citations = out[0], out[1]
+            if len(out) > 2:
+                scope = out[2]
         except _NotFound as exc:
             return ToolResult(name, False, error=str(exc) or "not found", error_kind="not_found")
         except _Conflict as exc:
@@ -691,7 +703,8 @@ class Toolbox:
             log.exception("tool failed", extra={"tool": name})
             return ToolResult(name, False, error=f"tool failed: {type(exc).__name__}", error_kind="upstream")
         data = _jsonable(data)
-        return ToolResult(name, True, data=data, citations=_dedup(citations) if data not in (None, [], {}) else [])
+        return ToolResult(name, True, data=data, citations=_dedup(citations) if data not in (None, [], {}) else [],
+                          scope=scope)
 
     # ------------------------------------------------------------ helpers
     async def locations(self) -> dict[str, _Location]:
@@ -732,12 +745,76 @@ class Toolbox:
                 return loc.location_id
         return None
 
-    async def _location_or_raw(self, value: str) -> str:
-        """Resolved location_id, or ``value`` unchanged when unknown or GET /locations is unavailable."""
+    async def _resolve_or_invalid(self, value: str) -> str:
+        """A location_id for ``value`` (same resolver for recent_changes and list_unknowns, AC-AGT-23); an unknown
+        location is a validation error naming module ids. Raises InventoryError when GET /locations fails."""
+        location = await self.resolve_location(value)
+        if location is None:
+            modules = sorted(k for k, v in (await self.locations()).items() if v.kind == "module")
+            raise _Invalid(f"location: unknown location; use a location_id such as {', '.join(modules[:12])}")
+        return location
+
+    @staticmethod
+    def _aliases(loc: _Location, *, words: bool = False) -> set[str]:
+        """Id, display name and module aliases; with ``words`` also the distinctive single words of a module's name
+        ("the lab" names Destiny (US Lab), "Unity" names Node 1)."""
+        names = {loc.location_id}
+        if loc.display_name:
+            names.add(loc.display_name)
+            if loc.kind == "module":
+                names |= module_aliases(loc)
+                if words:
+                    names |= {w for w in re.findall(r"[A-Za-z]{3,}", loc.display_name)
+                              if w.lower() not in _GENERIC_PLACE_WORDS}
+        return names
+
+    async def mentioned_locations(self, text: str) -> set[str] | None:
+        """location ids that ``text`` names (id, display name, module alias or a distinctive word of a module name);
+        None when GET /locations is unavailable. AC-AGT-20."""
         try:
-            return await self.resolve_location(value) or value
+            locs = await self.locations()
         except InventoryError:
-            return value
+            return None
+        return {
+            loc.location_id for loc in locs.values()
+            if any(re.search(rf"(?<![\w-]){re.escape(a)}(?![\w-])", text, flags=re.IGNORECASE)
+                   for a in self._aliases(loc, words=True))
+        }
+
+    async def mentions_place(self, text: str) -> bool:
+        """True when ``text`` names a known location, or has a "Node N" / location-id pattern (the only check when
+        GET /locations is unavailable). AC-AGT-20."""
+        if await self.mentioned_locations(text):
+            return True
+        return bool(NODE_RE.search(text) or LOCATION_ID_RE.search(text))
+
+    async def location_within(self, location_id: str, ancestors: set[str]) -> bool:
+        """True when ``location_id`` is one of ``ancestors`` or below one of them."""
+        for anc in ancestors:
+            if location_id in await self._subtree(anc):
+                return True
+        return False
+
+    async def location_label(self, location_id: str) -> str:
+        """ "Node 1 Unity (NOD1)", or the bare id when the name is unknown."""
+        try:
+            loc = (await self.locations()).get(location_id)
+        except InventoryError:
+            loc = None
+        return f"{loc.display_name} ({location_id})" if loc and loc.display_name else location_id
+
+    async def names_location(self, text: str, location_id: str) -> bool:
+        """True when ``text`` names ``location_id`` by id (exact), display name or module alias."""
+        if re.search(rf"(?<![A-Za-z0-9]){re.escape(location_id)}(?![A-Za-z0-9])", text):
+            return True
+        try:
+            loc = (await self.locations()).get(location_id)
+        except InventoryError:
+            loc = None
+        if loc is None:
+            return False
+        return any(re.search(rf"(?<![\w-]){re.escape(a)}(?![\w-])", text, flags=re.IGNORECASE)
+                   for a in self._aliases(loc) if a != location_id)
 
     async def _subtree(self, location_id: str) -> frozenset[str]:
         locs = await self.locations()
@@ -926,12 +1003,14 @@ class Toolbox:
             raise _Invalid("since: must not be in the future")
         if since < now - RECENT_MAX_WINDOW:
             raise _Invalid("since: at most 7 days back")
+        until = a.until or now
+        if a.until is not None and until > now + timedelta(minutes=1):
+            raise _Invalid("until: must not be in the future")
+        if until <= since:
+            raise _Invalid("until: must be after since")
         location = None
         if a.location:
-            location = await self.resolve_location(a.location)
-            if location is None:
-                modules = sorted(k for k, v in (await self.locations()).items() if v.kind == "module")
-                raise _Invalid(f"location: unknown location; use a location_id such as {', '.join(modules[:12])}")
+            location = await self._resolve_or_invalid(a.location)
         wanted = set(a.types or CHANGE_TYPES)
         ev_types = [t for t in HANDLING_EVENT_TYPES if t in wanted]
         inside = await self._subtree(location) if location else None
@@ -940,7 +1019,11 @@ class Toolbox:
         async def events() -> list[dict[str, Any]]:
             if not ev_types:
                 return []
-            return await self._events({"after": _iso_z(since), "limit": 200}, ev_types)
+            params: dict[str, Any] = {"after": _iso_z(since), "limit": 200}
+            if a.until is not None:
+                params["before"] = _iso_z(until)
+            rows = await self._events(params, ev_types)
+            return [e for e in rows if (_parse_ts(e.get("occurred_at")) or since) < until or a.until is None]
 
         async def new_items() -> list[dict[str, Any]]:
             if "new_item" not in wanted:
@@ -950,7 +1033,8 @@ class Toolbox:
                 params["location"] = location
             page = await self.inventory.list_items(params)
             return [i for i in _live(page.get("items", []))
-                    if (_parse_ts(i.get("first_seen_at")) or since - timedelta(seconds=1)) >= since]
+                    if since <= (_parse_ts(i.get("first_seen_at")) or since - timedelta(seconds=1))
+                    and (a.until is None or (_parse_ts(i.get("first_seen_at")) or until) < until)]
 
         async def resolved() -> list[dict[str, Any]]:
             if "review_resolved" not in wanted:
@@ -960,7 +1044,8 @@ class Toolbox:
                 params["location"] = location
             rows = await self.inventory.list_review(params)
             return [r for r in rows or [] if isinstance(r, dict)
-                    and (_parse_ts(r.get("resolved_at")) or since - timedelta(seconds=1)) >= since]
+                    and since <= (_parse_ts(r.get("resolved_at")) or since - timedelta(seconds=1))
+                    and (a.until is None or (_parse_ts(r.get("resolved_at")) or until) < until)]
 
         evs, items, reviews = await asyncio.gather(events(), new_items(), resolved())
         if inside is not None:
@@ -1016,7 +1101,7 @@ class Toolbox:
             where_name = c.get("to_location_name") or c.get("from_location_name") or c.get("location_name")
             citations.append(_cite_entity(c.get("entity_id"), c.get("at"), label=c.get("label"), location=where,
                                           location_name=where_name))
-        data: dict[str, Any] = {"since": _iso_z(since), "until": _iso_z(now), "location": location,
+        data: dict[str, Any] = {"since": _iso_z(since), "until": _iso_z(until), "location": location,
                                 "changes": changes}
         if omitted:
             data["omitted"] = omitted
@@ -1024,8 +1109,13 @@ class Toolbox:
 
     async def _list_unknowns(self, a: ListUnknownsArgs):
         params: dict[str, Any] = {"status": "unknown", "limit": 100}
+        location = None
         if a.location:
-            params["location"] = await self._location_or_raw(a.location)
+            try:
+                location = await self._resolve_or_invalid(a.location)
+            except InventoryError:  # GET /locations unavailable: pass the value through (AC-AGT-23)
+                location = a.location
+            params["location"] = location
         page = await self.inventory.list_items(params)
         items = [i for i in page.get("items", []) if i.get("status") == "unknown"]
         data = [
@@ -1045,7 +1135,7 @@ class Toolbox:
             }
             for i in items
         ]
-        return data, [_cite_item(i) for i in data]
+        return data, [_cite_item(i) for i in data], {"location": location}
 
     async def _inventory_stats(self, a: NoArgs):
         return await self.inventory.stats(), []

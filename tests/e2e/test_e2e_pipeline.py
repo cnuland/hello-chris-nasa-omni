@@ -174,9 +174,10 @@ def test_e2e_07_agent_answers_where_is_the_drill_with_citation(replay, api, make
         assert result.correct, result.detail
 
 
-def test_e2e_08_agent_refuses_an_ungrounded_location(replay, make_agent, drill):
-    """AC-AGT-4: an LLM that answers with the drill's *old* zone (not in this turn's tool data) is overridden:
-    no guess, no citations."""
+def test_e2e_08_agent_refuses_an_ungrounded_location(replay, api, make_agent, drill):
+    """AC-AGT-4 + AC-AGT-19: an LLM that answers with the drill's *old* zone (not in this turn's tool data) is
+    overridden. The invented zone never reaches the operator; since where_is DID return the drill, the reply is the
+    deterministic summary built from that tool data (citing only the drill), not a blanket "no record"."""
     old = drill.appearances[0].location
 
     def policy(messages, tools):
@@ -186,8 +187,10 @@ def test_e2e_08_agent_refuses_an_ungrounded_location(replay, make_agent, drill):
 
     client, _ = make_agent(policy)
     body = client.post("/chat", json={"messages": [{"role": "user", "content": QUESTION}]}).json()
-    assert old not in body["reply"] and "don't have a record" in body["reply"]
-    assert body["citations"] == []
+    assert old not in body["reply"]
+    drill_ids = {i["entity_id"] for i in live_items(api, catalog_id="drill-pistol")}
+    assert body["citations"], "grounded fallback must cite the tool data it is built from"
+    assert {c.get("entity_id") for c in body["citations"]} <= drill_ids
 
 
 def test_e2e_09_agent_read_tools_against_real_api(replay, api, inventory_api, database_url, drill_move):

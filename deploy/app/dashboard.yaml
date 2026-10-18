@@ -30,7 +30,11 @@ spec: {selector: {app: dashboard}, ports: [{name: http, port: 8080}]}
 ---
 apiVersion: route.openshift.io/v1
 kind: Route
-metadata: {name: dashboard, namespace: nasa-app}
+metadata:
+  name: dashboard
+  namespace: nasa-app
+  # the agent's turn deadline is 45 s of LLM time plus tool calls; the default 30 s router timeout cut /agent/chat
+  annotations: {haproxy.router.openshift.io/timeout: 90s}
 spec:
   to: {kind: Service, name: dashboard}
   port: {targetPort: http}

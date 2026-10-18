@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from tests.conftest import user
 from tests.fakes import E_CAMERA, E_DRILL, FakeLLM, assistant_text, assistant_tools, tool_call
-from tests.test_ac_agt_04_grounding import is_no_record
+from tests.test_ac_agt_04_grounding import is_no_record, is_replaced
 
 INVENTED = "The drill is in NOD3, moved by the commander at 09:00."
 
@@ -58,8 +58,10 @@ async def test_ac_agt_04_where_is_drill_then_claim_about_another_item_location(m
         assistant_text("The Nikon camera is in NOD2D4, last seen at 11:05."),
     ])
     res = await make_harness(llm).run(user("where is the drill and the camera?"))
-    assert is_no_record(res["reply"]), res["reply"]
-    assert res["citations"] == []
+    # AC-AGT-19: replaced by the grounded summary of the drill record, which keeps its citation
+    assert is_replaced(res["reply"], "The Nikon camera is in NOD2D4, last seen at 11:05."), res["reply"]
+    assert "NOD2D4" not in res["reply"] and "11:05" not in res["reply"] and "Nikon" not in res["reply"]
+    assert [c["entity_id"] for c in res["citations"]] == [E_DRILL]
 
 
 async def test_ac_agt_04_invented_time_in_grounded_turn_is_rejected(make_harness):
@@ -68,7 +70,8 @@ async def test_ac_agt_04_invented_time_in_grounded_turn_is_rejected(make_harness
         assistant_text("The pistol-grip drill was last seen in LAB1S2 at 09:45Z."),
     ])
     res = await make_harness(llm).run(user("where is the drill?"))
-    assert is_no_record(res["reply"]), res["reply"]
+    assert is_replaced(res["reply"], "The pistol-grip drill was last seen in LAB1S2 at 09:45Z."), res["reply"]
+    assert "09:45" not in res["reply"] and "12:30 UTC" in res["reply"]
 
 
 async def test_ac_agt_04_invented_module_name_is_rejected(make_harness):
@@ -77,7 +80,8 @@ async def test_ac_agt_04_invented_module_name_is_rejected(make_harness):
         assistant_text("The pistol-grip drill is in Node 3."),
     ])
     res = await make_harness(llm).run(user("where is the drill?"))
-    assert is_no_record(res["reply"]), res["reply"]
+    assert is_replaced(res["reply"], "The pistol-grip drill is in Node 3."), res["reply"]
+    assert "Node 3" not in res["reply"] and "LAB1S2" in res["reply"]
 
 
 async def test_ac_agt_04_invented_actor_is_rejected(make_harness):
@@ -86,8 +90,8 @@ async def test_ac_agt_04_invented_actor_is_rejected(make_harness):
         assistant_text("The camera was moved by the commander at 11:00Z."),
     ])
     res = await make_harness(llm).run(user("who moved the camera?"))
-    assert is_no_record(res["reply"]), res["reply"]
-    assert "commander" not in res["reply"]
+    assert is_replaced(res["reply"], "The camera was moved by the commander at 11:00Z."), res["reply"]
+    assert "commander" not in res["reply"] and "red shirt" in res["reply"]
 
 
 async def test_ac_agt_04_supported_claims_are_kept(make_harness):

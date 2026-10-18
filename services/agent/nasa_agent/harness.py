@@ -31,10 +31,11 @@ import asyncio
 import inspect
 import json
 import logging
+import re
 import time
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError
@@ -49,14 +50,25 @@ from nasa_agent.context import (
     truncate_to_tokens,
 )
 from nasa_agent.grounding import (
+    LOCATION_ID_RE,
+    NODE_RE,
+    TIME_RE,
     catalog_evidence,
+    catalog_facts_reply,
     evidence_text,
+    scrub_claims,
     unqualified_home_locations,
     unsupported_claims,
     usual_location_rewrite,
 )
 from nasa_agent.llm import LLMError, LLMTimeout
-from nasa_agent.tools import GROUNDING_TOOLS, citation_key, evidence_view
+from nasa_agent.tools import (
+    GROUNDING_TOOLS,
+    MAX_CITATION_TEXT,
+    citation_key,
+    clean_text,
+    evidence_view,
+)
 
 NO_RECORD_REPLY = "I don't have a record of that."
 STEP_LIMIT_REPLY = (
@@ -86,6 +98,16 @@ TOOL_NUDGE = (
     "evidence."
 )
 NO_ANSWER_PLACEHOLDER = "(no answer was given)"
+#: AC-AGT-20: tools whose `location` argument must come from the current message.
+SCOPED_TOOLS = frozenset({"recent_changes", "list_unknowns"})
+RECENT_MAX_DAYS = timedelta(days=7)
+CLAMP_NOTE = "(Changes are only searched up to 7 days back.)"
+#: AC-AGT-20: the current message refers to an earlier place ("in there", "that module", "the same location").
+PLACE_REFERENCE_RE = re.compile(
+    r"\b(?:(?:in|inside|from|at|over|out\s+of)\s+there|(?:that|this|the\s+same|same)\s+"
+    r"(?:module|location|zone|area|place|node|segment|rack|bay|spot))\b",
+    re.IGNORECASE,
+)
 INVALID_KINDS = frozenset({"validation", "unknown_tool"})
 #: Harness replies that carry no facts: neutralised in the history of later turns (AC-AGT-12).
 CANNED_REPLIES = frozenset(
@@ -291,6 +313,79 @@ class AgentHarness:
         now = getattr(self.toolbox, "now", None)
         return now() if callable(now) else datetime.now(UTC)
 
+    async def _place_matches(self, question: str, location: str) -> bool:
+        """AC-AGT-20: keep a model-chosen location only if the current message names that place (or a place above
+        it), or refers back to an earlier place ("in there", "that module")."""
+        if PLACE_REFERENCE_RE.search(question):
+            return True
+        pattern = bool(NODE_RE.search(question) or LOCATION_ID_RE.search(question))
+        try:
+            mentioned = await self.toolbox.mentioned_locations(question)
+            if mentioned is None:
+                return pattern  # GET /locations unavailable: only the "Node N" / id pattern is visible
+            resolved = await self.toolbox.resolve_location(location)
+            return bool(resolved and mentioned) and await self.toolbox.location_within(resolved, mentioned)
+        except Exception:  # noqa: BLE001 - be conservative: strip unless the text shows a place
+            return pattern
+
+    async def _adjust_call(self, call: dict[str, Any], window, place_is_named, notes: list[str]) -> dict[str, Any]:
+        """AC-AGT-20/22: the arguments actually run. A `location` of recent_changes/list_unknowns is dropped unless the
+        current message names a place; a relative window parsed from the message replaces the model's since/until."""
+        name = call["function"]["name"]
+        if name not in SCOPED_TOOLS and name != "who_moved":
+            return call
+        args = _parse_arguments(call["function"]["arguments"])
+        if not isinstance(args, dict):
+            return call  # validation reports it
+        changed = False
+        loc = args.get("location")
+        if name in SCOPED_TOOLS and loc is not None and not (isinstance(loc, str) and await place_is_named(loc)):
+            args.pop("location")
+            changed = True
+        if window is not None and name == "recent_changes":
+            since, until = window
+            floor = self._now() - RECENT_MAX_DAYS + timedelta(minutes=2)
+            if since < floor:
+                since = floor  # review 1: the tool keeps 7 days; a longer window is clamped and said so
+                if CLAMP_NOTE not in notes:
+                    notes.append(CLAMP_NOTE)
+            args["since"] = _iso_z(since)
+            if until is not None:
+                args["until"] = _iso_z(until)
+            else:
+                args.pop("until", None)
+            changed = True
+        elif window is not None and name == "who_moved" and args.get("since") is not None:
+            # review 3: only a model-made since is replaced; a time phrase that does not scope "who" adds nothing
+            args["since"] = _iso_z(window[0])
+            changed = True
+        if not changed:
+            return call
+        return {**call, "function": {**call["function"], "arguments": json.dumps(args)}}
+
+    async def _state_scope(self, reply: str, locations: list[str]) -> str:
+        """AC-AGT-20: a reply under a location filter names it; otherwise "In <name> (<id>): " is prefixed."""
+        for lid in dict.fromkeys(locations):
+            names = getattr(self.toolbox, "names_location", None)
+            label_of = getattr(self.toolbox, "location_label", None)
+            try:
+                named = await names(reply, lid) if names else lid in reply
+                label = await label_of(lid) if label_of else lid
+            except Exception:  # noqa: BLE001 - scope wording must never break a turn
+                named, label = lid in reply, lid
+            if not named:
+                reply = f"In {label}: {reply}"
+        return reply
+
+    async def _location_names(self) -> dict[str, str | None]:
+        get = getattr(self.toolbox, "location_names", None)
+        if get is None:
+            return {}
+        try:
+            return await get()
+        except Exception:  # noqa: BLE001 - names are decoration only
+            return {}
+
     # ------------------------------------------------------------ loop
     async def run(
         self,
@@ -359,6 +454,17 @@ class AgentHarness:
         grounded = False
         substantive = False  # a grounding result with claimable facts (not just an empty recent_changes window)
         empty_scopes: list[dict[str, Any]] = []
+        records: list[tuple[str, Any]] = []  # (tool, data) of grounding results with data, for the AC-AGT-19 summary
+        empty_unknowns: list[str | None] = []  # resolved locations of empty list_unknowns results (AC-AGT-23)
+        applied_locations: list[str] = []  # location filters actually applied (AC-AGT-20)
+        window = parse_time_window(question, self._now())  # AC-AGT-22
+        notes: list[str] = []  # harness notes appended to the reply (AC-AGT-22 clamp)
+
+        async def place_is_named(location: str) -> bool:
+            return await self._place_matches(question, location)
+        tool_names = set(self.toolbox.names()) if hasattr(self.toolbox, "names") else set()
+        finish_reason: str | None = None
+        malformed_retried = False
         grounded_at: int | None = None
         invalid_step_seen = False
         nudged = False
@@ -374,18 +480,39 @@ class AgentHarness:
                         "text": "Reading the question" if step == 1 else
                         ("Writing the answer" if final_call or grounded else f"Thinking (step {step})")})
             request = context + turn
-            prompt_tokens.append(estimate_request_tokens(request, tools))
-            remaining = deadline - time.perf_counter()
-            try:
-                if remaining <= 0:
-                    raise TimeoutError
-                message = await asyncio.wait_for(
-                    self.llm.complete(request, tools, tool_choice="none" if final_call else "auto"), remaining
-                )
-            except (TimeoutError, LLMTimeout):
+            message = None
+            for attempt in (0, 1):
+                prompt_tokens.append(estimate_request_tokens(request, tools))
+                remaining = deadline - time.perf_counter()
+                try:
+                    if remaining <= 0:
+                        raise TimeoutError
+                    message = await asyncio.wait_for(
+                        self.llm.complete(request, tools, tool_choice="none" if final_call else "auto"), remaining
+                    )
+                except (TimeoutError, LLMTimeout):
+                    message = None
+                    break
+                try:
+                    content, requested = parse_assistant(message, step)
+                    break
+                except LLMError:
+                    # AC-AGT-22: one repair attempt for a malformed assistant message, then a clear LLMError
+                    if attempt or malformed_retried:
+                        raise
+                    malformed_retried = True
+                    log.warning("malformed assistant message, asking again",
+                                extra={"request_id": request_id, "step": step})
+            if message is None:
                 stop_reason = "timeout"
                 break
-            content, requested = parse_assistant(message, step)
+            finish_reason = message.get("finish_reason") if isinstance(message, dict) else None
+            text_calls = [] if requested else text_tool_calls(content, tool_names, step)
+            if text_calls:
+                # AC-AGT-22: a tool call written as text is run as a real call, never shown to the operator
+                log.info("text tool call repaired", extra={"request_id": request_id, "step": step,
+                                                            "tool_count": len(text_calls)})
+                requested, content = text_calls, None
             if not requested:
                 if follow_up and not nudged and not tool_calls and step < max_steps:
                     nudged = True  # AC-AGT-12: the model copied an earlier answer instead of looking it up
@@ -396,7 +523,10 @@ class AgentHarness:
                 break
             if final_call:
                 skipped = len(requested)  # results could never reach the model
+                if text_calls:
+                    stop_reason = "text_tool_call"
                 break
+            requested = [await self._adjust_call(c, window, place_is_named, notes) for c in requested]
             pre = [self.toolbox.validate(c["function"]["name"], c["function"]["arguments"]) for c in requested]
             if any(p is not None for p in pre) and invalid_step_seen:
                 for call, err in zip(requested, pre, strict=True):
@@ -443,8 +573,11 @@ class AgentHarness:
                         view = evidence_view(name, sent_data)
                         evidence.append(view)
                         other_evidence.append(view)
+                        if sent_data.get("location"):
+                            applied_locations.append(sent_data["location"])
                         if view["changes"]:
                             substantive = True
+                            records.append((name, sent_data))
                         else:
                             empty_scopes.append(sent_data)
                 elif result.has_data and name in GROUNDING_TOOLS:
@@ -454,6 +587,13 @@ class AgentHarness:
                     view = evidence_view(name, result.data)
                     evidence.append(view)
                     other_evidence.append(view)
+                    records.append((name, result.data))
+                if result.ok and name == "list_unknowns":
+                    scoped = (result.scope or {}).get("location")
+                    if scoped:
+                        applied_locations.append(scoped)
+                    if not result.has_data:
+                        empty_unknowns.append(scoped)
                 if result.has_data and name == "propose_update":
                     proposal = {
                         k: result.data[k] for k in ("proposal_id", "entity_id", "fields", "status") if k in result.data
@@ -490,34 +630,72 @@ class AgentHarness:
             }
         if stop_reason == "answer":
             await emit({"step": steps, "phase": "checking", "text": "Checking the answer against the records"})
+        fallback: str | None = None
+        model_reply = False
+        all_evidence = evidence_text(evidence)
+
+        async def summary() -> str | None:
+            names = await self._location_names()
+            return grounded_summary_reply(records, _dedup(citations), names, all_evidence) if records else (
+                catalog_facts_reply(catalog_entries) if catalog_entries else None)
+
         if not grounded:
-            reply = PROPOSAL_REPLY if proposals else NO_RECORD_REPLY
+            if empty_unknowns and not proposals:
+                labels = [await self._verified_label(lid, question) if lid else None for lid in empty_unknowns]
+                reply = none_unknowns_reply(labels)  # AC-AGT-23: an honest empty answer, with its scope
+            elif proposals:
+                reply = PROPOSAL_REPLY
+            elif stop_reason in ("invalid_tool_calls", "text_tool_call"):
+                reply = INVALID_TOOL_REPLY
+            else:
+                reply = NO_RECORD_REPLY
         elif stop_reason == "answer":
-            if not (final and final.strip()):
+            text = final or ""
+            if finish_reason == "length" and text.strip():
+                text = trim_cut_reply(text, len(_dedup(citations)))  # AC-AGT-21
+                truncated_away = not text
+            else:
+                truncated_away = False
+            if not text.strip() and not truncated_away:
                 reply = EMPTY_REPLY
             else:
-                rejected = len(unsupported_claims(final, evidence_text(evidence)))
-                reply = NO_RECORD_REPLY if rejected else final
-                if rejected and empty_scopes and not substantive:
-                    # The only data is an empty recent_changes window: answer "none" deterministically from the
-                    # scope instead of letting the scope ground the model's words (AC-AGT-13 review).
-                    reply, rejected = none_found_reply(empty_scopes), 0
+                rejected = len(unsupported_claims(text, all_evidence)) if text else 1
+                reply, model_reply = text, True
+                if empty_scopes and not substantive:
+                    # The only data is an empty recent_changes window: answer "none" deterministically from the real
+                    # scope, never in the model's words (AC-AGT-13 review; AC-AGT-20: a stripped location such as
+                    # "USOS" has no digit, so the lexical check could not catch it in the model's wording).
+                    reply, rejected, model_reply = none_found_reply(empty_scopes), 0, False
+                elif rejected:
+                    # AC-AGT-19: records exist, so never "no record": a deterministic summary of the tool data
+                    reply, model_reply = (await summary()) or NO_RECORD_REPLY, False
+                    if reply != NO_RECORD_REPLY:
+                        fallback = "grounded_summary"
                 if not rejected and catalog_entries:
-                    homes = unqualified_home_locations(final, catalog_entries, evidence_text(other_evidence))
+                    homes = unqualified_home_locations(text, catalog_entries, evidence_text(other_evidence))
                     if homes:
                         rewritten = len(homes)
-                        reply, kept_any = usual_location_rewrite(final, homes, catalog_entries)
+                        reply, kept_any = usual_location_rewrite(text, homes, catalog_entries)
                         if not kept_any:
                             keep = {e["catalog_id"] for e in homes}
                             citations = [
                                 c for c in citations
                                 if c.get("catalog_id") in keep and not c.get("entity_id") and not c.get("window_id")
                             ]
+        elif stop_reason == "text_tool_call":
+            reply = (await summary() if substantive else None) or INVALID_TOOL_REPLY
+            fallback = "grounded_summary" if reply != INVALID_TOOL_REPLY else None
         elif stop_reason == "invalid_tool_calls":
             reply = INVALID_TOOL_REPLY
         else:
             reply = STEP_LIMIT_REPLY
-        cited = grounded and not rejected
+        if model_reply and applied_locations:
+            reply = await self._state_scope(reply, applied_locations)  # AC-AGT-20
+        if model_reply:
+            reply = normalize_markdown(reply)  # AC-AGT-24
+        if notes and grounded and reply not in CANNED_REPLIES:
+            reply = f"{reply} {' '.join(notes)}"
+        cited = grounded and (not rejected or fallback is not None)
 
         result = {
             "request_id": request_id,
@@ -528,11 +706,28 @@ class AgentHarness:
             "proposals": proposals,
         }
         self._log_turn(request_id, session_id, steps, tool_calls, skipped, grounded, rejected, rewritten, stop_reason,
-                       prompt_tokens, nudged, started)
+                       prompt_tokens, nudged, started, fallback=fallback, finish_reason=finish_reason)
         return result
 
+    async def _verified_label(self, location_id: str, question: str) -> str:
+        """Review 8: a scope is printed only when it is a known location or the operator typed it."""
+        label = await self._label(location_id)
+        if label != location_id or re.search(rf"(?<![A-Za-z0-9]){re.escape(location_id)}(?![A-Za-z0-9])",
+                                              question, re.IGNORECASE):
+            return label
+        return UNVERIFIED_SCOPE
+
+    async def _label(self, location_id: str) -> str:
+        label_of = getattr(self.toolbox, "location_label", None)
+        if label_of is None:
+            return location_id
+        try:
+            return await label_of(location_id)
+        except Exception:  # noqa: BLE001 - names are decoration only
+            return location_id
+
     def _log_turn(self, request_id, session_id, steps, tool_calls, skipped, grounded, rejected, rewritten,
-                  stop_reason, prompt_tokens, nudged, started) -> None:
+                  stop_reason, prompt_tokens, nudged, started, *, fallback=None, finish_reason=None) -> None:
         log.info(
             "chat turn",
             extra={
@@ -546,6 +741,8 @@ class AgentHarness:
                 "usual_location_rewrites": rewritten,
                 "stop": stop_reason,
                 "follow_up_nudged": nudged,
+                "fallback": fallback,
+                "finish_reason": finish_reason,
                 "prompt_tokens_est": list(prompt_tokens),
                 "prompt_tokens_total": sum(prompt_tokens),
                 "latency_ms": round((time.perf_counter() - started) * 1000, 2),
@@ -631,3 +828,328 @@ def _dedup(citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
             seen.add(key)
             out.append(c)
     return out
+
+
+# ---------------------------------------------------------------- AC-AGT-22: relative time windows
+_NUM_WORDS = {
+    "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+    "nine": 9, "ten": 10, "twelve": 12, "fifteen": 15, "twenty": 20, "thirty": 30, "forty": 40, "forty-five": 45,
+    "fifty": 50, "sixty": 60, "ninety": 90,
+}
+_UNITS = {"m": "minutes", "min": "minutes", "mins": "minutes", "minute": "minutes", "minutes": "minutes",
+          "h": "hours", "hr": "hours", "hrs": "hours", "hour": "hours", "hours": "hours",
+          "day": "days", "days": "days", "week": "weeks", "weeks": "weeks"}
+_LAST = r"\b(?:last|past|previous)\s+"
+_N_UNITS_RE = re.compile(
+    _LAST + r"(\d{1,4}|" + "|".join(sorted(map(re.escape, _NUM_WORDS), key=len, reverse=True)) + r")\s*"
+    r"(minutes?|mins?|m|hours?|hrs?|h|days?|weeks?)\b", re.IGNORECASE)
+_HALF_HOUR_RE = re.compile(r"\bhalf\s+(?:an\s+)?hour\b", re.IGNORECASE)
+_ONE_UNIT_RE = re.compile(_LAST + r"(hour|day|week)\b", re.IGNORECASE)
+_TODAY_RE = re.compile(r"\btoday\b", re.IGNORECASE)
+_YESTERDAY_RE = re.compile(r"\byesterday\b", re.IGNORECASE)
+_UNSUPPORTED_DAY_RE = re.compile(r"\bday\s+before\s+yesterday\b|\bof\s+yesterday\b", re.IGNORECASE)
+_SINCE_CLOCK_RE = re.compile(
+    r"\bsince\s+(\d{1,2})(?::([0-5]\d))?\s*(am|pm|a\.m\.|p\.m\.)?(?=\s*(?:utc|z)?\b|\s*[?.!,]|$)", re.IGNORECASE)
+
+
+def parse_time_window(text: str, now: datetime) -> tuple[datetime, datetime | None] | None:
+    """(since, until or None) for a relative window in the user's message, computed from ``now`` (UTC), or None when
+    the message has no parseable phrase (AC-AGT-22)."""
+    if not isinstance(text, str) or not text:
+        return None
+    now = now.astimezone(UTC)
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if _UNSUPPORTED_DAY_RE.search(text):
+        return None  # "the day before yesterday", "the last hour of yesterday": keep the model's arguments
+    m = _SINCE_CLOCK_RE.search(text)
+    if m and (m.group(2) is not None or m.group(3)):
+        hour, minute, ampm = int(m.group(1)), int(m.group(2) or 0), (m.group(3) or "").lower().replace(".", "")
+        if ampm:
+            if not 1 <= hour <= 12:
+                return None
+            hour = hour % 12 + (12 if ampm == "pm" else 0)
+        elif hour > 23:
+            return None
+        since = midnight.replace(hour=hour, minute=minute)
+        if _YESTERDAY_RE.search(text[m.end():]):
+            return since - timedelta(days=1), None  # "since 10am yesterday"
+        return (since - timedelta(days=1) if since > now else since), None
+    if _YESTERDAY_RE.search(text):
+        return midnight - timedelta(days=1), midnight
+    m = _N_UNITS_RE.search(text)
+    if m:
+        raw = m.group(1).lower()
+        amount = int(raw) if raw.isdigit() else _NUM_WORDS[raw]
+        unit = _UNITS[m.group(2).lower()]
+        if amount > 0:
+            return now - timedelta(**{unit: amount}), None
+    if _HALF_HOUR_RE.search(text):
+        return now - timedelta(minutes=30), None
+    m = _ONE_UNIT_RE.search(text)
+    if m:
+        return now - timedelta(**{_UNITS[m.group(1).lower()]: 1}), None
+    if _TODAY_RE.search(text):
+        return midnight, None
+    return None
+
+
+# ---------------------------------------------------------------- AC-AGT-22: tool calls written as text
+_TOOL_TAG_RE = re.compile(r"^\s*<tool_call>\s*(.*?)\s*</tool_call>\s*$", re.DOTALL)
+_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL)
+
+
+def text_tool_calls(content: str | None, names: list[str] | set[str], step: int) -> list[dict[str, Any]]:
+    """Tool calls the model wrote as text (the whole content is ``{"name": <tool>, "arguments": {...}}``, a list of
+    them, optionally in <tool_call> tags or a ```json fence). Empty list otherwise."""
+    if not isinstance(content, str) or "name" not in content:
+        return []
+    text = content.strip()
+    for pattern in (_TOOL_TAG_RE, _FENCE_RE):
+        m = pattern.match(text)
+        if m:
+            text = m.group(1)
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        return []
+    items = parsed if isinstance(parsed, list) else [parsed]
+    calls = []
+    for i, item in enumerate(items):
+        if not isinstance(item, dict) or item.get("name") not in names:
+            return []
+        args = item.get("arguments", item.get("parameters", {}))
+        calls.append({"id": f"call_text_{step}_{i}", "type": "function",
+                      "function": {"name": item["name"],
+                                   "arguments": args if isinstance(args, str) else json.dumps(args)}})
+    return calls
+
+
+# ---------------------------------------------------------------- AC-AGT-21: answers cut at max_tokens
+_LIST_ITEM_RE = re.compile(r"^(?:\d+[.)]|[-*+])\s+\S")
+_SENTENCE_END_RE = re.compile(r"[.!?](?=\s|$)")
+SHORTENED_NOTE = "(answer shortened; ask for more)"
+
+
+def showing_note(k: int, n: int) -> str:
+    return f"(showing the first {k} of {n}; ask for more)"
+
+
+def _close_markdown(text: str) -> str:
+    text = text.rstrip()
+    if text.count("**") % 2:
+        head, _, tail = text.rpartition("**")
+        text = (head + tail).rstrip()
+    return text.rstrip(" -*:;,")
+
+
+def trim_cut_reply(text: str, n_records: int) -> str:
+    """A reply cut at max_tokens, ended at the last complete line (multi-line) or sentence, with a notice. Empty
+    string when nothing complete is left."""
+    lines = text.rstrip().split("\n")
+    if len(lines) > 1:
+        kept = lines[:-1]
+        while kept and not kept[-1].strip():
+            kept.pop()
+        body = "\n".join(kept)
+    else:
+        ends = list(_SENTENCE_END_RE.finditer(text))
+        body = text[: ends[-1].end()] if ends else ""
+    body = _close_markdown(body) if body.strip() else ""
+    k = sum(1 for line in body.split("\n") if _LIST_ITEM_RE.match(line))
+    if not body or not (k or TIME_RE.search(body) or LOCATION_ID_RE.search(body) or NODE_RE.search(body)):
+        return ""  # review 6: nothing factual survived; the caller answers with the grounded summary
+    if k:
+        note = showing_note(k, n_records) if n_records > k else SHORTENED_NOTE
+        return f"{body}\n\n{note}"
+    return f"{body} {SHORTENED_NOTE}"
+
+
+# ---------------------------------------------------------------- AC-AGT-24: chat Markdown
+_ISO_Z_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]00:?00)(?:\s*UTC\b)?")
+_ORDERED_RE = re.compile(r"^(\d{1,3})[.)]\s+(.*)$")
+_CONTINUATION_RE = re.compile(r"^\s{2,}(?:(?:[-*+]|\d+[.)])\s+)?(\S.*)$")
+
+
+def normalize_markdown(text: str) -> str:
+    """One flat numbered list per run of ordered items (renumbered 1..n across blank lines, indented sub-items folded
+    into their parent with "; "), and ISO-Z timestamps in the dashboard format "YYYY-MM-DD HH:MM UTC"."""
+    if not isinstance(text, str) or not text:
+        return text
+    text = _ISO_Z_RE.sub(r"\1 \2 UTC", text)
+    out: list[str] = []
+    pending: list[str] = []
+    counter = 0
+    in_list = False
+    in_code = False
+    for line in text.split("\n"):
+        if line.lstrip().startswith("```") or in_code:
+            if line.lstrip().startswith("```"):
+                in_code = not in_code
+            out.extend(pending)
+            pending, in_list = [], False
+            out.append(line)
+            continue
+        m = _ORDERED_RE.match(line)
+        if m:
+            if not in_list:
+                out.extend(pending)
+                counter = 0
+            pending = []
+            counter += 1
+            out.append(f"{counter}. {m.group(2)}")
+            in_list = True
+            continue
+        if in_list:
+            c = _CONTINUATION_RE.match(line)
+            if c and not pending:
+                out[-1] = f"{out[-1].rstrip()}; {c.group(1).strip()}"
+                continue
+            if not line.strip():
+                pending.append(line)
+                continue
+            in_list = False
+        out.extend(pending)
+        pending = []
+        out.append(line)
+    out.extend(pending)
+    return "\n".join(out)
+
+
+# ---------------------------------------------------------------- AC-AGT-19: deterministic grounded summary
+MAX_SUMMARY_RECORDS = 5
+SUMMARY_LEAD = "Here is what the records show:"
+_ITEM_TOOLS = frozenset({"where_is", "search_items", "list_unknowns", "get_item"})
+
+
+def _when(value: Any) -> str | None:
+    dt = _parse_iso(value)
+    return f"{dt:%H:%M} UTC on {dt:%Y-%m-%d}" if dt else None
+
+
+def _safe_label(label: Any, entity_id: Any, own: dict[str, Any]) -> str:
+    short = f"[{str(entity_id)[:8]}]" if entity_id else ""
+    text = clean_text(label, MAX_CITATION_TEXT)
+    if text and unsupported_claims(text, json.dumps(own, default=str)):
+        text = None
+    return f"The {text} {short}".strip() if text else f"Record {short}".strip()
+
+
+def _place(lid: Any, names: dict[str, str | None]) -> str | None:
+    if not lid:
+        return None
+    name = names.get(lid)
+    return f"{lid}, {name}" if name else str(lid)
+
+
+_DANGLING_RE = re.compile(r"(?:\s+(?:in|at|on|to|from|into|near|by|the|of|and))+\s*$", re.IGNORECASE)
+
+
+_ACTOR_TEXT_RE = re.compile(r"[A-Za-z0-9 ,'()/-]{1,60}")
+_ACTION_RE = re.compile(r"[a-z_]{1,32}")
+MAX_ACTOR_WORDS = 7
+
+
+def _actor(value: Any) -> str:
+    """Actor text for the deterministic summary: scrubbed of places/times and allow-listed (short, plain words), so
+    free text from the pipeline/operator cannot carry instructions to the operator (review 2)."""
+    text = scrub_claims(clean_text(value))
+    if text:
+        text = _DANGLING_RE.sub("", text).strip(" ,;")  # "who put it in NOD3 at 09:00" -> "who put it"
+    if not text or not _ACTOR_TEXT_RE.fullmatch(text) or len(text.split()) > MAX_ACTOR_WORDS:
+        return "an unidentified person"
+    if re.match(r"(?:in|wearing|with)\b", text, re.IGNORECASE):
+        return f"person {text}"
+    return text
+
+
+def _event_sentence(label: str, ev: dict[str, Any], names: dict[str, str | None], fallback_loc: Any = None) -> str:
+    kind = str(ev.get("event_type") or ev.get("change") or "handled").replace("_", " ")
+    frm, to = ev.get("from_location"), ev.get("to_location")
+    when = _when(ev.get("occurred_at") or ev.get("at"))
+    actor = ev.get("actor_desc") if "actor_desc" in ev else ev.get("actor")
+    if kind == "moved" and (frm or to):
+        route = (f" from {frm}" if frm else "") + (f" to {to}" if to else "")
+        where = ""
+    else:
+        route = ""
+        place = _place(frm or to or fallback_loc, names)
+        where = f" ({place})" if place else ""
+    return f"{label} was {kind}{route} by {_actor(actor)}" + (f" at {when}" if when else "") + f"{where}."
+
+
+def _summary_lines(records: list[tuple[str, Any]], names: dict[str, str | None]) -> list[str]:
+    lines: list[str] = []
+    for name, data in records:
+        if name == "who_moved" and isinstance(data, list):
+            for entry in data:
+                if not isinstance(entry, dict):
+                    continue
+                for ev in entry.get("moves") or []:
+                    own = {k: ev.get(k) for k in ("from_location", "to_location", "occurred_at")}
+                    label = _safe_label(entry.get("label"), entry.get("entity_id"), own)
+                    lines.append(_event_sentence(label, ev, names))  # review 9: never the item's current place
+        elif name == "recent_changes" and isinstance(data, dict):
+            for c in data.get("changes") or []:
+                if not isinstance(c, dict):
+                    continue
+                own = {k: c.get(k) for k in ("from_location", "to_location", "location", "at")}
+                label = _safe_label(c.get("label"), c.get("entity_id"), own)
+                where = _place(c.get("location"), names)
+                when = _when(c.get("at"))
+                if c.get("change") == "new_item":
+                    lines.append(f"{label} was first seen" + (f" in {where}" if where else "")
+                                 + (f" at {when}" if when else "") + ".")
+                elif c.get("change") == "review_resolved":
+                    action = c.get("action") if isinstance(c.get("action"), str) else None
+                    action = action if action and _ACTION_RE.fullmatch(action) else None
+                    lines.append(f"A review of {label[0].lower()}{label[1:]} was resolved"
+                                 + (f" ({action})" if action else "") + f" by {_actor(c.get('actor'))}"
+                                 + (f" at {when}" if when else "") + (f" ({where})" if where else "") + ".")
+                else:
+                    lines.append(_event_sentence(label, c, names, c.get("location")))
+        elif name in _ITEM_TOOLS:
+            for item in data if isinstance(data, list) else [data]:
+                if not isinstance(item, dict):
+                    continue
+                own = {k: item.get(k) for k in ("last_location", "last_location_name", "last_seen_at")}
+                label = _safe_label(item.get("label"), item.get("entity_id"), own)
+                lid = item.get("last_location")
+                where = f"{lid}, {item['last_location_name']}" if lid and item.get("last_location_name") else lid
+                when = _when(item.get("last_seen_at"))
+                lines.append(f"{label} was last seen" + (f" in {where}" if where else "")
+                             + (f" at {when}" if when else "") + ".")
+    return list(dict.fromkeys(lines))
+
+
+def grounded_summary_reply(records: list[tuple[str, Any]], citations: list[dict[str, Any]],
+                           names: dict[str, str | None], evidence: str) -> str | None:
+    """Deterministic answer from this turn's tool data, used when the claim check rejects the model's wording (never
+    "no record" when records exist). Falls back to the cited records; None when there is nothing to say."""
+    lines = _summary_lines(records, names)
+    if lines:
+        shown = lines[:MAX_SUMMARY_RECORDS]
+        text = shown[0] if len(shown) == 1 else SUMMARY_LEAD + "\n" + "\n".join(
+            f"{i}. {line}" for i, line in enumerate(shown, 1))
+        if len(lines) > len(shown):
+            text += "\n\n" + showing_note(len(shown), len(lines))
+        if not unsupported_claims(text, evidence):
+            return text
+    if citations:
+        return records_reply(citations).replace(TIMEOUT_RECORDS_LEAD, SUMMARY_LEAD, 1).replace(
+            " Please try again for a written answer.", "")
+    return None
+
+
+UNVERIFIED_SCOPE = "the requested location"
+
+
+def none_unknowns_reply(labels: list[str | None]) -> str:
+    """AC-AGT-23: an empty list_unknowns result, stated with its scope."""
+    where = [lbl for lbl in dict.fromkeys(labels) if lbl]
+    if not where:
+        return "There are no unknown objects on record."
+    return f"There are no unknown objects in {' or '.join(where)}."
+
+
+def _iso_z(dt: datetime) -> str:
+    return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

@@ -24,6 +24,12 @@ def is_no_record(reply: str) -> bool:
     return reply.strip().startswith(NO_RECORD_PREFIX)
 
 
+def is_replaced(reply: str, draft: str) -> bool:
+    """AC-AGT-19: a rejected draft never reaches the operator. Without records the reply is no-record; with records it
+    is a deterministic summary of the tool data (callers also assert that the invented claim is absent)."""
+    return reply.strip() != draft.strip() and draft.strip() not in reply
+
+
 def test_ac_agt_04_no_record_reply_text():
     assert NO_RECORD_REPLY.startswith(NO_RECORD_PREFIX)
 

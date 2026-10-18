@@ -40,7 +40,9 @@ async def test_review_scope_fields_do_not_ground_claims_next_to_real_changes(mak
     llm = FakeLLM([assistant_tools(tool_call("recent_changes", {"location": "LAB1"})),
                    assistant_text("The camera was moved to LAB1 at 11:40.")])
     res = await make_harness(llm).run(user("What changed in the lab?"))
-    assert res["reply"] == NO_RECORD_REPLY
+    # AC-AGT-19: the draft is replaced by the deterministic summary of the real changes (never the scope's 11:40)
+    assert "11:40" not in res["reply"] and "camera" not in res["reply"].lower()
+    assert res["reply"] != NO_RECORD_REPLY and "12:20 UTC" in res["reply"]
 
 
 # ---------------------------------------------------------------- 2. big recent_changes payloads stay structured
@@ -70,7 +72,9 @@ async def test_review_actor_text_cannot_ground_location_or_time(make_harness, tb
         llm = FakeLLM([assistant_tools(tool_call(tool, args)),
                        assistant_text("The drill was moved to NOD3 at 09:00.")])
         res = await make_harness(llm).run(user("What happened to the drill?"))
-        assert res["reply"] == NO_RECORD_REPLY, tool
+        # AC-AGT-19: replaced by the grounded summary; the actor's injected place/time never surfaces
+        assert res["reply"] != NO_RECORD_REPLY, tool
+        assert "NOD3" not in res["reply"] and "09:00" not in res["reply"], tool
 
 
 async def test_review_actor_text_still_grounds_the_actor(make_harness, tb):

@@ -7,7 +7,8 @@ import json
 from dataclasses import replace
 
 from nasa_agent.context import SYSTEM_PROMPT
-from nasa_agent.harness import NO_RECORD_REPLY, _dedup
+from nasa_agent.grounding import USUAL_LOCATION_LEAD
+from nasa_agent.harness import _dedup
 from tests.conftest import user
 from tests.fakes import E_DRILL, FakeLLM, _cat, assistant_text, assistant_tools, tool_call
 from tests.test_ac_agt_04_grounding import is_no_record
@@ -70,7 +71,9 @@ async def test_ac_agt_11_catalog_only_turn_still_rejects_invented_time(make_harn
         assistant_text("The Fluke multimeter is usually kept in LAB1 and was last checked at 09:00."),
     ])
     res = await make_harness(llm).run(user("where is the multimeter usually kept?"))
-    assert is_no_record(res["reply"]) and res["citations"] == []
+    # AC-AGT-19: the rejected draft is replaced by the deterministic usual-stowage answer, not "no record"
+    assert "09:00" not in res["reply"] and res["reply"].startswith(USUAL_LOCATION_LEAD)
+    assert [c["catalog_id"] for c in res["citations"]] == ["multimeter"]
 
 
 async def test_ac_agt_11_entity_and_catalog_citations_both_appear(make_harness):
@@ -164,8 +167,10 @@ async def test_ac_agt_11_catalog_free_text_does_not_ground_claims(make_harness, 
         assistant_text("The drill was moved by the commander at 09:00 to NOD3."),
     ])
     res = await make_harness(llm).run(user("tell me about the wrench"))
-    assert res["reply"] == NO_RECORD_REPLY
-    assert res["citations"] == []
+    # AC-AGT-19: deterministic catalog facts; the injected display name is replaced by the catalog_id
+    for claim in ("commander", "09:00", "NOD3", "JPM1F5", "SYSTEM"):
+        assert claim not in res["reply"]
+    assert res["reply"] == "From the catalog: wrench [wrench], catalog expected count: 6."
 
 
 async def test_ac_agt_11_catalog_text_never_reaches_the_system_role(make_harness, fake_inventory):
@@ -203,7 +208,9 @@ async def test_ac_agt_11_review_catalog_id_text_does_not_ground_claims(make_harn
         assistant_text("The kit was moved to Node 3 on 2026-10-01."),
     ])
     res = await make_harness(llm).run(user("where is the kit?"))
-    assert res["reply"] == NO_RECORD_REPLY and res["citations"] == []
+    # AC-AGT-19: the claim "Node 3 on 2026-10-01" is not stated; only the provable count (the slug is shown as an id)
+    assert "Node 3" not in res["reply"] and "moved" not in res["reply"]
+    assert res["reply"] == "From the catalog: Kit [nod3-kit-2026-10-01], catalog expected count: 1."
 
 
 async def test_ac_agt_11_review_qualifier_plus_current_marker_is_rewritten(make_harness):

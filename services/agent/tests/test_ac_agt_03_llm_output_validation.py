@@ -26,12 +26,13 @@ MALFORMED = [
 @pytest.mark.parametrize("message", MALFORMED)
 async def test_ac_agt_03_malformed_assistant_message_is_llm_error(make_harness, message):
     with pytest.raises(LLMError):
-        await make_harness(FakeLLM([message])).run(user("where is the drill?"))
+        # AC-AGT-22: one repair attempt (the request is repeated once), then the LLMError
+        await make_harness(FakeLLM([message, message])).run(user("where is the drill?"))
 
 
 @pytest.mark.parametrize("message", MALFORMED)
 def test_ac_agt_03_malformed_assistant_message_is_502_with_request_id(plain_settings, inventory, fake_memory, message):
-    app = create_app(plain_settings, llm=FakeLLM([message]), inventory=inventory, memory=fake_memory,
+    app = create_app(plain_settings, llm=FakeLLM([message, message]), inventory=inventory, memory=fake_memory,
                      inventory_block=FakeInventoryBlock(), dreamer=None)
     with TestClient(app, raise_server_exceptions=False) as c:
         r = c.post("/chat", json={"messages": user("where is the drill?")})

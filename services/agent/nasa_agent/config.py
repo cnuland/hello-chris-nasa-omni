@@ -36,6 +36,7 @@ class Settings:
     grounded_extra_steps: int = 1  # AGENT_GROUNDED_EXTRA_STEPS: tool steps allowed after grounding data (>= 0)
     turn_deadline_s: float = 45.0  # AGENT_TURN_DEADLINE_S: wall-clock budget of one chat turn's LLM calls
     history_reply_tokens: int = 150  # AGENT_HISTORY_REPLY_TOKENS: cap per earlier assistant reply (AC-AGT-12)
+    stream_token_delay_s: float = 0.03  # AGENT_STREAM_TOKEN_DELAY_S: pause between streamed reply chunks (AC-AGT-25)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -80,6 +81,7 @@ class Settings:
             grounded_extra_steps=num("AGENT_GROUNDED_EXTRA_STEPS", cls.grounded_extra_steps, int, allow_zero=True),
             turn_deadline_s=num("AGENT_TURN_DEADLINE_S", cls.turn_deadline_s, float),
             history_reply_tokens=num("AGENT_HISTORY_REPLY_TOKENS", cls.history_reply_tokens, int),
+            stream_token_delay_s=num("AGENT_STREAM_TOKEN_DELAY_S", cls.stream_token_delay_s, float, allow_zero=True),
         )
 
     @property
