@@ -79,7 +79,10 @@ class OwlV2Detector:
 
         h, w = frame.shape[:2]
         image = Image.fromarray(np.ascontiguousarray(frame, dtype=np.uint8))
-        inputs = self._processor(text=[labels], images=image, return_tensors="pt").to(self.device)
+        # AC-PER-54 review: OWLv2 text queries are capped at 16 tokens; a long label must not fail the whole call
+        inputs = self._processor(
+            text=[labels], images=image, return_tensors="pt", padding="max_length", truncation=True
+        ).to(self.device)
         with torch.no_grad():
             outputs = self._model(**inputs)
         # OWLv2 pads the image to a square before resizing: post-process against the padded size.

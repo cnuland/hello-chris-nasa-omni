@@ -71,7 +71,7 @@ import numpy as np
 
 from . import NEW, UNKNOWN
 from .config import PerceptionConfig
-from .labels import CatalogMapper, is_structure_label, label_key, normalise_label
+from .labels import CatalogMapper, is_structure_label, label_key, normalise_label, noun_phrase
 from .locations import LocationResolver, ModuleCarry
 from .media import crop as crop_image
 from .media import encode_jpeg
@@ -84,7 +84,7 @@ from .people import (
     find_sleep_cue,
     sanitise_text,
 )
-from .privacy import is_body_label, ordered, overlaps_person, region_kind
+from .privacy import is_body_label, mentions_person, ordered, overlaps_person, region_kind
 from .speech import classify_utterance_logged, parse_speech_claim, split_utterances
 from .storage import crop_key, frame_key, raw_key
 from .types import DecisionResult, Detection, LabelMatch, OmniResult, Window
@@ -104,6 +104,8 @@ PLACE_ITEMS_LIMIT = 50  # AC-PER-29: same-class entities of one module (GET /ite
 PERSON_RECENT_DESCRIPTIONS = 5  # review round (AC-PER-45): a track's latest sighting appearances kept in memory
 UNKNOWN_PLACE_ITEMS_LIMIT = 200  # UNKNOWN has no class filter: every entity of the module is listed
 MAX_PERSON_BOXES = 10  # AC-PER-49: person regions sent with a sighting (inventory-api checks crops itself)
+#: AC-PER-54 extra detector call for unknown objects: ``query_detect(frame_index, query_texts) -> detections``
+QueryDetect = Callable[[int, Sequence[str]], Sequence[Detection]]
 LEAVES_INVENTORY = frozenset({"removed", "consumed"})  # AC-PER-51: no destination is filled for these
 
 
@@ -330,6 +332,11 @@ class _WindowContext:
         # AC-PER-49: person regions per frame index: (normalised box, "person" | "face")
         self.person_regions: dict[int, list[tuple[tuple[float, float, float, float], str]]] = {}
         self.person_crops_dropped = 0
+        # AC-PER-54/55 window statistics of the extra unknown-object queries
+        self.unknown_queries = 0
+        self.unknown_boxes_linked = 0
+        self.unknown_query_person_rejected = 0
+        self.unknown_query_ms = 0
 
     def regions(self, idx: int) -> list[tuple[tuple[float, float, float, float], str]]:
         return self.person_regions.get(idx, [])
@@ -453,10 +460,12 @@ class Reconciler:
         *,
         transcript: str | None = None,
         model: str | None = None,
+        query_detect: QueryDetect | None = None,
     ) -> WindowOutcome:
         """Reconcile and post one window. ``detections[i]`` are the detector boxes of ``window.frames[i]``.
         ``transcript`` is the final (cleaned) transcript to store and mine for speech claims; None -> the omni
-        transcript."""
+        transcript. ``query_detect(frame_index, texts)`` (AC-PER-54) runs the detector on that frame with extra text
+        queries for unknown objects; None -> no extra queries."""
         self.refresh_if_stale()
         if not omni.ok or not isinstance(omni.observation, dict):
             logger.info(
@@ -465,7 +474,7 @@ class Reconciler:
             )
             return WindowOutcome(status="invalid", error=omni.error or f"omni status {omni.status}")
         try:
-            payload, observed, claims = self._build(window, omni, detections, transcript, model)
+            payload, observed, claims = self._build(window, omni, detections, transcript, model, query_detect)
         except Exception as exc:
             logger.exception("reconciliation failed", extra={"window": window.index})
             return WindowOutcome(status="error", error=f"{type(exc).__name__}: {exc}")
@@ -494,6 +503,7 @@ class Reconciler:
         detections: Sequence[Sequence[Detection]],
         transcript: str | None,
         model: str | None,
+        query_detect: QueryDetect | None = None,
     ):
         obs = omni.observation or {}
         if transcript is None:
@@ -569,6 +579,11 @@ class Reconciler:
         ctx.person_regions = self._person_regions(window, raw_objects, dets)
 
         observed = self._link(window, objects, dets)
+        if query_detect is not None and not no_capture:
+            # review round: people omni reports (people[] carries no box) or lists as objects
+            people_reported = bool([p for p in obs.get("people") or [] if isinstance(p, dict)]) or any(
+                self._is_region_label(str(o.get("label") or "")) for o in raw_objects)
+            self._query_unknowns(ctx, observed, dets, query_detect, people_reported)  # AC-PER-54/55
         observed = self._with_people(window, obs, observed)  # AC-PER-35
         for o in observed:
             o.location = self._object_location(ctx, o)
@@ -611,6 +626,11 @@ class Reconciler:
         # AC-PER-49/50 window statistics (inventory-api ignores unknown window fields)
         window_doc["structure_filtered"] = len(structure)
         window_doc["person_crops_dropped"] = ctx.person_crops_dropped
+        # AC-PER-54/55 window statistics (inventory-api ignores unknown window fields)
+        window_doc["unknown_queries"] = ctx.unknown_queries
+        window_doc["unknown_boxes_linked"] = ctx.unknown_boxes_linked
+        window_doc["unknown_query_person_rejected"] = ctx.unknown_query_person_rejected
+        window_doc["unknown_query_ms"] = ctx.unknown_query_ms
         if privacy is not None:
             window_doc["privacy"] = privacy  # AC-PER-37 metadata (inventory-api ignores unknown window fields)
         if not no_capture:
@@ -889,6 +909,105 @@ class Reconciler:
                 )
             )
         return out
+
+    def _query_text(self, label: str) -> str | None:
+        """AC-PER-54/55: the detector query for an unknown's label, or None (empty, structure, body, person class or any
+        person word: a query naming a person would return the person's box)."""
+        text = noun_phrase(label)
+        if not text or is_structure_label(label) or mentions_person(label) or self._is_region_label(label):
+            return None
+        return text
+
+    def _query_box_overlaps_person(self, ctx: _WindowContext, frame_idx: int, box: Sequence[float]) -> bool:
+        regions = ctx.regions(frame_idx)
+        return bool(regions) and overlaps_person(box, [r[0] for r in regions], [r[1] for r in regions])
+
+    def _query_unknowns(
+        self,
+        ctx: _WindowContext,
+        observed: list[_Observed],
+        dets: list[list[Detection]],
+        query_detect: QueryDetect,
+        people_reported: bool = False,
+    ) -> None:
+        """AC-PER-54/55: unknown instances without a detector box get one from an extra detector call that queries
+        their own label on their frame: at most ``unknown_queries_max`` distinct texts (omni confidence order), one
+        call per frame, only the new texts. The best unclaimed box of the instance's text is linked when its score is
+        >= ``unknown_query_min_score`` and it overlaps no person region; otherwise nothing is linked. Boxes of the main
+        detector call (any label) and boxes linked to other instances are never taken. When omni reports people but
+        the detector boxed nobody in any frame of the window, no query box is linked (fail closed: the crop guard
+        would have no region to check against)."""
+        budget = int(self.config.unknown_queries_max or 0)
+        n_frames = len(ctx.window.frames)
+        if budget <= 0 or n_frames == 0:
+            return
+        pending = sorted(
+            (o for o in observed if o.is_unknown and o.detection is None and 0 <= o.frame_idx < n_frames),
+            key=lambda o: (-_clamp01(o.obj.get("confidence"), 0.5), o.index),
+        )
+        texts: list[str] = []
+        chosen: list[tuple[_Observed, str]] = []
+        for o in pending:
+            text = self._query_text(str(o.obj.get("label") or ""))
+            if text is None:
+                continue
+            if text not in texts:
+                if len(texts) >= budget:
+                    continue
+                texts.append(text)
+            chosen.append((o, text))
+        if not chosen:
+            return
+        by_frame: dict[int, list[str]] = {}
+        for o, text in chosen:
+            frame_texts = by_frame.setdefault(o.frame_idx, [])
+            if text not in frame_texts:
+                frame_texts.append(text)
+        started = time.monotonic()
+        found: dict[int, list[Detection]] = {}
+        ran: set[str] = set()
+        for f, frame_texts in sorted(by_frame.items()):
+            try:
+                found[f] = [d for d in query_detect(f, list(frame_texts)) or [] if d.label in frame_texts]
+                ran.update(frame_texts)
+            except Exception as exc:  # noqa: BLE001 - the extra boxes are optional; the window is still written
+                logger.warning("unknown-object query failed", extra={"window": ctx.window.index, "frame": f,
+                                                                      "error": str(exc)})
+                found[f] = []
+        ctx.unknown_query_ms = int((time.monotonic() - started) * 1000)
+        ctx.unknown_queries = len(ran)
+        # boxes that belong to other objects: every main-call detection of the frame, linked or not (review round),
+        # and boxes linked to other instances
+        claimed: dict[int, list[tuple[float, float, float, float]]] = {}
+        for f, frame_dets in enumerate(dets):
+            claimed.setdefault(f, []).extend(tuple(float(v) for v in d.bbox) for d in frame_dets)
+        for o in observed:
+            if o.detection is not None and o.bbox is not None:
+                claimed.setdefault(o.frame_idx, []).append(o.bbox)
+        nobody_boxed = people_reported and not any(ctx.person_regions.values())
+        min_score = float(self.config.unknown_query_min_score)
+        for o, text in chosen:
+            f = o.frame_idx
+            taken = claimed.get(f, [])
+            ranked = sorted((d for d in found.get(f, []) if d.label == text), key=lambda d: -d.score)
+            best = next((d for d in ranked if not any(iou(d.bbox, b) >= self.config.link_iou for b in taken)), None)
+            if best is None or best.score < min_score:
+                continue
+            if nobody_boxed or self._query_box_overlaps_person(ctx, f, best.bbox):
+                ctx.unknown_query_person_rejected += 1  # AC-PER-55: never linked, no lower box instead
+                logger.info("unknown-object query box overlaps a person region; not linked",
+                            extra={"window": ctx.window.index, "frame": f})
+                continue
+            o.bbox = ordered(best.bbox)
+            o.detection = best
+            claimed.setdefault(f, []).append(o.bbox)
+            ctx.unknown_boxes_linked += 1
+        logger.info(
+            "unknown-object queries",
+            extra={"window": ctx.window.index, "queries": len(texts), "frames": sorted(by_frame), "calls": len(by_frame),
+                   "linked": ctx.unknown_boxes_linked, "person_rejected": ctx.unknown_query_person_rejected,
+                   "ms": ctx.unknown_query_ms},
+        )
 
     def _consolidation_key(self, e: _Entry) -> tuple[str, str] | None:
         """Instances of the same key may be consolidated; None = never (fungible, or an empty UNKNOWN label)."""
@@ -1546,7 +1665,8 @@ class Reconciler:
             review.update(
                 {
                     "entity_ref": o.ref,
-                    "image_uri": crop_uri or frame_uri,
+                    # AC-PER-56: an unknown's review shows the whole frame (the UI draws the sighting box on it)
+                    "image_uri": (frame_uri or crop_uri) if o.is_unknown else (crop_uri or frame_uri),
                     "observed_at": _iso(seen_at),
                     "location_id": o.location,
                     "model_guess": str(o.obj.get("label") or "") or None,

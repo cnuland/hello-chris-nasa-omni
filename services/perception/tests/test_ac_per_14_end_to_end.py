@@ -70,7 +70,7 @@ def scenario():
     return source, observations
 
 
-def test_ac_per_14_scripted_scenario_end_to_end(api, db):
+def test_ac_per_14_scripted_scenario_end_to_end(api, db, api_app_client):
     source, observations = scenario()
     config = PerceptionConfig(camera_locations=dict(CAMERA_LOCATIONS), s3_bucket=BUCKET, window_frames=1,
                               stride_s=1.0)
@@ -100,8 +100,18 @@ def test_ac_per_14_scripted_scenario_end_to_end(api, db):
                                  "WHERE kind = 'unknown_object'").fetchall()
     assert len(unknown_reviews) == 1
     assert unknown_reviews[0][0] == by_cat[None][0]
-    assert unknown_reviews[0][1].startswith(f"s3://{BUCKET}/crops/")
+    # AC-PER-56 (amends AC-PER-13): an unknown's review shows the whole frame; the real inventory-api then returns the
+    # sighting's detector box as image_bbox, and the crop stays the exemplar's
+    assert unknown_reviews[0][1].startswith(f"s3://{BUCKET}/frames/")
     assert "red cap" in unknown_reviews[0][2]
+    listed = [r for r in api_app_client.get("/review", params={"kind": "unknown_object"}).json()
+              if r["kind"] == "unknown_object"]
+    assert len(listed) == 1
+    assert listed[0]["image_bbox"] == pytest.approx(list(ORB_BOX), abs=1e-3)
+    assert listed[0]["image_bbox_source"] == "detector"
+    crops = db.execute("SELECT count(*) FROM entity_exemplar WHERE entity_id = %s AND crop_uri LIKE %s",
+                       (by_cat[None][0], f"s3://{BUCKET}/crops/%")).fetchone()[0]
+    assert crops >= 1
 
     sightings = dict(db.execute("SELECT entity_id, count(*) FROM sighting GROUP BY entity_id").fetchall())
     assert sightings[by_cat["laptop"][0]] == 10

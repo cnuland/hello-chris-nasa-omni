@@ -145,3 +145,7 @@ class ReplayStats:
     decisions: int = 0
     structure_filtered: int = 0  # AC-PER-50: omni objects dropped as station structure
     person_crops_dropped: int = 0  # AC-PER-49: object crops dropped because they overlapped a person
+    unknown_queries: int = 0  # AC-PER-54: extra OWLv2 query texts run for unknown objects
+    unknown_boxes_linked: int = 0  # AC-PER-54: unknown objects that got a query box
+    unknown_query_person_rejected: int = 0  # AC-PER-55: query boxes not linked because of people
+    unknown_query_ms: int = 0  # AC-PER-54: wall time of the extra detector calls

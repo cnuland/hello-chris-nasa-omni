@@ -390,9 +390,13 @@ def test_ac_per_08_unknown_class_creates_unknown_entity_and_review(make_reconcil
     assert r["entity_ref"] == a["ref"]
     assert "glowing sphere" in r["description"]
     assert parse_dt(r["observed_at"]) == w.frames[1].timestamp
+    # AC-PER-56 (amends AC-PER-13): the review shows the whole frame (the UI draws the sighting box); the crop is
+    # still stored, as the exemplar's crop
     key = uri_key(r["image_uri"])
-    assert key.startswith("crops/cam-lab1-fwd/")
+    assert key.startswith("frames/cam-lab1-fwd/") and r["image_uri"] == a["sighting"]["frame_uri"]
     assert storage.objects[key][:2] == b"\xff\xd8"
+    crop = uri_key(a["exemplar"]["crop_uri"])
+    assert crop.startswith("crops/cam-lab1-fwd/") and storage.objects[crop][:2] == b"\xff\xd8"
 
 
 def test_ac_per_08_unknown_resighted_matches_existing_without_new_review(make_reconciler, inv):

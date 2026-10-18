@@ -59,6 +59,20 @@ def label_heads(text: str) -> list[str]:
     return list(dict.fromkeys(keys))
 
 
+def noun_phrase(text: str, max_words: int = 6) -> str:
+    """AC-PER-54 detector query of a label: ``normalise_label`` without leading determiners, cut before the first
+    preposition/participle (as ``label_heads``), and at most the last ``max_words`` words (the head noun is last).
+    OWLv2 caps a text query at 16 tokens and does best on a short noun phrase."""
+    words = normalise_label(text).split()
+    while len(words) > 1 and words[0] in _DETERMINERS:
+        words = words[1:]
+    for i, w in enumerate(words):
+        if i > 0 and w in _PHRASE_END:
+            words = words[:i]
+            break
+    return " ".join(words[-max_words:]) if max_words > 0 else ""
+
+
 # AC-PER-50 (UI4-05): station structure and outside views are not inventory. Keys in label_key form; matched against
 # label_heads(). Applied only to labels that map to UNKNOWN, so a catalogued item is always kept.
 STRUCTURE_KEYS = frozenset(

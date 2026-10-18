@@ -1150,3 +1150,45 @@ No window had the wrong module; all 14 misses stayed at segment level (USOS).
   non-structure unknowns in a full first pass, which defeats the unknown-classification requirement.
 - **Red:** 4 of 4 failed. **Green:** 1232 passed; ruff is clean. **Live effect:** measured on the next run (see
   QUESTIONS #38).
+
+## AC-PER-54..57 detector boxes for unknown objects (live Gemma 4 run, 2026-10-18)
+- **Found live:** the unknowns "orange tool" (COL1), "orange sphere" and "white wrapped object" (JPM1) had sighting
+  `bbox`/`bbox_source` null, so the review showed a bare 1080×608 frame. Read in the code and in the raw replies
+  (fetched read-only, now tests/fixtures/gemma4_unknowns_2026-10-18.json): OWLv2 was only asked for catalog names +
+  person/face, so an UNKNOWN label could never link, and Gemma's boxes are on a 0..1000 scale in `[y1, x1, y2, x2]`
+  order, which AC-PER-33 nulls (reported, not fixed here: it changes linking for every object).
+- **Spec first:** docs/spec/20-perception.md "Amendments: detector boxes for unknown objects" (AC-PER-54..57).
+- **Red:** tests/test_ac_per_54_57_unknown_queries.py, 56 of 59 failing for the right reasons (no `query_detect`,
+  no config, no `mentions_person`); 3 passing (fixture shape, and two that hold already).
+- **Green:** `Reconciler._query_unknowns` (after linking, before people/locations; only in capturable windows),
+  `privacy.mentions_person`, config `unknown_queries_max`/`unknown_query_min_score`, unknown reviews use the frame
+  (AC-PER-56), replay passes `query_detect` (detector on the frame's hires image with only the new texts),
+  `ReplayStats` counters, window statistics.
+- **Existing tests amended (justified, AC-PER-56 amends AC-PER-13):** `test_ac_per_08_unknown_class_creates_unknown_
+  entity_and_review` and `test_ac_per_14_scripted_scenario_end_to_end` asserted the unknown review image is the crop.
+  Both now assert the frame, plus that the crop is still stored as the exemplar; the e2e test also asserts, through
+  the real inventory-api, that `GET /review` returns `image_bbox` = the detector box with `image_bbox_source:
+  detector`.
+- **Test bugs fixed before green:** `seen_at` format (`+00:00`), and the replay test assumed one window (the first
+  window is emitted on the first frame, AC-PER-2).
+- **Real OWLv2** (base-patch16-ensemble, CPU, temp venv; `-m model` test passes):
+  - live Kibo frame (06:28:33, frame 0): "orange sphere" 0.604, px [565, 253, 604, 290], exactly the sphere;
+    tour video t = 55 s (not 2 min: the run's first window is video t = 0): 0.450, px [559, 264, 598, 301].
+  - "orange tool": best 0.277 is the wrong object (the sphere through the far hatch); the tool scores 0.142.
+    "white wrapped object": 0.058. Default threshold set to **0.3** (links the sphere, rejects the wrong tool box).
+  - Latency: ≈ 0.50 s per call on CPU with 1 query, 0.52 s with 6; the image encoder dominates, so the cost is
+    one detection per frame with queries (≈ 0.35 s on the T4; usually 1-2 per window with unknowns).
+- **Adversarial review** (independent reviewer agent; no P1; fixes test-first):
+  1. *P2: detector-missed person.* A query box could crop a crew member reported only in `people[]`. Fail closed: no
+     query link when people are reported and no frame of the window has a person region. Checked on the live window
+     that this keeps the sphere (OWLv2 boxes the person on frame 4 at 0.32, none on frame 0).
+  2. *P2: query box on an unlinked catalog detection* (same laptop seen on another frame). Every main-call detection
+     of the frame is now claimed.
+  3. *P2 (likely): long labels* would overflow OWLv2's 16-token text cap and fail the frame's batch. Query = short
+     noun phrase (`labels.noun_phrase`, ≤ 6 words), and the detector truncates (checked with the real model).
+  4. *P3:* spec call bound reworded; more person/body words (crewman, spacewalker, kid, child, guy, someone, hair,
+     eye, neck, ...); vacuous person-word test now asserts no calls; a test renamed; failed calls are not counted;
+     `ReplayStats.unknown_query_person_rejected`; a catalog-object AC-PER-49 frame-fallback test (the AC-PER-49 tests
+     use an unknown, which is now always framed).
+  - Accepted (spec residual risks): widened detector-miss risk, repeated per-window cost, omni's box not used to pick
+    among query boxes, eval cannot score query links (its fake detector never returns unknowns).

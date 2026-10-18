@@ -1,0 +1,198 @@
+{
+ "source": "live Gemma 4 run on the ARO cluster, 2026-10-18, camera cam-handheld (tour-medium.mp4); raw replies read from s3://inventory/raw/cam-handheld/2026-10-18/<t_end>.json via the dashboard media proxy (read-only)",
+ "measured_live": "each unknown below was stored with sighting bbox null and bbox_source null; the review image was the whole 1080x608 frame without a box",
+ "box_note": "bbox values are Gemma's 0..1000 scale in [y1, x1, y2, x2] order; AC-PER-33 nulls them",
+ "windows": [
+  {
+   "t_start": "2026-10-18T06:28:03.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/062808.555353.json",
+   "unknown": "orange tool",
+   "live_location": "COL1",
+   "reply": {
+    "scene_summary": "A person in a black shirt stands near a hatch in the Columbus Laboratory Module.",
+    "location_hint": "Columbus Laboratory Module",
+    "objects": [
+     {
+      "label": "blue cloth",
+      "description": "a blue piece of fabric",
+      "confidence": 0.9,
+      "bbox": [
+       617,
+       424,
+       714,
+       501
+      ],
+      "frame_index": 5
+     },
+     {
+      "label": "orange tool",
+      "description": "an orange handled tool",
+      "confidence": 0.85,
+      "bbox": [
+       614,
+       688,
+       884,
+       731
+      ],
+      "frame_index": 5
+     }
+    ],
+    "people": [
+     {
+      "ref": "P1",
+      "appearance": "black shirt, grey pants",
+      "activity": "standing near a hatch",
+      "is_speaking": false
+     }
+    ],
+    "events": [],
+    "transcript": "",
+    "audio_events": []
+   }
+  },
+  {
+   "t_start": "2026-10-18T06:28:33.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/062838.555353.json",
+   "unknown": "orange sphere",
+   "live_location": "JPM1",
+   "reply": {
+    "scene_summary": "A person in a blue shirt floats in the Japanese Experiment Module \"Kibo\" while looking at equipment.",
+    "location_hint": "Japanese Experiment Module \"Kibo\"",
+    "objects": [
+     {
+      "label": "laptop",
+      "description": "a black laptop mounted on a rack",
+      "confidence": 0.9,
+      "bbox": [
+       400,
+       547,
+       465,
+       603
+      ],
+      "frame_index": 0
+     },
+     {
+      "label": "orange sphere",
+      "description": "a small orange spherical object",
+      "confidence": 0.95,
+      "bbox": [
+       415,
+       493,
+       478,
+       531
+      ],
+      "frame_index": 0
+     },
+     {
+      "label": "white pouch",
+      "description": "a white pouch attached to a rail",
+      "confidence": 0.85,
+      "bbox": [
+       848,
+       455,
+       915,
+       503
+      ],
+      "frame_index": 3
+     },
+     {
+      "label": "ziploc bag",
+      "description": "a clear ziploc bag containing items",
+      "confidence": 0.8,
+      "bbox": [
+       885,
+       415,
+       955,
+       455
+      ],
+      "frame_index": 3
+     },
+     {
+      "label": "food package",
+      "description": "a small food package on a shelf",
+      "confidence": 0.75,
+      "bbox": [
+       455,
+       855,
+       495,
+       885
+      ],
+      "frame_index": 0
+     }
+    ],
+    "people": [
+     {
+      "ref": "P1",
+      "appearance": "blue shirt, dark hair",
+      "activity": "floating and looking at equipment",
+      "is_speaking": false
+     }
+    ],
+    "events": [
+     {
+      "type": "moved",
+      "object_label": "person",
+      "actor_ref": "P1",
+      "confidence": 0.9,
+      "frame_index": 4,
+      "evidence": "P1 moves into view and floats in the center of the module"
+     }
+    ],
+    "transcript": "",
+    "audio_events": []
+   }
+  },
+  {
+   "t_start": "2026-10-18T06:29:03.555353Z",
+   "raw_uri": "s3://inventory/raw/cam-handheld/2026-10-18/062908.555353.json",
+   "unknown": "white wrapped object",
+   "live_location": "JPM1",
+   "reply": {
+    "scene_summary": "A view through a hatch shows a large white wrapped object in the foreground and another module beyond.",
+    "location_hint": null,
+    "objects": [
+     {
+      "label": "white wrapped object",
+      "description": "large white bundle wrapped in protective material",
+      "confidence": 0.95,
+      "bbox": [
+       475,
+       515,
+       665,
+       985
+      ],
+      "frame_index": 5
+     },
+     {
+      "label": "laptop",
+      "description": "black laptop mounted on a rack",
+      "confidence": 0.85,
+      "bbox": [
+       100,
+       145,
+       355,
+       315
+      ],
+      "frame_index": 0
+     },
+     {
+      "label": "white pouch",
+      "description": "small white pouch attached to a rack",
+      "confidence": 0.8,
+      "bbox": [
+       545,
+       100,
+       715,
+       155
+      ],
+      "frame_index": 5
+     }
+    ],
+    "people": [],
+    "events": [],
+    "transcript": "",
+    "audio_events": []
+   }
+  }
+ ]
+}

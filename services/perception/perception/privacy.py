@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from .labels import is_structure_label, label_heads, label_key
+from .labels import is_structure_label, label_heads, label_key, normalise_label
 
 IOU_MAX = 0.05  # IoU above this is an overlap
 CROP_SHARE_MAX = 0.10  # a region covering more than this share of the crop is an overlap
@@ -38,6 +38,22 @@ def is_body_label(text: str) -> bool:
     if not heads or is_structure_label(text):  # "robotic arm" is station hardware, not a body part
         return False
     return heads[-1] in _BODY_HEADS or heads[0] in _BODY_WHOLE
+
+
+# AC-PER-55: words that make a label unusable as a detector query (any word of the label, not only the head noun):
+# an OWLv2 query naming a person would return a box on the person ("astronaut's bag", "crew member glove").
+_PERSON_WORDS = _BODY_HEADS | frozenset(
+    ["person", "persons", "people", "astronaut", "astronauts", "crew", "crewmember", "crewmembers", "cosmonaut",
+     "cosmonauts", "member", "members", "man", "men", "woman", "women", "human", "humans", "head", "heads", "body",
+     "bodies", "face", "faces", "crewman", "crewmen", "spacewalker", "spacewalkers", "kid", "kids", "child",
+     "children", "boy", "boys", "girl", "girls", "guy", "guys", "someone", "somebody", "hair", "eye", "eyes", "neck",
+     "shoulder", "shoulders", "skin", "beard", "wrist", "wrists", "thumb", "thumbs", "mouth", "nose", "lips"]
+)
+
+
+def mentions_person(text: str) -> bool:
+    """True when any word of the label names a person or a body part (fail closed: "drill head" is not a query)."""
+    return any(w in _PERSON_WORDS for w in normalise_label(text).split())
 
 
 def region_kind(text: str) -> str:

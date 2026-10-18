@@ -18,7 +18,9 @@ Environment variables (all optional unless noted):
   PERCEPTION_MODULE_CARRY_CONFIDENCE (AC-PER-41, default 0.5, <= 1),
   OMNI_MAX_TOKENS (AC-PER-25, default 700, 1..32768), OMNI_MAX_OBJECTS (AC-PER-25/27, default 12, 1..40),
   OMNI_REPETITION_PENALTY (AC-PER-25, default 1.05, > 0 and <= 2; not sent when 1.0),
-  OMNI_TRUNCATED_CONFIDENCE (AC-PER-26, default 0.5, <= 1).
+  OMNI_TRUNCATED_CONFIDENCE (AC-PER-26, default 0.5, <= 1),
+  PERCEPTION_UNKNOWN_QUERIES_MAX (AC-PER-54, default 6, 0 = off, max 40),
+  PERCEPTION_UNKNOWN_QUERY_MIN_SCORE (AC-PER-54, default 0.3, <= 1).
 
 A camera that has no entry in the camera -> location map is treated as no_capture (fail closed), and the CLI refuses
 to start for it.
@@ -77,6 +79,9 @@ class PerceptionConfig:
     detect_long_side: int = 1280
     # AC-PER-5 detector
     min_score: float = 0.15
+    # AC-PER-54 extra OWLv2 text queries for unknown objects: distinct labels per window, and the link threshold
+    unknown_queries_max: int = 6
+    unknown_query_min_score: float = 0.3
     # AC-PER-5/6 torch device for OWLv2 + DINOv2: cpu | cuda | cuda:N | auto (PERCEPTION_DEVICE)
     device: str = "cpu"
     # AC-PER-7 label mapping
@@ -185,6 +190,8 @@ _NUMBER_VARS: dict[str, tuple[str, type]] = {
     "omni_max_objects": ("OMNI_MAX_OBJECTS", int),
     "omni_repetition_penalty": ("OMNI_REPETITION_PENALTY", float),
     "omni_truncated_confidence": ("OMNI_TRUNCATED_CONFIDENCE", float),
+    "unknown_queries_max": ("PERCEPTION_UNKNOWN_QUERIES_MAX", int),
+    "unknown_query_min_score": ("PERCEPTION_UNKNOWN_QUERY_MIN_SCORE", float),
 }
 
 # Upper bounds checked by from_env (inclusive).
@@ -200,6 +207,8 @@ _MAX_VALUES: dict[str, float] = {
     "omni_max_objects": 40,  # observation.schema.json objects.maxItems
     "omni_repetition_penalty": 2.0,
     "omni_truncated_confidence": 1.0,
+    "unknown_queries_max": 40,  # AC-PER-54: bounded extra detector work per window
+    "unknown_query_min_score": 1.0,
 }
 # Must be strictly positive (checked by from_env).
 _POSITIVE = {"omni_max_tokens", "omni_max_objects", "omni_repetition_penalty"}

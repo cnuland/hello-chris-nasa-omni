@@ -857,3 +857,100 @@ Residual risks accepted:
   class. The structure rule (AC-PER-50) is scoped to fixed station parts, not loose items.
 - **Measured before:** 99 object listings, 2 non-catalog labels (both structure), 0 unknowns in the review queue.
   Tests: tests/test_ac_per_53_unknowns_prompt.py.
+
+## Amendments: detector boxes for unknown objects (live Gemma 4 run, 2026-10-18)
+
+Measured live after AC-PER-53: three unknowns came back ("orange tool" COL1, "orange sphere" and "white wrapped
+object" JPM1), each with `image_bbox` and `image_bbox_source` null. The review image was the whole 1080×608 frame
+with no box. Causes, read in the code and the raw replies:
+- OWLv2 is queried with the catalog class names plus `person`/`face` only (AC-PER-49), so it never looks for
+  "orange sphere", and a label link (AC-PER-8 pass 2) for an UNKNOWN label cannot happen.
+- Gemma's own boxes are absent: this run's replies give boxes on a 0..1000 scale, which AC-PER-33 clamps to a
+  degenerate box and nulls (see the residual risks below).
+
+AC-PER-54 to AC-PER-57 amend AC-PER-5, AC-PER-8, AC-PER-13, AC-PER-22 and AC-PER-34.
+
+- AC-PER-54 **Detector boxes for unknowns** (amends AC-PER-5, AC-PER-8).
+  - *When.* After linking (AC-PER-8, both passes), each instance that maps to `UNKNOWN`, is not station structure
+    (AC-PER-50), is not a body label (AC-PER-49) and has **no linked detector box** is a *query candidate*. A window
+    that is `no_capture` (any reason) runs no queries: its unknowns are not instances anyway.
+  - *Query text.* `perception.labels.noun_phrase(label)`: `normalise_label`, leading determiners dropped, cut before
+    the first preposition/participle (as AC-PER-50), at most the last 6 words ("orange tool on the wall" -> "orange
+    tool"). No descriptor phrase: OWLv2 does best on short noun phrases (its text queries are capped at 16 tokens;
+    the detector also truncates), and a description can name a person. Empty labels give no query.
+  - *Never a person query* (AC-PER-49). No query is made from a label that is a body label, maps to the person class,
+    or contains a person word anywhere (`perception.privacy.mentions_person`: the body heads and whole labels of
+    AC-PER-49 plus person, persons, astronaut(s), crew, crewmember(s), cosmonaut(s), member(s), man, men, woman,
+    women, human(s), people, face(s), head, hand(s), crewman/crewmen, spacewalker(s), kid(s), child(ren), boy(s),
+    girl(s), guy(s), someone, somebody, hair, eye(s), neck, shoulder(s), skin, beard, wrist(s), thumb(s), mouth, nose,
+    lips), e.g. "astronaut's bag", "crew member glove", "crewman's pouch".
+  - *Frame.* The instance's linked frame (`frame_index` of its best listing; the latest frame when omni gave none).
+  - *Budget.* At most `config.unknown_queries_max` distinct query texts per window (`PERCEPTION_UNKNOWN_QUERIES_MAX`,
+    default 6, 0 = off, max 40), chosen by omni confidence (then window order). Instances sharing a query text in one
+    frame share it. Queries are grouped by frame: **one extra detector call per frame** that has queries, with only
+    the query texts (never the catalog labels again, never `person`/`face`), on the full-resolution keyframe
+    (AC-PER-21). Extra calls per window = the number of frames that have queries (<= window frames). A failing call is
+    logged and skipped (the window is still written, without query boxes; its texts are not counted).
+  - *Link.* For each query instance (omni confidence order), the detections of its frame whose label is its query
+    text are ranked by score. Boxes that belong to another object are skipped (IoU >= `config.link_iou`, same
+    frame): every detection of the main call (any label, linked or not) and every box linked to another instance. The **first remaining** box is the candidate; it is linked only when its score >=
+    `config.unknown_query_min_score` (`PERCEPTION_UNKNOWN_QUERY_MIN_SCORE`, default 0.3, <= 1; calibrated below) and it does not overlap
+    a person region (AC-PER-55). A rejected candidate is not replaced by a lower box. The linked box becomes the
+    sighting `bbox` with `bbox_source = "detector"` (AC-PER-34), and the instance goes through the exemplar gate
+    (AC-PER-22) and the person-overlap guard (AC-PER-49) like any detector-linked instance.
+  - *Catalog objects are unaffected.* Instances that map to a catalog class never query, and query boxes are never
+    offered to them (no IoU or label link, no consolidation input, no stock count, no person region).
+  - *Statistics.* `window.unknown_queries` (query texts whose call succeeded), `window.unknown_boxes_linked`,
+    `window.unknown_query_person_rejected` and `window.unknown_query_ms` (wall time of the extra calls); inventory-api
+    ignores unknown window fields. One log line per window with queries ("unknown-object queries"): queries, frames,
+    calls, linked, ms.
+  - *Cost.* OWLv2's cost is the image encoder, so each extra call costs about one detection (≈ 0.35 s per frame on the
+    T4). Typical window: one or two unknowns → one or two extra calls; worst case `min(budget, frames)` calls.
+- AC-PER-55 **Query boxes and people** (amends AC-PER-49).
+  - *Fail closed when the detector saw nobody.* When omni reports people (`people[]` entries, or an object labelled
+    as the person class or a body part) but no frame of the window has a person region, no query box is linked
+    (counted as rejected): `people[]` carries no box, so the crop guard would have nothing to check. One region in
+    any frame is enough (live Kibo window: the crew member is boxed on frame 4, 0.32, the sphere is on frame 0).
+  - A query candidate that overlaps a person region of its frame (the AC-PER-49 rule and regions: detector
+    `person`/`face`/body boxes and omni person/body boxes) is **never linked**: the instance keeps omni's box (or
+    none), gets no exemplar and no crop, and its review uses the whole frame. Counted in
+    `window.unknown_query_person_rejected`, logged without the label.
+  - The AC-PER-49 crop guard still runs on every linked box before any crop is embedded or uploaded (defence in
+    depth); `person_boxes` are sent as before.
+- AC-PER-56 **Review image of an unknown** (amends AC-PER-13).
+  - Every review of an UNKNOWN instance uses the whole evidence frame (`image_uri` = `frame_uri`), never the crop,
+    so inventory-api returns the sighting's box as `image_bbox` (with `image_bbox_source`) and the dashboard draws it
+    over the frame: more context for NASA than a tight crop. The crop is still stored as the exemplar's `crop_uri`.
+    Without a frame (none stored) the crop is used, as before. Reviews of catalog instances are unchanged.
+- AC-PER-57 **Tests** (tests/test_ac_per_54_57_unknown_queries.py): a fake detector that returns a box only for the
+  new query (linked, `bbox_source = detector`, crop, exemplar, review = frame + box); threshold (below / at); budget
+  (at most N texts, highest confidence first, one call per frame, 0 = off); no queries for catalog, structure, body,
+  person-word labels or private windows; the person guard (an "orange sphere" whose best query box overlaps a person
+  gets no crop, no link, and a lower box is not used); catalog-matched objects unchanged (same payload with and
+  without the query detector); a replay over the live Gemma 4 reply with the unknown "orange sphere"
+  (tests/fixtures/gemma4_unknowns_2026-10-18.json); a model-marked check of the real OWLv2 on the live Kibo frame.
+
+- *Threshold calibration* (real OWLv2 base-patch16-ensemble on CPU, the three live frames, 1080×608):
+  - "orange sphere" (Kibo, video t ≈ 55 s): best 0.604, px [565, 253, 604, 290], exactly the sphere; next 0.148.
+  - "orange tool" (COL1): best 0.277 is the *wrong* object (the orange sphere seen through the far hatch, px
+    [561, 165, 581, 185]); the real tool scores 0.142.
+  - "white wrapped object": best 0.058 (nothing usable).
+  - A threshold of 0.3 links the sphere and rejects the wrong tool box; 0.2 would have linked it. Default 0.3.
+  - Latency: one call takes ≈ 0.50 s on the laptop CPU with 1 query and ≈ 0.52 s with 6 (the image encoder
+    dominates), so the cost is per extra call (frame), not per query: ≈ 0.35 s per call on the T4.
+
+### Residual risks (AC-PER-54..57)
+- *Wrong box.* OWLv2 may return a confident box on a different orange object; the threshold, the frame restriction
+  and the person guard bound this, and the operator sees the box on the whole frame.
+- *Detector misses, widened.* Before AC-PER-54 an unknown without a detector box never got a crop. Now a free-text
+  query box can land on a person whom OWLv2 missed on that frame while boxing them (or someone else) elsewhere in the
+  window. Bounded by the fail-closed rule, the AC-PER-49 guard and the person-word filter.
+- *Repeated cost.* A persistent unknown is queried again in every window (one extra call per frame with queries).
+- *Omni's box ignored.* When omni has a valid box, a query box elsewhere on the frame still wins; with Gemma's boxes
+  nulled (below) there is nothing to compare with. Follow-up once the box scale is fixed: prefer query boxes that
+  overlap omni's box.
+- *Eval.* The eval's fake detector never returns unknown objects, so `make eval` exercises the calls (it reports
+  `unknown_queries`) but cannot score the links; the unit and replay tests cover them.
+- *Gemma 0..1000 boxes.* The live Gemma 4 replies give `bbox` on a 0..1000 scale in `[y1, x1, y2, x2]` order
+  (Gemma's native box format), not the `[x1, y1, x2, y2]` 0..1 the prompt asks for, so AC-PER-33 nulls every omni box.
+  Query boxes do not depend on omni's box; fixing the scale is a separate change (it affects every object's linking).

@@ -4,7 +4,8 @@
   * ``source``: a video path/URL (ingested with ffmpeg) or an iterable of ``(timestamp, frame_ndarray,
     audio_chunk | None)`` where ``audio_chunk`` is an AudioChunk or a 1-D 16 kHz mono numpy array (int16, or float
     in [-1, 1]) starting at ``timestamp``. An item's audio is pushed to the window builder before its frame.
-  * per window: detector on every frame (labels = catalog class names), omni ``analyze``, ASR on the window audio
+  * per window: detector on every frame (labels = catalog class names + person/face), omni ``analyze``, then
+    (AC-PER-54) at most one extra detector call per frame with only the labels of unknown objects that got no box, ASR on the window audio
     unless silent (VAD RMS gate), transcript choice (ASR text; omni transcript only when ASR is unavailable),
     transcript cleaning, Reconciler.process.
   * ``asr`` may be None (no ASR endpoint configured).
@@ -183,7 +184,10 @@ class _Pipeline:
                 return
             omni_transcript = str((result.observation or {}).get("transcript") or "")
             transcript = " ".join(t for t in [*self._carried, self.transcript(window, omni_transcript)] if t)
-            outcome = self.reconciler.process(window, result, detections, transcript=transcript, model=result.model)
+            outcome = self.reconciler.process(
+                window, result, detections, transcript=transcript, model=result.model,
+                query_detect=lambda f, texts: self.detector.detect(window.frames[f].hires, list(texts)),  # AC-PER-54
+            )
             if outcome.status == "posted":
                 self._carried.clear()
         except Exception:
@@ -196,6 +200,10 @@ class _Pipeline:
             window_doc = (outcome.payload or {}).get("window") or {}
             self.stats.structure_filtered += int(window_doc.get("structure_filtered") or 0)
             self.stats.person_crops_dropped += int(window_doc.get("person_crops_dropped") or 0)
+            self.stats.unknown_queries += int(window_doc.get("unknown_queries") or 0)
+            self.stats.unknown_boxes_linked += int(window_doc.get("unknown_boxes_linked") or 0)
+            self.stats.unknown_query_person_rejected += int(window_doc.get("unknown_query_person_rejected") or 0)
+            self.stats.unknown_query_ms += int(window_doc.get("unknown_query_ms") or 0)
         elif outcome.status == "invalid":
             self.stats.invalid += 1
         else:
