@@ -1,18 +1,19 @@
 // AC-UI-4/5: item detail page (large snapshot, attributes, history timeline, "moved by" lines) + edit form.
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
-import { ApiError, getHistory, getItem } from '../api/client';
-import type { Event, Item, ItemDetail, ItemPatch, TimelineEntry } from '../api/types';
+import { ApiError, getHistory, getItem, unmergeItem } from '../api/client';
+import type { Event, Item, ItemDetail, ItemPatch, Sighting, TimelineEntry } from '../api/types';
 import { ConfidenceBar } from '../components/ConfidenceBar';
 import { EditItemForm } from '../components/EditItemForm';
-import { FrameImage } from '../components/FrameImage';
+import { FrameImage, validBBox } from '../components/FrameImage';
 import { Thumb } from '../components/Thumb';
 import { Timestamp } from '../components/Timestamp';
 import { UUID_RE } from '../lib/agent';
-import { formatUtc, formatUtcMinute, handledPhrase, locationLabel } from '../lib/format';
+import { eventSentence, formatUtc, formatUtcMinute, legacyEventSummary, shortId } from '../lib/format';
 import { LastHandledCell } from '../components/LastHandled';
 import { useCatalog, useLocations } from '../state/reference';
-import { useToasts } from '../state/toasts';
+import { useOperator } from '../state/operator';
+import { errorMessage, useToasts } from '../state/toasts';
 
 type LoadState = { kind: 'loading' } | { kind: 'ok'; item: ItemDetail } | { kind: 'notfound' } | { kind: 'error' };
 
@@ -66,10 +67,40 @@ export function groupTimeline(entries: TimelineEntry[]): TimelineGroup[] {
   return out;
 }
 
-function TimelineRow({ g, label }: { g: TimelineGroup; label: string }) {
+/**
+ * Row text (UI2-11): "14 × update by pipeline" for folded runs. A server-collapsed summary already starts with its
+ * count ("9 pipeline updates (…)"), so that number is replaced by the group total instead of prefixing "9 × ".
+ */
+export function timelineLabel(g: TimelineGroup): string {
+  const s = g.entry.summary || '';
+  if (g.count <= 1) return s;
+  const m = /^(\d+)\s+(.+)$/.exec(s);
+  return m ? `${g.count} ${m[2]}` : `${g.count} × ${s || 'audit entry'}`;
+}
+
+/** Context from the item detail used to render history rows in the shared wording (UI-04) and with boxes (UI2-07). */
+interface RowContext {
+  label: string;
+  events: Map<string, Event>;
+  sightings: Map<string, Sighting>;
+}
+
+/** History row text: event rows use the Activity sentence (matched by event id, else rewritten from the summary). */
+function rowText(g: TimelineGroup, ctx: RowContext): string {
+  const e = g.entry;
+  if (e.kind !== 'event' || g.count > 1) return timelineLabel(g);
+  const ev = e.id ? ctx.events.get(e.id) : undefined;
+  if (ev) return eventSentence(ev);
+  return legacyEventSummary(e.summary, { source: e.source, actor_kind: e.actor_kind, location_role: e.location_role }) ?? e.summary ?? '';
+}
+
+function TimelineRow({ g, ctx }: { g: TimelineGroup; ctx: RowContext }) {
   const [open, setOpen] = useState(false);
   const e = g.entry;
+  const label = ctx.label;
   const folded = g.count > 1;
+  const sighting = e.kind === 'sighting' && e.id ? ctx.sightings.get(e.id) : undefined;
+  const text = rowText(g, ctx);
   return (
     <li className={`tl tl-${e.kind}`}>
       <div className="tl-head">
@@ -78,7 +109,7 @@ function TimelineRow({ g, label }: { g: TimelineGroup; label: string }) {
         {folded && g.firstAt !== e.at && <span className="muted">{`back to ${formatUtc(g.firstAt)}`}</span>}
         {e.location_id && <code className="loc-code">{e.location_id}</code>}
       </div>
-      <p className="tl-summary">{folded ? `${g.count} × ${e.summary || 'audit entry'}` : e.summary || ''}</p>
+      <p className="tl-summary">{text}</p>
       {folded && g.members.length > 1 && (
         <>
           <button type="button" className="link-button" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
@@ -93,12 +124,17 @@ function TimelineRow({ g, label }: { g: TimelineGroup; label: string }) {
           )}
         </>
       )}
-      {e.image_url && <Thumb src={e.image_url} alt={`Evidence for ${label}: ${e.summary ?? e.kind}`} size="md" />}
+      {e.image_url && (sighting && validBBox(sighting.bbox) ? (
+        <FrameImage src={e.image_url} alt={`Evidence for ${label}: ${text || e.kind}`} bbox={sighting.bbox}
+          bboxSource={sighting.bbox_source} size="md" />
+      ) : (
+        <Thumb src={e.image_url} alt={`Evidence for ${label}: ${text || e.kind}`} size="md" />
+      ))}
     </li>
   );
 }
 
-function Timeline({ entries, label }: { entries: TimelineEntry[] | null; label: string }) {
+function Timeline({ entries, ctx }: { entries: TimelineEntry[] | null; ctx: RowContext }) {
   const [hidden, setHidden] = useState<Set<TimelineKind>>(() => new Set());
   const groups = useMemo(
     () => groupTimeline((entries ?? []).filter((e) => !hidden.has(e.kind))),
@@ -130,25 +166,101 @@ function Timeline({ entries, label }: { entries: TimelineEntry[] | null; label: 
         <p className="muted">All entry kinds are hidden.</p>
       ) : (
         <ol className="timeline" aria-label="History">
-          {groups.map((g, i) => <TimelineRow key={`${g.entry.at}-${i}`} g={g} label={label} />)}
+          {groups.map((g, i) => <TimelineRow key={`${g.entry.at}-${i}`} g={g} ctx={ctx} />)}
         </ol>
       )}
     </>
   );
 }
 
-/** Activity line (AC-UI-12): "Moved by person (blue shirt) at 2026-10-17 11:00:00 UTC, from A to B". */
-function activityText(e: Event): string {
-  const head = `${handledPhrase(e.event_type, e.actor_desc)} at ${formatUtc(e.occurred_at) || 'an unknown time'}`;
-  const from = e.from_location ? locationLabel(e.from_location, e.from_location_name) : '';
-  const to = e.to_location ? locationLabel(e.to_location, e.to_location_name) : '';
-  const type = (e.event_type ?? '').toLowerCase();
-  if (type === 'moved' || from || to) {
-    if (from && to) return `${head}, from ${from} to ${to}`;
-    if (from) return `${head}, from ${from} to an unknown location`;
-    if (to) return type === 'added' ? `${head}, at ${to}` : `${head}, to ${to}`;
-  }
-  return head;
+/**
+ * UI2-05: banner on a merged item: where it went and when, plus Unmerge for operators. A 409 (the merge can no
+ * longer be undone safely) is explained inline and the banner stays.
+ */
+function MergedBanner({ item, onUnmerged }: { item: ItemDetail; onUnmerged: () => void }) {
+  const toasts = useToasts();
+  const [operator, setOperator] = useOperator();
+  const [busy, setBusy] = useState(false);
+  const [conflict, setConflict] = useState<string | null>(null);
+  const op = operator.trim();
+  const target = item.merged_into;
+  const targetLabel = target ? target.label?.trim() || `item ${shortId(target.entity_id)}` : '';
+  const unmerge = async () => {
+    if (!op || busy) return;
+    setBusy(true);
+    setConflict(null);
+    try {
+      await unmergeItem(item.entity_id, { operator: op });
+      toasts.success(`Unmerged: ${item.label} is a separate item again.`);
+      onUnmerged();
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        setConflict(`This merge can't be undone safely: ${errorMessage(e)}. Nothing was changed.`);
+      } else {
+        toasts.error('Could not unmerge', e);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="card merged-banner" aria-label="Merged item">
+      <p className="merged-text">
+        {target ? (
+          <>
+            {'Merged into '}
+            <Link to={`/items/${target.entity_id}`}>{targetLabel}</Link>
+            {item.merged_at && (
+              <>
+                {' at '}
+                <time dateTime={item.merged_at} title={formatUtc(item.merged_at)}>{formatUtcMinute(item.merged_at)}</time>
+              </>
+            )}
+            {'. Its sightings and history now belong to that item.'}
+          </>
+        ) : (
+          'This item was merged into another item. Its sightings and history moved there.'
+        )}
+      </p>
+      <div className="merged-actions">
+        <div className="field">
+          <label htmlFor="unmerge-op">Operator</label>
+          <input id="unmerge-op" value={operator} autoComplete="name" onChange={(e) => setOperator(e.target.value)} />
+        </div>
+        <button type="button" disabled={!op || busy} aria-describedby="unmerge-hint" onClick={unmerge}>
+          {busy ? 'Unmerging…' : 'Unmerge'}
+        </button>
+        <span id="unmerge-hint" className="muted small">
+          {op ? 'Unmerge restores this item and moves its sightings back.' : 'Enter an operator name to unmerge.'}
+        </span>
+      </div>
+      {conflict && <p role="alert" className="field-error">{conflict}</p>}
+    </section>
+  );
+}
+
+function MergedFromList({ item }: { item: ItemDetail }) {
+  const from = (item.merged_from ?? []).filter((m) => m && typeof m.entity_id === 'string');
+  if (!from.length) return null;
+  return (
+    <>
+      <h2 id="merged-from-h">Merged from</h2>
+      <ul className="merged-from" aria-labelledby="merged-from-h">
+        {from.map((m) => (
+          <li key={m.entity_id}>
+            <Link to={`/items/${m.entity_id}`}>{m.label?.trim() || `item ${shortId(m.entity_id)}`}</Link>{' '}
+            <code className="loc-code">{shortId(m.entity_id)}</code>
+            {m.merged_at && (
+              <>
+                {' · merged '}
+                <time dateTime={m.merged_at}>{formatUtcMinute(m.merged_at)}</time>
+              </>
+            )}
+          </li>
+        ))}
+      </ul>
+    </>
+  );
 }
 
 export default function ItemDetailPage() {
@@ -206,6 +318,12 @@ export default function ItemDetailPage() {
   const reloadHistory = () => {
     getHistory(id).then(setHistory).catch(() => undefined);
   };
+  const reloadItem = () => {
+    getItem(id)
+      .then((fresh) => setState({ kind: 'ok', item: fresh }))
+      .catch(() => undefined);
+    reloadHistory();
+  };
 
   if (state.kind === 'loading') return <p className="muted">Loading item…</p>;
   if (state.kind === 'notfound') {
@@ -230,6 +348,14 @@ export default function ItemDetailPage() {
     (a, b) => (Date.parse(b.occurred_at ?? '') || 0) - (Date.parse(a.occurred_at ?? '') || 0),
   );
   const attributes = Object.entries(item.attributes ?? {});
+  const rowCtx: RowContext = {
+    label: item.label,
+    events: new Map((item.events ?? []).filter((e) => e.event_id).map((e) => [e.event_id as string, e])),
+    sightings: new Map(
+      (item.sightings ?? []).filter((x) => x && typeof x.sighting_id === 'string').map((x) => [x.sighting_id as string, x]),
+    ),
+  };
+  const isMerged = item.status === 'merged' || !!item.merged_into;
   const onSaved = (updated: Item, patch: ItemPatch) => {
     setState({ kind: 'ok', item: { ...item, ...updated } });
     setEditing(false);
@@ -255,9 +381,12 @@ export default function ItemDetailPage() {
         )}
       </div>
 
+      {isMerged && <MergedBanner item={item} onUnmerged={reloadItem} />}
+
       <div className="detail-grid">
-        <div className="detail-media">
-          <FrameImage src={item.snapshot_url} alt={item.label} size="lg" />
+        <div className="detail-media" data-testid="detail-media">
+          <FrameImage src={item.snapshot_url} alt={item.label} size="lg" bbox={item.snapshot_bbox}
+            bboxSource={item.snapshot_bbox_source} caption />
         </div>
         <div className="card">
           <dl className="facts">
@@ -296,6 +425,7 @@ export default function ItemDetailPage() {
               </>
             )}
           </dl>
+          <MergedFromList item={item} />
           <h2>Attributes</h2>
           {attributes.length ? (
             <dl className="attrs">
@@ -320,14 +450,15 @@ export default function ItemDetailPage() {
         <h2 id="moves-h">Activity</h2>
         {activity.length ? (
           <ul className="moves" aria-label="Activity">
-            {activity.map((m, i) => (
-              <li key={m.event_id ?? i} className="activity">
-                <span>{activityText(m)}</span>
-                {m.evidence_url && (
-                  <FrameImage src={m.evidence_url} alt={`Evidence: ${activityText(m)}`} size="md" />
-                )}
-              </li>
-            ))}
+            {activity.map((m, i) => {
+              const sentence = eventSentence(m);
+              return (
+                <li key={m.event_id ?? i} className="activity">
+                  <span>{`${sentence} · ${formatUtc(m.occurred_at) || 'unknown time'}`}</span>
+                  {m.evidence_url && <FrameImage src={m.evidence_url} alt={`Evidence: ${sentence}`} size="md" />}
+                </li>
+              );
+            })}
           </ul>
         ) : (
           <p className="muted">No recorded activity (moves, uses or hand-overs).</p>
@@ -336,7 +467,7 @@ export default function ItemDetailPage() {
 
       <section className="card" id="history" aria-labelledby="hist-h">
         <h2 id="hist-h">History</h2>
-        <Timeline entries={history} label={item.label} />
+        <Timeline entries={history} ctx={rowCtx} />
       </section>
     </div>
   );

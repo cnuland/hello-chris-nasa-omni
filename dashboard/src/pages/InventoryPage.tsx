@@ -228,6 +228,17 @@ export default function InventoryPage() {
             ))}
           </div>
         </div>
+        <div className="field sort-field">
+          <label htmlFor="f-sort">Sort</label>
+          <select id="f-sort" value={filters.sort ?? DEFAULT_SORT} onChange={(e) => update({ sort: e.target.value as SortKey })}>
+            {SORT_KEYS.map((k) => <option key={k} value={k}>{SORT_LABELS[k]}</option>)}
+          </select>
+        </div>
+        <div className="field reset-field">
+          <span className="field-label" aria-hidden="true">{'\u00a0'}</span>
+          <button type="button" disabled={!hasFilters} onClick={resetFilters}>Reset filters</button>
+        </div>
+        {/* UI2-17: "Needs review" belongs with the status filters, on one full-width row. */}
         <fieldset className="field status-group">
           <legend>Status</legend>
           {STATUSES.map((s) => (
@@ -236,22 +247,12 @@ export default function InventoryPage() {
               {s}
             </label>
           ))}
-        </fieldset>
-        <div className="field needs-review-field">
-          <label className="check">
+          <span className="status-sep" aria-hidden="true" />
+          <label className="check needs-review-check">
             <input type="checkbox" checked={filters.needs_review ?? false} onChange={(e) => update({ needs_review: e.target.checked || undefined })} />
             Needs review
           </label>
-        </div>
-        <div className="field">
-          <label htmlFor="f-sort">Sort</label>
-          <select id="f-sort" value={filters.sort ?? DEFAULT_SORT} onChange={(e) => update({ sort: e.target.value as SortKey })}>
-            {SORT_KEYS.map((k) => <option key={k} value={k}>{SORT_LABELS[k]}</option>)}
-          </select>
-        </div>
-        <div className="field">
-          <button type="button" disabled={!hasFilters} onClick={resetFilters}>Reset filters</button>
-        </div>
+        </fieldset>
       </form>
 
       <div className="list-meta" aria-live="polite">

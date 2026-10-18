@@ -333,3 +333,83 @@ The one inventory test that passed is a negative guard ("no Location set fact wi
 - **Red:** 2 of 3 failed (the pass-through cases); the guard for oversized or non-string labels passed.
 - **Green:** the sanitizer passes the fields through and the chips prefer them. 272 tests pass; typecheck and build
   are clean.
+
+## UI review round 2 fixes (2026-10-18, docs/ui-review/round2/)
+
+Strict red → green this round: each test file was written first and run against the unchanged code, and the failure
+reason was checked before any implementation. Baseline: 272 tests. Final: **341 tests** (69 new), `tsc --noEmit` clean,
+`npm run build` clean, axe 0 violations.
+
+### Red evidence
+
+| Cycle | Test file | Red | Failure reason (checked) | Passed on red (why) |
+|---|---|---|---|---|
+| 1 | `tests/ui2_wording_markdown.test.tsx` | 21 / 22 | `eventPlace` / `eventActor` / `eventSentence` / `legacyEventSummary` / `timelineLabel` not exported; Markdown: two `<ol>` for a nested list, no `start`, `_x_` not `<em>` | XSS guard for nested list text (already safe) |
+| 2 | `tests/ui2_detail_overview.test.tsx` | 16 / 19 | no "merged" region, no "Merged from" list, no `detail-media` box/caption, Activity still "Moved by person (ui-review-2) at …", history "-> ?", overview "from X" for added/used | 2 negative guards (no banner / no "Merged from" on a live item); the "9 pipeline updates" detail row (`timelineLabel` landed in cycle 1) |
+| 3 | `tests/ui2_review.test.tsx` | 19 / 20 | merge posted on first click (the card disappeared, so the confirm query hit a detached node), toasts "Review resolved (assign catalog)", API order instead of score order, no chips, no `bbox-approx`, repeated region names (3 unique of 5), no "Showing x of y", 8 tiles shown, no footer | guard: unfiltered queue shows no count line |
+| 4 | `tests/ui2_layout_css.test.tsx` | 5 / 5 | no `.bbox-approx` / `.review-footer` rules, `.filters` `align-items: end`, no Sort min-width, "Needs review" outside the Status group | – |
+| 5 | axe follow-up (2 tests in `ui2_detail_overview`) | 2 / 2 | enlarge-button name lacked "(approximate box)"; links in the banner sentence not underlined | – |
+| 6 | contract follow-up (1 test in `ui2_detail_overview`) | 1 / 1 | history entries' own `actor_kind` / `location_role` (AC-API-38) were ignored by the summary rewrite | – |
+
+One test bug was fixed during green: the score-order test used `getAllByRole('listitem')`, which also picked up the
+nested reason chips; it now reads the list's direct children. After the axe re-run, adding "(approximate box)" to the
+name was not enough (axe still counted the visible "approximate" text node inside the button). The tag became CSS
+generated content (`.bbox-approx::after`), and two of my own assertions were amended to match.
+
+**Amended existing tests** (intended behaviour changes):
+
+- `ac_ui_04`: Activity reads "Moved by <actor> from A to B · <UTC>" (was "… at <UTC>, from …").
+- `ac_ui_12_17_18`: same Activity format; the overview route "A → B" is now "from A to B".
+- `ac_ui_07`, `ac_ui_13_16`: merge clicks "Confirm merge". The subject region query is anchored (`/^subject/i`)
+  because the candidates landmark name now contains the subject label.
+
+### Findings → fix → tests
+
+| Finding | Fix | Tests |
+|---|---|---|
+| UI2-05 merge: no confirm, no undo, dead-end source page | `MergeConfirm` group (both thumbnails, consequence, focus on Confirm, Cancel). Toast with "Open <target>" link + "Undo merge" (20 s) → `unmergeItem` → reload queue. `MergedBanner` on the item page ("Merged into <label> at <UTC>", operator-gated Unmerge, inline 409 text); `MergedFromList` on the target. Toasts gained optional `link` / `action`. | `ui2_review` UI2-05 ×6, `ui2_detail_overview` UI2-05 ×8 |
+| UI2-06 (UI side) unranked candidates | `rankCandidates` (score desc, unscored after, stable), "Match score" fact, "Why it matched" chips (strings only, ≤6×60 chars), heading "ranked by match score" / "suggested, unranked". | `ui2_review` UI2-06 ×3 |
+| UI2-07 / UI-08 boxes | `FrameImage` `bboxSource` + `caption`: detector solid, omni dashed + padded 15 %/side + "approximate" tag + "(approximate box)" in the button name, no box → "Whole frame". On review images, candidate tiles (snapshot + `snapshot_bbox`), hero, history sighting frames (matched by `sighting_id`). | `ui2_review` ×3, `ui2_detail_overview` ×5, `ui2_layout_css` ×1 |
+| UI2-09 / UI-04 / UI-13 wording | `format.ts` `eventPlace` / `eventSentence` shared by Activity, History event rows (by event id, else `legacyEventSummary` rewrites "used USOS -> ? by …") and the overview (`eventRoute` = `eventPlace`). `location_role` honoured. "to an unknown location" only for one-sided moves. | `ui2_wording_markdown` ×9, `ui2_detail_overview` ×5 |
+| UI2-10 operators shown as people | `eventActor`: `actor_kind`, else `source` operator/api, else (Last handled) actor = `location_set_by` → "operator <id>". | `ui2_wording_markdown` ×4, `ui2_detail_overview` ×3 |
+| UI2-11 "9 × 9 pipeline updates" | `timelineLabel` replaces a leading count with the group total; "N ×" only for client-folded runs. | `ui2_wording_markdown` ×4, `ui2_detail_overview` ×1 |
+| UI2-12 list numbering | Markdown list model with nested sub-lists, `<ol start>`, `_em_` outside words. | `ui2_wording_markdown` ×5 |
+| UI2-13 no filtered count | "Showing x of y open review items." when filtered (server or client filtering), truncation line kept, "Tab counts are totals…" note. | `ui2_review` ×3 |
+| UI2-14 axe landmark-unique | Section `aria-label`s "Subject: <label> <id>, review <id>" / "Possible matches for …". | `ui2_review` ×1, axe run |
+| UI2-15 toast jargon | Outcome text built by the card: "Kept both items: …", "Classified as <catalog>.", "Created catalog item …", "Dismissed …", "Merged … into …". | `ui2_review` ×2 |
+| UI2-17 / UI-21 filter alignment, Sort clipped | Grid `repeat(auto-fill, minmax(14rem, 1fr))`, `align-items: start`, Search spans 2, Sort `min-width: 14rem`, "Needs review" inside the Status fieldset (full-width row), Reset with a label spacer. | `ui2_layout_css` ×3 + Playwright |
+| 1024 px duplicate cards (actions ~1,400 px down) | At most 4 candidates until "Show N more"; actions in a sticky `.review-footer`; compact confirm. | `ui2_review` ×2, `ui2_layout_css` ×1 + Playwright |
+
+### Playwright measurements (vite preview, mocked routes, `dashboard/scripts/ui_check.py`)
+
+The fixture is a duplicate card with 8 scored candidates (omni subject box, one detector candidate box), plus a merged
+item, its target and an overview feed. The pages were checked at 1024×1000 and 1440×1000.
+
+- **Filter bar**, input top y per row:
+  - 1024 px: Search/Kind/Location at 157; Seen after/Seen before/Quick range at 223; Sort/Reset at 309.
+  - 1440 px: Search/Kind/Location at 157; Seen after/Seen before/Quick range/Sort/Reset at 223.
+  - The date inputs are no longer lifted. "Needs review" is inside the Status row. Form overflow is 0.
+  - Sort select: the text "Last seen (newest first)" is 152 px wide; the select's inner width is 211 px at 1024 and
+    246 px at 1440, so it is not clipped.
+- **Duplicate card**:
+  - From header to actions footer in the page flow: 511 px at 1024 and 576 px at 1440 (was about 1,400 px).
+  - "Keep both" ends at y = 939 of 1000 on load, and stays in the viewport after scrolling 300 px into the card
+    (sticky footer).
+  - 4 tiles are shown. Page horizontal overflow is 0.
+  - The merge confirm is visible in the footer. The toast reads "Merged camera 000000c8 into camera 00000064. Open
+    camera 00000064 / Undo merge".
+  - Undo answered with 409 gives "This merge can't be undone safely: … Nothing was changed."
+- **axe-core** (/, /review, /review with the merge confirm open, filtered /review, the merged item, the merge target,
+  /overview), at both widths: 0 violations. This includes the round-2 landmark-unique issue. The run first found 2
+  new issues of mine (label-content-name-mismatch on the omni tag, link-in-text-block in the banner); both are fixed
+  and covered by tests (cycle 5).
+- Console: only the two mocked 409 responses.
+
+### Deferred / not dashboard-side
+
+- **UI2-06 ranking itself, UI2-07 box accuracy:** inventory-api / perception. The UI renders `score`,
+  `match_reasons` and `*_bbox_source` as they arrive.
+- **UI2-11 disclosure for server-collapsed rows:** the API sends only `audit_ids`, so there is nothing to list without
+  an extra `?collapse=false` request. Not done.
+- **UI2-12 ISO timestamps in chat text:** left to the agent prompt (optional in the finding).
+- **Inventory list thumbnails with boxes:** not requested (only tiles and the hero were). `Thumb` is unchanged.

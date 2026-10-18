@@ -27,12 +27,32 @@ export interface Item {
   /** When / by whom last_location was last set (operator edit or pipeline). Operator edits no longer bump last_seen_at. */
   location_set_at?: string | null;
   location_set_by?: string | null;
+  /** UI2-05: set on a merged source item: where it went and when. Optional (older APIs omit it). */
+  merged_into?: { entity_id: string; label?: string | null } | null;
+  merged_at?: string | null;
+  /** UI2-05: on a merge target, the items merged into it. */
+  merged_from?: MergedFrom[] | null;
+  /** UI2-07: box of the object on snapshot_url, and where the box came from. */
+  snapshot_bbox?: BBox | null;
+  snapshot_bbox_source?: BBoxSource;
 }
+
+export interface MergedFrom {
+  entity_id: string;
+  label?: string | null;
+  merged_at?: string | null;
+}
+
+/** "detector" boxes are tight; "omni" boxes are model estimates (drawn dashed, "approximate"); null = unknown. */
+export type BBoxSource = 'detector' | 'omni' | null | undefined;
 
 export interface LastHandled {
   event_type?: string | null;
   actor_desc?: string | null;
   occurred_at?: string | null;
+  /** UI2-10: "operator" | "person"; optional. */
+  actor_kind?: 'operator' | 'person' | null;
+  source?: string | null;
 }
 
 export interface ItemPage {
@@ -56,10 +76,25 @@ export interface Event {
   entity_catalog_id?: string | null;
   from_location_name?: string | null;
   to_location_name?: string | null;
+  /** UI2-09: "at" = one place (use, add); "from_to" = a route (move). Optional. */
+  location_role?: 'at' | 'from_to' | null;
+  /** UI2-10: "operator" (dashboard/API action) | "person" (seen on camera). Optional; `source` is the fallback. */
+  actor_kind?: 'operator' | 'person' | null;
+}
+
+export interface Sighting {
+  sighting_id?: string;
+  seen_at?: string;
+  location_id?: string | null;
+  frame_url?: string | null;
+  /** UI2-07: box of the object on the sighting frame, and its source. Optional. */
+  bbox?: BBox | null;
+  bbox_source?: BBoxSource;
+  [key: string]: unknown;
 }
 
 export interface ItemDetail extends Item {
-  sightings?: Record<string, unknown>[];
+  sightings?: Sighting[];
   events?: Event[];
   exemplar_count?: number;
 }
@@ -75,6 +110,13 @@ export interface TimelineEntry {
   /** Collapsed entries only: time of the oldest folded audit. */
   first_at?: string | null;
   audit_ids?: string[];
+  /** Row id (sighting_id / event_id / audit_id) and, for events, the type and source (UI-04). Optional. */
+  id?: string;
+  event_type?: string;
+  source?: string;
+  /** Event entries only (AC-API-38): same meaning as on Event. */
+  location_role?: 'at' | 'from_to' | null;
+  actor_kind?: 'operator' | 'person' | null;
 }
 
 export interface CatalogItem {
@@ -109,10 +151,16 @@ export interface ReviewEntity {
   /** Older payloads carry full Items (snapshot_url instead of thumbnail_url). */
   snapshot_url?: string | null;
   sighting_count?: number | null;
+  /** UI2-07: box on snapshot_url (not on a cropped thumbnail). Optional. */
+  snapshot_bbox?: BBox | null;
+  snapshot_bbox_source?: BBoxSource;
 }
 
 export interface ReviewCandidate extends ReviewEntity {
   similarity?: number | null;
+  /** UI2-06: ranking score (higher = more likely the same item) and why it matched. Optional. */
+  score?: number | null;
+  match_reasons?: string[] | null;
 }
 
 /** Normalised [x1, y1, x2, y2] in 0..1 relative to image_url. */
@@ -128,6 +176,7 @@ export interface ReviewItem {
   candidates_source?: 'stored' | 'suggested' | 'none' | null;
   subject?: ReviewEntity | null;
   image_bbox?: BBox | null;
+  image_bbox_source?: BBoxSource;
   created_at?: string | null;
   image_url: string | null;
   description: string;

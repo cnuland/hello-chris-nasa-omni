@@ -41,8 +41,9 @@ describe('AC-UI-12 item detail Activity', () => {
     const list = screen.getByRole('list', { name: /activity/i });
     const lines = within(list).getAllByRole('listitem').map((li) => li.textContent ?? '');
     expect(lines).toHaveLength(4);
-    expect(lines[0]).toMatch(/^Moved by person wearing a blue tank top at 2026-10-17 11:45:00 UTC, from Lab starboard rack 2 \(LAB1S2\) to an unknown location/);
-    expect(lines[1]).toMatch(/^Used by person \(blue shirt, black shorts, headset\) at 2026-10-17 11:30:00 UTC/);
+    // Amended (UI2-09): "<Verb> by <actor> <place> · <UTC>"; a use with no location has no place.
+    expect(lines[0]).toMatch(/^Moved by person wearing a blue tank top from Lab starboard rack 2 \(LAB1S2\) to an unknown location · 2026-10-17 11:45:00 UTC/);
+    expect(lines[1]).toMatch(/^Used by person \(blue shirt, black shorts, headset\) · 2026-10-17 11:30:00 UTC/);
     expect(lines.join('\n')).not.toMatch(/\?|No recorded/);
   });
 
@@ -140,7 +141,8 @@ describe('AC-UI-18 overview feed shows labels and location names', () => {
     const items = await within(feed).findAllByRole('listitem');
     expect(within(items[0]).getByRole('link', { name: /laptop/ })).toHaveAttribute('href', `/items/${ID.drill}`);
     expect(items[0]).toHaveTextContent('by person (sleeping, wearing a headset)');
-    expect(items[0]).toHaveTextContent('Node 2 deck bay 4 (NOD2D4) → Lab starboard rack 2 (LAB1S2)');
+    // Amended (UI2-09): "from A to B" instead of "A → B".
+    expect(items[0]).toHaveTextContent('from Node 2 deck bay 4 (NOD2D4) to Lab starboard rack 2 (LAB1S2)');
     expect(items[0]).toHaveTextContent('2026-10-17 11:00 UTC');
     expect(items[1]).toHaveTextContent('at Node 2 overhead bay 4 (NOD2O4)');
   });
@@ -157,7 +159,7 @@ describe('AC-UI-18 overview feed shows labels and location names', () => {
   });
 
   test('AC-UI-18 eventRoute unit cases', () => {
-    expect(eventRoute({ from_location: 'A', to_location: 'B' })).toBe('A → B');
+    expect(eventRoute({ from_location: 'A', to_location: 'B' })).toBe('from A to B'); // amended (UI2-09)
     expect(eventRoute({ event_type: 'added', to_location: 'NOD1', to_location_name: 'Node 1' })).toBe('at Node 1 (NOD1)');
     expect(eventRoute({ event_type: 'moved', to_location: 'NOD1' })).toBe('to NOD1');
     expect(eventRoute({})).toBe('');

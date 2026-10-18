@@ -125,3 +125,53 @@ All new API fields below are optional; every AC holds with and without them (gra
   or fewer, else dropped) and an item citation's `catalog_id`, as sent by the agent (AC-AGT-17).
 - Citation chips prefer these fields and fall back to the cached item lookup. Catalog chips read "Catalog: <label>".
   Tests: tests/ac_ui_24_citation_labels.test.ts.
+
+## UI review round 2 amendments (2026-10-18, from docs/ui-review/round2/)
+
+Every new API field below is optional; each AC holds with and without it (tested both ways).
+
+- AC-UI-25 **Merge confirm, undo and merged items** (UI2-05):
+  - "Merge subject into this" opens an inline confirm step ("Confirm merge" group): both thumbnails, and
+    "Merge <subject> into <target> at <location>? <subject> is marked merged, and its sightings and history move to
+    <target>. You can undo this…". Nothing is posted until "Confirm merge"; "Cancel" closes it. Focus moves to Confirm.
+  - After the merge, a toast reads "Merged <subject> into <target>." with a link "Open <target>" and an "Undo merge"
+    button (shown for 20 s), which calls `POST /api/items/{subject}/unmerge {operator}` and reloads the queue.
+  - A merged item (`status: merged` or `merged_into`) shows a banner "Merged into <label> at <UTC>" linking to the
+    target ("merged into another item" without `merged_into`), with an Operator field and an "Unmerge" button that is
+    disabled until an operator name is entered. A target lists "Merged from" (`merged_from`) with links and times.
+  - A 409 from unmerge reads "This merge can't be undone safely: <detail>. Nothing was changed." (inline on the item
+    page, as an error toast from Undo).
+- AC-UI-26 **Ranked candidates** (UI2-06): candidates are sorted by `score` (highest first; unscored keep the API
+  order, after the scored ones). Each tile shows "Match score" and `match_reasons` chips ("Why it matched"; strings
+  only, at most 6, 60 characters each). The heading reads "ranked by match score"; suggested lists without score or
+  similarity read "Other items of this class (suggested, unranked)".
+- AC-UI-27 **Box sources** (UI2-07, UI-08): `image_bbox_source` / `snapshot_bbox_source` / sighting `bbox_source`.
+  Detector boxes are solid. Omni boxes are dashed, padded by 15 % per side, tagged "approximate" (CSS generated
+  content), and the enlarge button name ends "(approximate box)". Unknown source: solid (older APIs). With no box
+  there is no overlay and the caption says "Whole frame". Boxes and captions appear on review images, candidate tiles
+  (the snapshot is used when `snapshot_bbox` is set), the item hero image and history sighting frames.
+- AC-UI-28 **Event wording** (UI2-09, UI2-10, UI-04, UI-13, amends AC-UI-12/18): one shared sentence for Activity,
+  History event rows and the overview feed: "Used by <actor> at Node 1 Unity (NOD1)", "Moved by <actor> from A to B",
+  "Added by … at X". `location_role` decides ("at" vs "from_to"); without it moves (or two different ends) are routes
+  and everything else is "at". Only a move with no destination says "to an unknown location". `actor_kind: operator`
+  (or, without it, `source` operator/api; for Last handled, an actor equal to `location_set_by`) reads
+  "operator <id>" ("an operator" when empty), never "person (…)". History event rows are matched to `events` by id;
+  otherwise the API summary ("used USOS -> ? by …") is rewritten. Activity lines read "<sentence> · <UTC>".
+- AC-UI-29 **History label** (UI2-11): a server-collapsed summary that starts with its count ("9 pipeline updates
+  (…)") gets the group total in place of that number, never "9 × 9 …"; other folded runs keep "N × summary".
+- AC-UI-30 **Markdown lists** (UI2-12, amends AC-UI-19): indented items nest inside the previous item, so numbering
+  continues across nested bullets (one `<ol>`); an ordered list keeps its first number (`<ol start>`); `_em_` is
+  italic when not inside a word (snake_case stays literal).
+- AC-UI-31 **Review queue polish** (UI2-13, UI2-14, UI2-15):
+  - A filtered queue shows "Showing x of y open review items." (x = matches, y = all open), plus "Tab counts are totals
+    for the whole queue"; a truncated list shows "Showing n of x matching review items.".
+  - Subject / candidate landmarks are named "Subject: <label> <id>, review <id>" and "Possible matches for …" (unique).
+  - Result toasts describe the operator's action: "Kept both items: <subject> stays a separate item.",
+    "Classified as <catalog name>.", "Created catalog item <name> and classified the item as it.", "Dismissed …".
+- AC-UI-32 **Layout** (UI2-17, UI-21, 1024 px duplicate cards):
+  - The filter grid is `auto-fill` 14rem columns with fields top-aligned (date hints no longer lift the inputs).
+    Search spans 2 columns, the Sort select is at least 14rem, and "Needs review" sits in the Status group on its own
+    full-width row.
+  - Duplicate cards show at most 4 candidates until "Show N more candidates". Their actions (catalog select, buttons,
+    merge/dismiss confirm) sit in a footer that sticks to the bottom of the viewport while the card is on screen.
+  - Checked with Playwright at 1024 and 1440 px (scripts/ui_check.py) and axe (0 violations).

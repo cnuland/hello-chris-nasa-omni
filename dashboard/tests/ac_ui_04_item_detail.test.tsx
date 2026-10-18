@@ -63,16 +63,17 @@ describe('AC-UI-4 item detail', () => {
     expect(srcs[2]).toEqual([]);
   });
 
-  test('AC-UI-4 shows "moved by ... at ..." lines for moved events (UTC time)', async () => {
+  // Amended (UI2-09): Activity reads "Moved by <actor> from A to B · <UTC>" (the place follows the actor).
+  test('AC-UI-4 shows "moved by ... · <time>" lines for moved events (UTC time)', async () => {
     await openDetail();
     expect(
-      await screen.findByText(/moved by crew member, blue shirt at .*2026-10-17[ T]11:00/i),
+      await screen.findByText(/moved by crew member, blue shirt from .* · 2026-10-17[ T]11:00/i),
     ).toBeInTheDocument();
   });
 
   test('AC-UI-4 moved event without actor says unknown rather than "null"', async () => {
     await openDetail();
-    expect(await screen.findByText(/moved by (an )?unknown.* at .*2026-10-16[ T]09:30/i)).toBeInTheDocument();
+    expect(await screen.findByText(/moved by (an )?unknown.* · 2026-10-16[ T]09:30/i)).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/moved by null/i);
   });
 

@@ -110,10 +110,10 @@ input[type='checkbox'] { accent-color: var(--accent); }
 
 /* ---- inventory ---- */
 .filters {
-  display: grid; grid-template-columns: 2fr repeat(5, minmax(0, 1fr)); gap: 12px; align-items: end;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: 12px; align-items: start;
   background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; margin-bottom: 12px;
 }
-.status-group { flex-direction: row; flex-wrap: wrap; gap: 10px; border: 0; padding: 0; margin: 0; grid-column: span 4; }
+.status-group { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px 14px; border: 0; padding: 0; margin: 0; grid-column: 1 / -1; }
 .status-group legend { width: 100%; margin-bottom: 4px; }
 .range-row { display: flex; align-items: center; gap: 8px; }
 .list-meta { display: flex; gap: 16px; margin: 8px 0; color: var(--fg-muted); }
@@ -191,7 +191,6 @@ table.items { width: 100%; border-collapse: collapse; }
 .toast-close { padding: 0 6px; border: 0; background: transparent; color: var(--fg-muted); font-size: 16px; }
 
 @media (max-width: 1400px) {
-  .filters { grid-template-columns: 2fr repeat(3, minmax(0, 1fr)); }
   .review-list { grid-template-columns: minmax(0, 1fr); }
 }
 
@@ -216,8 +215,12 @@ table.items { width: 100%; border-collapse: collapse; }
 .ts-rel { font-size: 12px; }
 .handled { display: inline-flex; flex-direction: column; }
 
-/* filters */
-.filters .needs-review-field { justify-content: flex-end; align-self: end; padding-bottom: 6px; }
+/* filters (UI2-17 / UI-21): top-aligned fields, so a hint line under the date inputs does not lift them */
+.filters .grow { grid-column: span 2; }
+.filters .range-row { min-height: 32px; }
+.sort-field select { min-width: 14rem; }
+.reset-field button { align-self: flex-start; }
+.status-sep { width: 1px; height: 18px; background: var(--border); }
 .filters .field > .muted.small, .filters .field > .field-error { font-size: 11px; }
 .field-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--fg-muted); }
 .actions-inline { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -251,7 +254,7 @@ table.items { width: 100%; border-collapse: collapse; }
 .dup-compare { display: grid; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); gap: 16px; }
 .dup-compare h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--fg-muted); }
 .dup-subject { border-right: 1px solid var(--border); padding-right: 16px; display: flex; flex-direction: column; gap: 8px; }
-.dup-candidates .candidates { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+.dup-candidates .candidates { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
 .candidate { padding: 8px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-sunken); }
 .candidate button { white-space: normal; text-align: left; }
 .entity-facts { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
@@ -294,4 +297,55 @@ table.items { width: 100%; border-collapse: collapse; }
   .dup-compare { grid-template-columns: minmax(0, 1fr); }
   .dup-subject { border-right: 0; padding-right: 0; border-bottom: 1px solid var(--border); padding-bottom: 12px; }
   .review-list { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ---- UI review round 2 ---- */
+/* boxes: detector = solid, omni = dashed and tagged "approximate" (UI2-07) */
+.bbox-detector { border-style: solid; }
+.bbox-approx { border-style: dashed; border-color: var(--accent); }
+.bbox-approx::after {
+  content: 'approximate'; position: absolute; left: -2px; top: -18px; padding: 0 4px; font: 10px/16px var(--sans); letter-spacing: 0.04em;
+  background: var(--accent); color: #00111c; border-radius: 2px; white-space: nowrap;
+}
+.frame-caption { margin: 4px 0 0; }
+.candidate .frame-caption { font-size: 11px; }
+
+/* merge confirm, toast actions, merged banner (UI2-05) */
+.confirm-merge {
+  padding: 10px 12px; border: 1px solid var(--accent); border-radius: var(--radius);
+  display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 16px; align-items: center;
+}
+.confirm-merge .actions { grid-column: 2; }
+.confirm-merge .thumb-md { width: 112px; height: 84px; }
+.confirm-merge p { margin: 0; }
+.confirm-merge-images { display: flex; align-items: center; gap: 12px; }
+.confirm-merge-images figure { margin: 0; display: grid; gap: 4px; }
+.confirm-merge-arrow { font-size: 20px; color: var(--fg-muted); }
+.toast-body { flex: 1; display: grid; gap: 6px; }
+.toast-actions { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.toast-actions button { padding: 2px 10px; }
+.merged-banner { border-color: var(--warn); }
+.merged-text { margin: 0 0 8px; font-size: 15px; }
+.merged-actions { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: flex-end; }
+.merged-from { margin: 0 0 8px; padding-left: 18px; }
+.merged-text a, .merged-from a { text-decoration: underline; }
+
+/* match reasons and score (UI2-06) */
+.reason-chips { list-style: none; display: flex; flex-wrap: wrap; gap: 4px; padding: 0; margin: 4px 0 0; }
+.reason-chip { padding: 0 8px; border: 1px solid var(--border); border-radius: 10px; font-size: 11px; color: var(--fg-muted); }
+
+/* duplicate cards: compact candidate grid and an actions footer that stays in view (1024 px) */
+.show-more { margin-top: 8px; }
+.review-footer {
+  position: sticky; bottom: 0; z-index: 5; background: var(--bg-raised);
+  margin: 12px -16px -16px; padding: 4px 16px 12px; border-top: 1px solid var(--border);
+  border-radius: 0 0 var(--radius) var(--radius); box-shadow: 0 -6px 12px rgba(0, 0, 0, 0.35);
+}
+.review-footer .review-actions { margin-top: 8px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+.review-footer .review-actions > :not(.field) { grid-column: 1 / -1; }
+.review-footer .actions { margin-top: 0; }
+.review-count { margin: 0 0 8px; }
+@media (max-width: 1100px) {
+  .dup-candidates .candidates { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; }
+  .dup-subject .frame-review { width: 240px; }
 }

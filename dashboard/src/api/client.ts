@@ -109,6 +109,9 @@ export async function listReviewPage(f: ReviewFilters = {}, limit = REVIEW_MAX_L
 }
 export const resolveReview = (id: string, body: ResolveRequest): Promise<unknown> =>
   json(`${API_BASE}/review/${encodeURIComponent(id)}/resolve`, jsonBody('POST', body));
+/** UI2-05: undo a merge. `id` is the merged source item; returns the restored items (409 when unsafe to undo). */
+export const unmergeItem = (id: string, body: { operator: string; note?: string }): Promise<Item[] | unknown> =>
+  json(`${API_BASE}/items/${encodeURIComponent(id)}/unmerge`, jsonBody('POST', body));
 export const listCatalog = (): Promise<CatalogItem[]> => json(`${API_BASE}/catalog`);
 export const listLocations = (): Promise<Location[]> => json(`${API_BASE}/locations`);
 export const listEvents = (p: Record<string, string> = {}, signal?: AbortSignal): Promise<Event[]> =>

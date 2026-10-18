@@ -60,7 +60,7 @@ describe('AC-UI-13 possible-duplicate cards support a merge decision', () => {
     reviewsAre([dupNew]);
     renderApp('/review');
     const card = await findReviewCard(ID.rvDup);
-    const subject = within(card).getByRole('region', { name: /subject/i });
+    const subject = within(card).getByRole('region', { name: /^subject/i }) /* amended (UI2-14): names are unique per card */;
     expect(within(subject).getByRole('link', { name: 'headset' })).toHaveAttribute('href', `/items/${SUBJECT_ID}`);
     expect(within(subject).getByText('Node 1 Unity (NOD1)')).toBeInTheDocument();
     expect(within(subject).getByText('2026-10-17 22:56 UTC')).toBeInTheDocument();
@@ -100,6 +100,9 @@ describe('AC-UI-13 possible-duplicate cards support a merge decision', () => {
     expect(new Set(names).size).toBe(2);
     expect(names[0]).toMatch(/headset 11111111 \(LAB1S2\)/);
     await user.click(buttons[1]);
+    // Amended (UI2-05): merge now has a confirm step.
+    expect(requestsTo('POST', resolvePath(ID.rvDup))).toHaveLength(0);
+    await user.click(within(card).getByRole('button', { name: /confirm merge/i }));
     await waitFor(() => expect(requestsTo('POST', resolvePath(ID.rvDup))).toHaveLength(1));
     expect(requestsTo('POST', resolvePath(ID.rvDup))[0].body).toMatchObject({
       action: 'merge_into', target_entity_id: ID.camera, operator: 'alice',
@@ -155,7 +158,7 @@ describe('AC-UI-13 possible-duplicate cards support a merge decision', () => {
     server.use(http.get(`*/api/items/${SUBJECT_ID}`, () => HttpResponse.json({ ...camera, entity_id: SUBJECT_ID, label: 'Subject camera' })));
     renderApp('/review');
     const card = await findReviewCard(ID.rvDup);
-    const subject = within(card).getByRole('region', { name: /subject/i });
+    const subject = within(card).getByRole('region', { name: /^subject/i }) /* amended (UI2-14): names are unique per card */;
     expect(await within(subject).findByRole('link', { name: 'Subject camera' })).toHaveAttribute('href', `/items/${SUBJECT_ID}`);
     expect(within(subject).getByText('Node 2 deck bay 4 (NOD2D4)')).toBeInTheDocument();
   });

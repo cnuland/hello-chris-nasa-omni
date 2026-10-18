@@ -5,7 +5,7 @@ import { Link } from 'react-router-dom';
 import { getStats, listEvents, listItems } from '../api/client';
 import type { Event, Stats } from '../api/types';
 import { Timestamp } from '../components/Timestamp';
-import { actorPhrase, humanize, locationLabel, shortId } from '../lib/format';
+import { eventActor, eventPlace, humanize, shortId } from '../lib/format';
 import { useToasts } from '../state/toasts';
 
 export const REFRESH_MS = 10_000;
@@ -21,21 +21,20 @@ function Tile({ label, value, hint }: { label: string; value: number | null; hin
   );
 }
 
-/** "NOD2D4 → LAB1S2" with names when known; one-sided routes read "to X" / "from X"; '' when neither end is known. */
+/**
+ * Where the event happened, in the shared wording (UI2-09 / UI-13): "at X" for uses and additions, "from A to B" for
+ * moves (names when known); '' when neither end is known.
+ */
 export function eventRoute(e: Event): string {
-  const from = e.from_location ? locationLabel(e.from_location, e.from_location_name) : '';
-  const to = e.to_location ? locationLabel(e.to_location, e.to_location_name) : '';
-  const type = (e.event_type ?? '').toLowerCase();
-  if (from && to) return `${from} → ${to}`;
-  if (to) return type === 'added' ? `at ${to}` : `to ${to}`;
-  if (from) return `from ${from}`;
-  return '';
+  return eventPlace(e);
 }
 
 function EventLine({ e }: { e: Event }) {
   const route = eventRoute(e);
   const label = e.entity_label?.trim() || (e.entity_id ? `item ${shortId(e.entity_id)}` : '');
-  const actor = e.actor_desc?.trim() ? `by ${actorPhrase(e.actor_desc)}` : '';
+  const who = eventActor(e);
+  // A person with no description adds nothing ("by an unknown person"); an operator is always named (UI2-10).
+  const actor = e.actor_desc?.trim() || who === 'an operator' ? `by ${who}` : '';
   return (
     <li className={`event event-${e.event_type ?? 'other'}`}>
       <span className="event-type">{humanize(e.event_type) || 'event'}</span>{' '}

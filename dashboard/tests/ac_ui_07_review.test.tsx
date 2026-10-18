@@ -193,6 +193,8 @@ describe('AC-UI-7 merge into a candidate', () => {
     const { user } = await openReview();
     const card = await findReviewCard(ID.rvDup);
     await user.click(within(card).getByRole('button', { name: /merge subject into this: pistol-grip drill/i }));
+    // Amended (UI2-05): merge goes through a confirm step.
+    await user.click(within(card).getByRole('button', { name: /confirm merge/i }));
     await waitFor(() => expect(requestsTo('POST', resolvePath(ID.rvDup))).toHaveLength(1));
     expect(requestsTo('POST', resolvePath(ID.rvDup))[0].body).toMatchObject({
       action: 'merge_into', target_entity_id: ID.drill, operator: 'alice',

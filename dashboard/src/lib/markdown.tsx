@@ -1,7 +1,9 @@
 // AC-UI-19: a small, safe Markdown subset for agent replies. The text is tokenised into React elements only (no raw
 // HTML injection API is used), raw HTML is shown as literal text, and Markdown links are never rendered as <a>: only
 // cited entity UUIDs become in-app item links (via renderId). Supported: paragraphs, line breaks, # headings (rendered bold), - / * / 1. lists,
-// ``` fenced code, `inline code`, **bold** / __bold__, *italic*, and [text](url) (text kept, url dropped).
+// ``` fenced code, `inline code`, **bold** / __bold__, *italic* / _italic_, and [text](url) (text kept, url dropped).
+// Indented list items nest inside the previous item, so "1. a / - sub / 2. b" stays one numbered list (UI2-12), and an
+// ordered list keeps the number it starts with (<ol start>).
 import { Fragment, type ReactNode } from 'react';
 import { UUID_RE } from './agent';
 
@@ -33,7 +35,8 @@ function textWithIds(text: string, key: string, opts: MarkdownOptions): ReactNod
 }
 
 // Order matters: code first (its content is literal), then links, bold, italic.
-const INLINE = /(`[^`\n]+`)|(\[[^\]\n]{1,200}\]\((?:[^()\s]|\([^()\s]{0,200}\)){1,500}\))|(\*\*[^*\n]+\*\*|__[^_\n]+__)|(\*[^*\s][^*\n]*\*)/;
+// _em_ needs a non-word character (or the edge) on both sides, so snake_case identifiers stay literal (UI2-12).
+const INLINE = /(`[^`\n]+`)|(\[[^\]\n]{1,200}\]\((?:[^()\s]|\([^()\s]{0,200}\)){1,500}\))|(\*\*[^*\n]+\*\*|__[^_\n]+__)|(\*[^*\s][^*\n]*\*|(?<![A-Za-z0-9_])_[^_\s][^_\n]*_(?![A-Za-z0-9_]))/;
 
 export function renderInline(text: string, key: string, opts: MarkdownOptions = {}, depth = 0): ReactNode[] {
   const out: ReactNode[] = [];
@@ -66,7 +69,7 @@ export function renderInline(text: string, key: string, opts: MarkdownOptions = 
   return out;
 }
 
-const LIST_ITEM = /^\s*(?:([-*+])|(\d{1,3})[.)])\s+(.*)$/;
+const LIST_ITEM = /^(\s*)(?:([-*+])|(\d{1,3})[.)])\s+(.*)$/;
 const HEADING = /^\s{0,3}#{1,6}\s+(.*?)\s*#*\s*$/;
 
 /** Renders Markdown-ish agent text as safe React elements. */
@@ -74,7 +77,9 @@ export function renderMarkdown(source: string, opts: MarkdownOptions = {}): Reac
   const lines = source.slice(0, MAX_CHARS).replace(/\r\n?/g, '\n').split('\n');
   const blocks: ReactNode[] = [];
   let para: string[] = [];
-  let list: { ordered: boolean; items: string[] } | null = null;
+  interface SubList { ordered: boolean; start: number; items: string[] }
+  interface ListItem { text: string; sub: SubList | null }
+  let list: { ordered: boolean; start: number; indent: number; items: ListItem[] } | null = null;
   let b = 0;
 
   const flushPara = () => {
@@ -95,8 +100,20 @@ export function renderMarkdown(source: string, opts: MarkdownOptions = {}): Reac
   const flushList = () => {
     if (!list) return;
     const k = `l${b++}`;
-    const items = list.items.map((it, i) => <li key={i}>{renderInline(it, `${k}-${i}`, opts)}</li>);
-    blocks.push(list.ordered ? <ol key={k}>{items}</ol> : <ul key={k}>{items}</ul>);
+    const ol = (start: number, key: string, children: ReactNode) =>
+      <ol key={key} start={start !== 1 ? start : undefined}>{children}</ol>;
+    const items = list.items.map((it, i) => {
+      const sk = `${k}-${i}`;
+      const sub = it.sub;
+      const subItems = sub?.items.map((t, j) => <li key={j}>{renderInline(t, `${sk}-s${j}`, opts)}</li>);
+      return (
+        <li key={i}>
+          {renderInline(it.text, sk, opts)}
+          {sub && (sub.ordered ? ol(sub.start, `${sk}-s`, subItems) : <ul key={`${sk}-s`}>{subItems}</ul>)}
+        </li>
+      );
+    });
+    blocks.push(list.ordered ? ol(list.start, k, items) : <ul key={k}>{items}</ul>);
     list = null;
   };
 
@@ -127,15 +144,26 @@ export function renderMarkdown(source: string, opts: MarkdownOptions = {}): Reac
     const li = LIST_ITEM.exec(line);
     if (li) {
       flushPara();
-      const ordered = !li[1];
+      const indent = li[1].replace(/\t/g, '    ').length;
+      const ordered = !li[2];
+      const num = ordered ? Number(li[3]) : 1;
+      if (list && list.items.length && indent >= list.indent + 2) {
+        // Nested item: it belongs to the previous top-level item, so the outer numbering continues.
+        const parent = list.items[list.items.length - 1];
+        if (!parent.sub) parent.sub = { ordered, start: num, items: [] };
+        parent.sub.items.push(li[4]);
+        continue;
+      }
       if (list && list.ordered !== ordered) flushList();
-      if (!list) list = { ordered, items: [] };
-      list.items.push(li[3]);
+      if (!list) list = { ordered, start: num, indent, items: [] };
+      list.items.push({ text: li[4], sub: null });
       continue;
     }
     if (list && /^\s{2,}\S/.test(line)) {
-      // continuation of the previous list item
-      list.items[list.items.length - 1] += ` ${line.trim()}`;
+      // continuation of the previous list item (or of its last nested item)
+      const last = list.items[list.items.length - 1];
+      if (last.sub) last.sub.items[last.sub.items.length - 1] += ` ${line.trim()}`;
+      else last.text += ` ${line.trim()}`;
       continue;
     }
     flushList();

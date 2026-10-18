@@ -1,22 +1,31 @@
 // Non-blocking toast notifications (AC-UI-10). Errors use role="alert" and stay until dismissed; success/info
 // toasts auto-dismiss. Identical messages already on screen are not duplicated.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import { ApiError } from '../api/client';
 
 export type ToastKind = 'error' | 'success' | 'info';
-export interface Toast {
+/** Optional extras (UI2-05): an in-app link (e.g. the merge target) and one action button (e.g. Undo). */
+export interface ToastOptions {
+  link?: { to: string; label: string };
+  action?: { label: string; onClick: () => void };
+}
+
+export interface Toast extends ToastOptions {
   id: number;
   kind: ToastKind;
   message: string;
 }
 
 interface ToastApi {
-  push: (kind: ToastKind, message: string) => void;
+  push: (kind: ToastKind, message: string, opts?: ToastOptions) => void;
   error: (context: string, err: unknown) => void;
-  success: (message: string) => void;
+  success: (message: string, opts?: ToastOptions) => void;
 }
 
 const AUTO_DISMISS_MS = 6000;
+/** Toasts with an action (Undo) stay longer so the operator has time to use it. */
+const ACTION_DISMISS_MS = 20000;
 const ToastContext = createContext<ToastApi | null>(null);
 
 /** Formats any thrown value for display ("Could not load items: database unavailable"). */
@@ -39,10 +48,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const push = useCallback(
-    (kind: ToastKind, message: string) => {
+    (kind: ToastKind, message: string, opts: ToastOptions = {}) => {
       const id = nextId.current++;
-      setToasts((ts) => (ts.some((t) => t.kind === kind && t.message === message) ? ts : [...ts, { id, kind, message }]));
-      if (kind !== 'error') timers.current.set(id, setTimeout(() => dismiss(id), AUTO_DISMISS_MS));
+      setToasts((ts) => (ts.some((t) => t.kind === kind && t.message === message) ? ts : [...ts, { id, kind, message, ...opts }]));
+      if (kind !== 'error') timers.current.set(id, setTimeout(() => dismiss(id), opts.action ? ACTION_DISMISS_MS : AUTO_DISMISS_MS));
     },
     [dismiss],
   );
@@ -59,7 +68,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     () => ({
       push,
       error: (context, err) => push('error', `${context}: ${errorMessage(err)}`),
-      success: (message) => push('success', message),
+      success: (message, opts) => push('success', message, opts),
     }),
     [push],
   );
@@ -70,7 +79,22 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       <section className="toasts" role="region" aria-label="Notifications">
         {toasts.map((t) => (
           <div key={t.id} className={`toast toast-${t.kind}`} role={t.kind === 'error' ? 'alert' : 'status'}>
-            <p className="toast-message">{t.message}</p>
+            <div className="toast-body">
+              <p className="toast-message">{t.message}</p>
+              {(t.link || t.action) && (
+                <div className="toast-actions">
+                  {t.link && <Link to={t.link.to} onClick={() => dismiss(t.id)}>{t.link.label}</Link>}
+                  {t.action && (
+                    <button type="button" onClick={() => {
+                      dismiss(t.id);
+                      t.action?.onClick();
+                    }}>
+                      {t.action.label}
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
             <button type="button" className="toast-close" aria-label="Dismiss notification" onClick={() => dismiss(t.id)}>
               ×
             </button>
