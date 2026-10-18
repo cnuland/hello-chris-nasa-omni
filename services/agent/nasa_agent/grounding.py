@@ -202,6 +202,10 @@ def catalog_facts_reply(entries: list[dict[str, Any]]) -> str | None:
     return " ".join(parts) or None
 
 
+#: AC-AGT-26: a lead-in ending in ':' with at most a bare list marker after it ("... the following location: 1.")
+_STUB_RE = re.compile(r":\s*(?:\d{1,2}[.)]|[-*\u2022])?\s*$")
+
+
 def kept_sentences(reply: str, homes: list[dict[str, Any]], entries: list[dict[str, Any]]) -> str:
     """The sentences of ``reply`` that survive the usual-location rewrite (AC-AGT-18): every sentence naming one of
     the offending catalog-only ``homes`` is dropped, and so is a current-position sentence that names no location
@@ -213,6 +217,8 @@ def kept_sentences(reply: str, homes: list[dict[str, Any]], entries: list[dict[s
             continue
         if CURRENT_RE.search(text) and not _names_a_location(text, entries):
             continue
+        if _STUB_RE.search(text):
+            continue  # AC-AGT-26: the list content after this lead-in was dropped; the stub reads as garbage
         keep.append(text)
     return " ".join(keep)
 

@@ -358,3 +358,129 @@ seen in this module 15 min ago. AC-PER-29 to AC-PER-32 amend AC-PER-8, AC-PER-19
   boxes dashed ("approximate").
 - The field is optional in the ingest contract, so an older perception build keeps working (its sightings get null).
   Tests: `tests/test_ac_per_08_reconciler.py::test_ac_per_08_bbox_source_*`.
+
+## Amendments: person tracks from `people[]` and sleep-cue privacy (Gemma 4 run, 2026-10-18)
+
+Measured live (docs/QUESTIONS.md #33): with Gemma 4 12B as the omni model, people are reported only in the
+observation's `people` array (`{ref, appearance, activity, is_speaking}`), never as objects labelled "person". The
+reconciler built person entities only from person *objects* (Qwen2.5-Omni listed both), so the Gemma run created 0
+person tracks against 8–10 with Qwen. The same run described "dark hair, sleeping in a blue sleeping bag" in Harmony
+(crew quarters NOD2S5/D5/P5/O5 are `no_capture`) and the window was stored. AC-PER-35 to AC-PER-38 amend AC-PER-8,
+AC-PER-10, AC-PER-11, AC-PER-22, AC-PER-23 and AC-PER-29. People are tracked by appearance text only, never by
+biometrics (docs/QUESTIONS.md #7).
+
+- AC-PER-35 **Person tracks from `people[]`** (amends AC-PER-8, AC-PER-22, AC-PER-29).
+  - *Person class.* The catalog class with `category = person` (seed: `crew-member`). Without one, `people[]` is
+    ignored (logged). An omni object is a *person object* when its label maps to that class.
+  - *Sightings.* Every `people[]` entry (first entry per `ref`, at most 10 per the schema) is one person sighting of
+    the window, at the window location, stamped at the last frame, with `description` = the sanitised appearance
+    (control characters removed, whitespace collapsed, at most 200 characters). Entries with distinct refs are
+    distinct people: two entries of one window never share an entity, whatever their appearance.
+  - *Linking with person objects (no double create).* Person objects and `people[]` entries of one window are paired
+    by appearance similarity (below), greedily, best first, pairs with similarity ≥ `person_match_floor`. If exactly
+    one person object and one entry are left, they are paired too. A pair is one sighting: the object's box (and
+    detector link) plus the entry's appearance as the description. If several of each are left they are paired in
+    order, **without** a box (a box could belong to the other person). Unpaired person objects and entries are
+    sightings of their own.
+  - *Matching (one path for every person sighting, reusing AC-PER-29).* Person sightings never get an exemplar
+    (AC-PER-36) and are matched by class, place and appearance text. Candidates: live person-class entities last
+    seen in the observation's module or one of its zones (one cached `GET /items?catalog_id=<class>&location=<module>`
+    per window, as AC-PER-29), not taken by another sighting of this window. A candidate is eligible when the
+    appearance similarity between its `description` and the observation is ≥ `person_match_floor`. Recent
+    candidates (last seen within `no_exemplar_match_s`) and revisits (any gap, modules only) use the same floor;
+    outside modules (a segment) only recent candidates at the exact location are eligible (AC-PER-22). Pairs are
+    assigned globally, best first: higher similarity, then recent before stale, then the observation's own zone,
+    then most recently seen. An observation whose appearance carries no descriptor (empty, or only generic words
+    such as "astronaut") attaches to the most recently seen recent candidate, else starts a new track.
+  - *Appearance similarity* (`perception.people.appearance_similarity`, deterministic, in [0, 1]). Text is
+    normalised (lower case, punctuation removed, "t-shirt"/"tee" → shirt, "trousers" → pants, "gray" → grey,
+    "flight suit"/"jumpsuit"/"coveralls" → suit). Descriptors are colour + garment pairs (colours immediately
+    before a garment, a non-colour word in between allowed: "blue flight suit" → blue suit), uncoloured garments
+    and remaining distinctive words (e.g. "flag", "patch", "headset"); generic words ("crew", "member", "person",
+    "astronaut", articles, prepositions) are dropped. If both texts name the same garment with disjoint specific
+    colours ("blue shirt" vs "red shirt"; "dark"/"light" alone are colour families, see the review round), the
+    similarity is 0 (different people). Otherwise it is the overlap coefficient |A ∩ B| / min(|A|, |B|) of the
+    descriptor sets, with hair weighing half.
+  - *New track.* `new_entity` = {`catalog_id`: person class, `kind`: `person`, `status`: `provisional`, `label`:
+    the class name, `description`: the appearance}.
+  - *Events.* `events[].actor_ref` (P1, P2, …) still resolves to `people[ref].appearance` for `actor_desc`
+    (AC-PER-10), sanitised like the description. The ingest contract has no person-entity link for events
+    (`event.actor_entity` is not accepted by `/ingest/window`), so the actor stays a descriptor.
+  - *Config.* `person_match_floor` (`PERCEPTION_PERSON_MATCH_FLOOR`, default 0.5, ≤ 1).
+  - *Accepted.* Matching is approximate. Two crew members with similar outfits ("dark hair, blue shirt" twice) are
+    merged into one track across windows, and a crew member who changes clothes starts a new track; a person's
+    entity description is the first appearance seen. Both are accepted: the alternative is identity from faces.
+- AC-PER-36 **Person privacy** (amends AC-PER-8, AC-PER-11, AC-PER-13, AC-PER-22). Person sightings (from objects or
+  `people[]`) never store a crop and never get an exemplar embedding: a crop of a person shows the face, and an
+  appearance embedding of it is a re-identification vector (biometric-like). Before this amendment a detector-linked
+  person object with a crop ≥ `min_crop_px` was embedded and its crop uploaded in capture windows. Frames are still
+  stored in capture windows, as for every window, and the sighting keeps the box. In a `no_capture` window no person
+  sighting is recorded at all (where a crew member is inside a private zone is not tracked), and events get
+  `actor_desc` = null (no description of people in private places).
+- AC-PER-37 **Sleep cues make a window private** (amends AC-PER-11, AC-PER-23). A window is `no_capture` when any of
+  `people[].appearance`, `people[].activity`, `objects[].label`, `objects[].description` or `scene_summary`
+  contains a sleep cue, matched on whole words after normalisation: "sleeping", "asleep", "sleeping bag(s)",
+  "sleep station(s)", "crew quarters", "bunk(s)". A sleeping person or a sleeping bag in use is almost always in, or
+  seen into, a crew quarter (NOD2S5/D5/P5/O5). The window then follows the existing `no_capture` path exactly: no
+  frames, crops or raw reply are uploaded, no review is created, the transcript is not stored, unknown objects and
+  person sightings are skipped, and known objects are sighted without image URIs. The reason is logged at INFO
+  ("sleep cue; window treated as no_capture", with the cue and the field, e.g. `people[1].appearance`, never the
+  text) and recorded in the payload as `window.privacy = {"no_capture": true, "reason": "sleep_cue", "cue": ...,
+  "field": ...}` (inventory-api ignores unknown window fields). The other private reasons (camera, hint, scene
+  summary naming a private place) are recorded the same way with their own `reason`.
+  *Accepted.* False positives (a stowed, unused sleeping bag in Harmony; "sleeping bag" as a catalog label) lose
+  that window's images. Over-privacy is the design choice. The `scene_summary` is still stored, as for every
+  `no_capture` window (AC-PER-11 "summarised only").
+- AC-PER-38 **Eval gates** (eval/). `GoldOmni` reports people only in `people[]`, as Gemma does. A new profile
+  `gemma_people` (now the default) lists every gold actor in every window, with Gemma-like varying appearance text
+  (the exact gold text in the window of that actor's event), on top of `repeat_per_frame` objects. In every profile,
+  one *quiet* window (the first, in time order, with no gold event, no unknown object and no scripted transcript line
+  within 6 s, so no other metric depends on it) also lists a sleeping crew member with the live Gemma text ("dark
+  hair, sleeping in a blue sleeping bag") and has the neutral scene summary "Crew member resting in the module"
+  (no sleep cue, so only the `people[]` path can catch it). The scorer finds that window by its stored summary
+  (summaries are stored for private windows too, AC-PER-11). Metrics (eval/thresholds.yaml):
+  - `person_track_recall` = gold actors with a person track whose description contains the actor's descriptor
+    words / gold actors, gated ≥ 0.99;
+  - `person_tracks_per_person` = person entities / gold actors, gated ≤ 1.5 (catches over-splitting);
+  - `sleep_window_media` = stored raw replies + sighting frames of the sleep-cue window, gated ≤ 0 (None, i.e. a
+    failure, when no such window was stored).
+  - `sleep_window_person_sightings` = person sightings recorded in the sleep-cue window, gated ≤ 0 (review round).
+  *Integration finding:* the first draft put the sleeping crew member in the window at the scene start. That window
+  also holds the transcript line "Starting the tool inventory survey", which tests/e2e searches for, and a private
+  window stores no transcript. The quiet-window rule keeps the sleep probe independent of the other checks.
+
+### Review round (AC-PER-35..38): fixes and residual risks accepted
+
+Fixes (each test-first, tests/test_ac_per_35_38_people_privacy.py `test_review_*`, eval `test_review_*`):
+- *Sleep-cue bypasses.* `sanitise_text` deletes invisible format characters (soft hyphen, zero-width space, bidi
+  overrides) instead of turning them into spaces, which split "slee\u00adping" into two words. Added cues:
+  "sleepingbag(s)", "sleep pod(s)", "sleep rack", "sleep restraint", "sleeps", "slumber(ing)", "napping", "dozing",
+  "dozes".
+- *Privacy hold.* Windows overlap (6 frames every 4 s), so the next window can show the sleeper without a cue. Every
+  window of the camera that starts within `privacy_hold_s` (`PERCEPTION_PRIVACY_HOLD_S`, default 30 s, 0 = off) of
+  the end of a private window is private too (`window.privacy.reason = "privacy_hold"`). Held windows do not extend
+  the hold.
+- *Colour families.* A modifier without a specific colour stands for a family: "dark" = black, blue, brown, grey,
+  green, red, purple; "light"/"pale" = white, grey, blue, yellow, khaki, pink, green, blonde, orange. So "dark hair" vs
+  "blonde hair" clashes, while "dark t-shirt" vs "black t-shirt" does not. Specific colours win over the modifier
+  ("light grey" = grey). Several colours of one garment are all allowed ("white and blue shirt"): "and"/"or" no longer
+  reset the colours, only "with"/"plus" and punctuation do. A colour attaches to a garment at most one word later
+  ("blue NASA polo"); "haired" is hair; a polo is a shirt.
+- *Ties.* Candidates with the same overlap similarity are ranked by the two-sided (Dice) similarity before recency.
+  Otherwise "blue shirt, headset" took the entity "headset" (another person's, seen more recently) from its exact
+  match, and the other person got a new track.
+- *Pairing.* A leftover person object and people entry are never paired when their descriptions clash in colour.
+- *Sanitising.* Person objects' descriptions are sanitised like people[] appearances.
+
+Residual risks accepted:
+- *Lenient overlap.* The overlap coefficient divides by the shorter description, and an entity keeps its first
+  description. A track first described as "headset" or "shirt" absorbs any later person with a headset or a shirt of
+  any colour, as long as no garment clashes in colour. This is the documented over-merge, preferred to splitting one
+  person whose description gets more detailed ("blue flight suit" → "blue flight suit with American flag patch").
+- *Greedy, not optimal, assignment.* Assignment is greedy over (similarity, closeness, recency), not a maximum
+  matching, so a three-way tie can still swap tracks.
+- *Summary text.* A private window keeps its `scene_summary` (AC-PER-11), which may describe the sleeping person.
+- *Names.* The model may name a crew member in `appearance`. Perception does not strip names; the omni prompt asks for
+  appearance only.
+- *Eval purity.* `person_track_recall` checks that each actor has a track; it does not detect a track that also
+  absorbed the other actor's sightings. `person_tracks_per_person` ≤ 1.5 only bounds over-splitting.

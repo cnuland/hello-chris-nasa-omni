@@ -75,6 +75,14 @@ from .labels import CatalogMapper, label_key, normalise_label
 from .locations import LocationResolver
 from .media import crop as crop_image
 from .media import encode_jpeg
+from .people import (
+    appearance_closeness,
+    appearance_conflict,
+    appearance_descriptors,
+    appearance_similarity,
+    find_sleep_cue,
+    sanitise_text,
+)
 from .speech import classify_utterance_logged, parse_speech_claim, split_utterances
 from .storage import crop_key, frame_key, raw_key
 from .types import DecisionResult, Detection, LabelMatch, OmniResult, Window
@@ -371,6 +379,8 @@ class Reconciler:
         self._crop_seq = 0
         # (entity_id, event_type, to_location) -> occurred_at of the last recorded omni event (overlap dedup)
         self._recent_events: dict[tuple[str, str, str | None], datetime] = {}
+        # AC-PER-37 review: windows starting before this stay private (overlapping windows show the same scene)
+        self._private_until: datetime | None = None
 
     def _set_catalog(self, catalog: list[dict[str, Any]], locations: list[dict[str, Any]]) -> None:
         self.catalog = catalog
@@ -460,11 +470,29 @@ class Reconciler:
         camera_location = self.config.camera_locations.get(self.camera_id)
         scope = self.resolver.window_policy(camera_location, obs.get("location_hint"))
         location, no_capture = scope.location, scope.no_capture
+        privacy: dict[str, Any] | None = {"no_capture": True, "reason": "location"} if no_capture else None
         if not no_capture and self.resolver.names_private_place(str(obs.get("scene_summary") or "")):
             # AC-PER-23 review: the hint may name only the parent module while the summary says crew quarters
             logger.info("scene summary names a private place; window treated as no_capture",
                         extra={"camera_id": self.camera_id, "window": window.index})
             no_capture = True
+            privacy = {"no_capture": True, "reason": "scene_summary"}
+        if not no_capture and (cue := find_sleep_cue(obs)):
+            # AC-PER-37: a sleeping person or a sleeping bag in use means crew quarters (fail closed, over-private)
+            logger.info("sleep cue; window treated as no_capture",
+                        extra={"camera_id": self.camera_id, "window": window.index, "cue": cue[0], "field": cue[1]})
+            no_capture = True
+            privacy = {"no_capture": True, "reason": "sleep_cue", "cue": cue[0], "field": cue[1]}
+        hold = timedelta(seconds=max(float(self.config.privacy_hold_s or 0.0), 0.0))
+        if no_capture and hold:
+            until = window.t_end + hold
+            self._private_until = until if self._private_until is None else max(self._private_until, until)
+        elif not no_capture and self._private_until is not None and window.t_start <= self._private_until:
+            # the next overlapping windows may show the sleeper again without saying so
+            logger.info("window within the privacy hold of a private window; treated as no_capture",
+                        extra={"camera_id": self.camera_id, "window": window.index})
+            no_capture = True
+            privacy = {"no_capture": True, "reason": "privacy_hold"}
         if scope.hint_conflict and not no_capture:
             logger.warning(
                 "location hint names another module than the fixed camera; sightings get low confidence",
@@ -481,10 +509,17 @@ class Reconciler:
         dets = [list(detections[i]) if i < len(detections) else [] for i in range(len(window.frames))]
 
         observed = self._link(window, obs.get("objects") or [], dets)
+        observed = self._with_people(window, obs, observed)  # AC-PER-35
         for o in observed:
             o.location = self._object_location(ctx, o)
         fungible = [o for o in observed if self._is_fungible(o)]
-        instances = [o for o in observed if not self._is_fungible(o) and not (o.is_unknown and no_capture)]
+        instances = [
+            o
+            for o in observed
+            if not self._is_fungible(o)
+            and not (o.is_unknown and no_capture)
+            and not (self._is_person(o) and no_capture)  # AC-PER-36: nobody is tracked inside a private zone
+        ]
 
         reviews: list[dict[str, Any]] = []
         self._match_instances(ctx, instances)
@@ -509,6 +544,8 @@ class Reconciler:
             "audio_events": list(obs.get("audio_events") or []),
             "model": model or omni.model or "unknown",
         }
+        if privacy is not None:
+            window_doc["privacy"] = privacy  # AC-PER-37 metadata (inventory-api ignores unknown window fields)
         if not no_capture:
             raw = omni.raw or json.dumps(obs)
             window_doc["raw_uri"] = self.storage.put(
@@ -556,6 +593,101 @@ class Reconciler:
     def _is_fungible(self, o: _Observed) -> bool:
         item = self.mapper.item(o.catalog_id)
         return bool(item and item.get("is_fungible"))
+
+    def _is_person(self, o: _Observed) -> bool:
+        item = self.mapper.item(o.catalog_id)
+        return bool(item and item.get("category") == "person")
+
+    def _person_class(self) -> dict[str, Any] | None:
+        return next((c for c in self.catalog if c.get("category") == "person" and c.get("catalog_id")), None)
+
+    def _with_people(self, window: Window, obs: dict[str, Any], observed: list[_Observed]) -> list[_Observed]:
+        """AC-PER-35: every people[] entry (first per ref) is a person sighting. Entries are paired with person
+        objects by appearance similarity (>= person_match_floor, best first; a single leftover of each is paired
+        too; several leftovers are paired in order without a box). Unpaired entries become sightings of their own."""
+        for o in observed:
+            if self._is_person(o):  # review round: object text is model output too
+                o.obj = {**o.obj, "description": sanitise_text(o.obj.get("description"))}
+        people = [p for p in obs.get("people") or [] if isinstance(p, dict)]
+        if not people:
+            return observed
+        pclass = self._person_class()
+        if pclass is None:
+            logger.info("no person class in the catalog; people[] ignored", extra={"window": window.index})
+            return observed
+        entries: list[tuple[str, str]] = []
+        refs: set[str] = set()
+        for p in people:
+            ref = str(p.get("ref") or "")
+            if ref and ref in refs:
+                continue
+            refs.add(ref)
+            entries.append((ref, sanitise_text(p.get("appearance"))))
+        persons = [o for o in observed if self._is_person(o)]
+        floor = self.config.person_match_floor
+        scored = sorted(
+            (
+                (-appearance_similarity(o.obj.get("description"), text), oi, ei)
+                for oi, o in enumerate(persons)
+                for ei, (_, text) in enumerate(entries)
+            )
+        )
+        pairs: dict[int, int] = {}  # person object index -> entry index
+        used: set[int] = set()
+        for neg_sim, oi, ei in scored:
+            if -neg_sim < floor or oi in pairs or ei in used:
+                continue
+            pairs[oi] = ei
+            used.add(ei)
+        left_objects = [oi for oi in range(len(persons)) if oi not in pairs]
+        left_entries = [ei for ei in range(len(entries)) if ei not in used]
+        boxless: set[int] = set()
+
+        def clash(oi: int, ei: int) -> bool:
+            return appearance_conflict(persons[oi].obj.get("description"), entries[ei][1])
+
+        if len(left_objects) == 1 and len(left_entries) == 1:
+            if not clash(left_objects[0], left_entries[0]):
+                pairs[left_objects[0]] = left_entries[0]
+                used.add(left_entries[0])
+        elif left_objects and left_entries:
+            for oi in left_objects:
+                ei = next((e for e in left_entries if e not in used and not clash(oi, e)), None)
+                if ei is None:
+                    continue
+                pairs[oi] = ei
+                used.add(ei)
+                boxless.add(oi)
+            logger.info("person objects and people[] paired in order without a box",
+                        extra={"window": window.index, "pairs": len(boxless)})
+        for oi, ei in pairs.items():
+            o = persons[oi]
+            text = entries[ei][1]
+            if text:
+                o.obj = {**o.obj, "description": text}
+            if oi in boxless:
+                o.bbox, o.detection = None, None
+        match = LabelMatch(str(pclass["catalog_id"]), 1.0, "people", pclass.get("class_name"))
+        base = max((max(o.members or [o.index]) for o in observed), default=-1) + 1
+        base = max(base, len(obs.get("objects") or []))
+        last = max(len(window.frames) - 1, 0)
+        out = list(observed)
+        for k, ei in enumerate(ei for ei in range(len(entries)) if ei not in used):
+            index = base + k
+            out.append(
+                _Observed(
+                    index=index,
+                    obj={"label": "person", "description": entries[ei][1]},
+                    match=match,
+                    frame_idx=last,
+                    bbox=None,
+                    detection=None,
+                    held=False,
+                    ref=f"p{index}",
+                    members=[index],
+                )
+            )
+        return out
 
     def _link(self, window: Window, objects: Sequence[dict[str, Any]], dets: list[list[Detection]]) -> list[_Observed]:
         """Consolidate the omni objects (AC-PER-19), then link each instance to a detector box: IoU links for all
@@ -761,7 +893,11 @@ class Reconciler:
     def _match_instances(self, ctx: _WindowContext, instances: list[_Observed]) -> None:
         embedded: list[_Observed] = []
         gated: list[_Observed] = []
+        persons: list[_Observed] = []
         for o in instances:
+            if self._is_person(o):
+                persons.append(o)  # AC-PER-36: never embedded (a person crop is face-bearing, biometric-like)
+                continue
             image = self._crop(ctx, o)
             if not self._exemplar_ok(o, image):
                 gated.append(o)
@@ -805,6 +941,50 @@ class Reconciler:
             self._match_without_exemplar(ctx, o, taken)
             if o.entity_id:
                 taken.add(o.entity_id)
+        self._match_people(ctx, persons, taken)
+
+    def _match_people(self, ctx: _WindowContext, persons: list[_Observed], taken: set[str]) -> None:
+        """AC-PER-35: person sightings match live person-class entities of the same module (AC-PER-29 candidates,
+        exact location outside modules and then recent only) by appearance text (>= person_match_floor), assigned
+        globally best first: similarity, recent before stale, own zone, most recent. A sighting without appearance
+        descriptors attaches to the most recent recent candidate. Never two sightings of a window on one entity."""
+        cfg = self.config
+        ranked: list[tuple[tuple, _Observed, dict[str, Any]]] = []
+        for o in persons:
+            key = self._place_key(o)
+            if key is None or o.location is None:
+                continue
+            module = self.resolver.module_of(o.location)
+            items = self._place_items(ctx, key, module or o.location) or []
+            seen_at = ctx.frame_ts(o.frame_idx)
+            desc = str(o.obj.get("description") or "")
+            featureless = not appearance_descriptors(desc)
+            for item in items:
+                eid = str(item.get("entity_id") or "")
+                last_seen = _parse_ts(item.get("last_seen_at"))
+                if not eid or eid in taken or item.get("status") in ("merged", "dismissed") or last_seen is None:
+                    continue
+                if not self._same_place(item.get("last_location"), o.location):
+                    continue
+                recent = abs((seen_at - last_seen).total_seconds()) <= cfg.no_exemplar_match_s
+                if not recent and (module is None or featureless):
+                    continue
+                other = str(item.get("description") or "")
+                sim = 0.0 if featureless else appearance_similarity(desc, other)
+                if not featureless and sim < cfg.person_match_floor:
+                    continue
+                close = 0.0 if featureless else appearance_closeness(desc, other)
+                rank = (featureless, -sim, -close, not recent, item.get("last_location") != o.location,
+                        -last_seen.timestamp(), o.index, eid)
+                ranked.append((rank, o, item))
+        done: set[int] = set()
+        for _, o, item in sorted(ranked, key=lambda r: r[0]):
+            eid = str(item["entity_id"])
+            if o.index in done or eid in taken:
+                continue
+            self._attach_item(o, item)
+            done.add(o.index)
+            taken.add(eid)
 
     def _match_without_exemplar(self, ctx: _WindowContext, o: _Observed, taken: set[str]) -> None:
         """AC-PER-22/29 class-and-place match. Candidates: live entities of the same class (UNKNOWN: unclassified, same
@@ -1270,7 +1450,10 @@ class Reconciler:
                 {
                     "event_type": ev.get("type"),
                     "entity_ref": target.ref,
-                    "actor_desc": str(actor.get("appearance")) if actor and actor.get("appearance") else None,
+                    # AC-PER-35/36: the people[] descriptor, sanitised; none for people in a private zone
+                    "actor_desc": (sanitise_text(actor.get("appearance")) or None)
+                    if actor and not ctx.no_capture
+                    else None,
                     "from_location": target.previous_location if target.entity_id else None,
                     "to_location": to_location,
                     "occurred_at": _iso(occurred),

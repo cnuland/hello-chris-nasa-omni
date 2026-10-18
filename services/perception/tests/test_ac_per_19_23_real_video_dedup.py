@@ -70,17 +70,25 @@ def hires_window(frames_objects, *, t0=T0, step_s=1.0, height=720, width=1280, l
     return Window(t_start=frames[0].timestamp, t_end=frames[-1].timestamp, frames=frames, index=index)
 
 
+PERSON = "crew-member"  # AC-PER-35: the fixture's people[] entry is a person track; these tests count objects
+
+
+def object_assignments(payload) -> list[dict]:
+    return [a for a in payload["assignments"] if (a.get("new_entity") or {}).get("kind") != "person"
+            and not a["ref"].startswith("p")]
+
+
 def instance_counts(payload) -> Counter:
-    """Number of observed instances per catalog class in one payload (new or assigned)."""
+    """Number of observed object instances per catalog class in one payload (new or assigned)."""
     out: Counter = Counter()
-    for a in payload["assignments"]:
+    for a in object_assignments(payload):
         cid = (a.get("new_entity") or {}).get("catalog_id") if a.get("entity_id") is None else "existing"
         out[cid] += 1
     return out
 
 
 def live_counts(inv: FakeInventory) -> Counter:
-    return Counter(e["catalog_id"] for e in inv.live())
+    return Counter(e["catalog_id"] for e in inv.live() if e["kind"] == "object")
 
 
 def crop_sizes(storage) -> list[tuple[int, int]]:
@@ -119,7 +127,7 @@ def test_ac_per_19_real_omni_window_gives_one_laptop_and_one_headset_handheld(ma
 def test_ac_per_22_real_omni_only_boxes_give_no_exemplar(make_reconciler, inv, storage):
     rec = make_reconciler(camera_id="cam-handheld")
     rec.process(scene_window([[]] * 6), real_omni_result(), [[] for _ in range(6)])
-    for a in inv.last["assignments"]:
+    for a in object_assignments(inv.last):
         assert a["exemplar"] is None
         assert a["sighting"]["bbox"] is not None  # the sighting is still recorded, with omni's box
         assert a["sighting"].get("frame_uri")
@@ -134,7 +142,7 @@ def test_ac_per_19_real_omni_window_with_detector_boxes_and_hires_crops(make_rec
     out = rec.process(hires_window(TOUR_FRAMES), real_omni_result(), detections_for(TOUR_FRAMES, TOUR_LABELS))
     assert out.status == "posted", out.error
     assert instance_counts(inv.last) == {"laptop": 1, "headset": 1}
-    assert all(a["exemplar"] is not None for a in inv.last["assignments"])
+    assert all(a["exemplar"] is not None for a in object_assignments(inv.last))
     sizes = crop_sizes(storage)
     assert len(sizes) == 2
     assert all(w >= 88 and h >= 49 for w, h in sizes), sizes  # laptop ~129x102, headset ~90x51 px
@@ -153,6 +161,11 @@ def test_ac_per_19_real_omni_six_windows_keep_one_laptop_and_one_headset(make_re
         assert rec.process(w, real_omni_result(), dets).status == "posted"
     assert live_counts(inv) == {"laptop": 1, "headset": 1}, live_counts(inv)
     assert not [r for r in inv.reviews if r["kind"] == "possible_duplicate"]
+    # AC-PER-35: the man in the black shirt (people[] only) is one person track across the six windows
+    people = [e for e in inv.live() if e["kind"] == "person"]
+    assert [(e["catalog_id"], e["description"]) for e in people] == [
+        (PERSON, "man wearing black shirt and gray shorts")
+    ]
 
 
 def test_ac_per_23_real_fixture_on_fixed_lab_camera_uses_hint_but_flags_low_confidence(make_reconciler, inv):

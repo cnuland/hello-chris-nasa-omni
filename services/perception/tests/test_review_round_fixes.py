@@ -112,8 +112,9 @@ def test_ac_per_11_no_capture_window_sends_no_person_exemplar(make_reconciler, i
     config.camera_locations["cam-cq"] = "NOD2P5"
     process(make_reconciler(camera_id="cam-cq"), [[("crew-1", BOX_A)]], [obj("crew member", BOX_A)],
             {"crew-1": "crew member"})
-    a = inv.last["assignments"][0]
-    assert a.get("exemplar") is None
+    # AC-PER-36 (stricter): no person sighting at all in a private zone, so certainly no exemplar
+    assert all(a.get("exemplar") is None for a in inv.last["assignments"])
+    assert inv.last["assignments"] == []
 
 
 # ================================================================================ AC-PER-10/16 speech claim parsing

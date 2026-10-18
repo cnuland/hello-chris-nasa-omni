@@ -10,7 +10,13 @@
     the order of calls. Unknown objects are not detected (the detector only knows catalog labels).
   - ``GoldOmni`` answers a window with the gold objects of its frames (catalog class names; a non-catalog label for
     unknowns), the gold events falling in the window (each reported once, with the actor as a person ref) and the
-    scripted transcript lines spoken in the window. Profile (``EVAL_OMNI_PROFILE``, default ``repeat_per_frame``):
+    scripted transcript lines spoken in the window. People are reported only in ``people[]``, never as "person"
+    objects, exactly like Gemma 4 on the ISS tour (perception AC-PER-35). In every profile one *quiet* window (the
+    first with no gold event, no unknown object and no transcript line within ``SLEEP_QUIET_S``) also lists a sleeping
+    crew member with the live Gemma text (``SLEEPING_CREW``) and the cue-free summary ``scoring.SLEEP_SUMMARY``;
+    perception must treat it as crew quarters (AC-PER-37: no raw reply, frame or crop stored). Profile (``EVAL_OMNI_PROFILE``,
+    default ``gemma_people``): ``gemma_people`` is ``repeat_per_frame`` plus every gold actor in ``people[]`` of
+    every window, with Gemma-like varying appearance text (the exact gold text in the window of that actor's event);
     ``repeat_per_frame`` lists each object once per frame it appears in, every entry with the same box (its latest
     in the window), exactly like Qwen2.5-Omni-7B did on real ISS footage (cluster integration 2026-10-17: 6 laptops
     + 6 headsets in one window); ``once`` lists each object once at its latest frame; ``truncated`` is
@@ -49,6 +55,7 @@ from pathlib import Path
 from typing import Any
 
 from nasa_eval.dataset import Dataset, GoldObject
+from nasa_eval.scoring import SLEEP_SUMMARY
 
 log = logging.getLogger(__name__)
 
@@ -57,9 +64,13 @@ UNKNOWN_LABEL = "unidentified gizmo"  # deliberately far from every catalog name
 THUMB_SIZE = (64, 36)
 DETECTION_SCORE = 0.9
 OMNI_EVENT_TYPES = ("moved", "added", "removed", "used", "handed_over")  # observation.schema.json events.type
-OMNI_PROFILES = ("repeat_per_frame", "once", "truncated")
+OMNI_PROFILES = ("gemma_people", "repeat_per_frame", "once", "truncated")
 TRUNCATED_ECHO = "the transcript echo goes on and on " * 40  # verbose model: cut off at max_tokens inside it
-DEFAULT_OMNI_PROFILE = "repeat_per_frame"  # how the real omni model answered on ISS footage
+DEFAULT_OMNI_PROFILE = "gemma_people"  # the deployed omni (Gemma 4) + the Qwen per-frame repeats (worst case)
+SLEEPING_CREW = "dark hair, sleeping in a blue sleeping bag"  # Gemma 4, live ISS tour run, Harmony (2026-10-18)
+SLEEP_QUIET_S = 6.0  # no event / transcript line this close to the sleep-cue window (a private window stores neither)
+# Gemma-like rewordings of a gold actor "crew member, <colour> <garment>" between windows ({d} = "<colour> <garment>")
+APPEARANCE_VARIANTS = ("{actor}", "{d}, dark hair", "astronaut wearing a {d}", "{d}, khaki pants")
 
 
 def _config_error(message: str) -> Exception:
@@ -176,6 +187,7 @@ class GoldOmni:
         self._reported_events: set[tuple[str, int]] = set()
         self._spoken: set[int] = set()
         self._lines = dataset.transcript_lines()
+        self._slept = False  # the sleep-cue window was emitted (once per pass)
         self.calls = 0
 
     def _rel(self, ts: datetime) -> float:
@@ -208,12 +220,16 @@ class GoldOmni:
                     "held_by": None,
                 }
         listed = list(objects.values())
-        if self.profile in ("repeat_per_frame", "truncated"):
+        if self.profile in ("repeat_per_frame", "truncated", "gemma_people"):
             # one entry per frame the object is visible in, all with the same (latest) box: no per-frame localisation
             listed = [
                 {**objects[gid], "frame_index": k} for gid in objects for k in frames_of[gid]
             ]
         people: dict[str, str] = {}
+        actors = sorted({e.actor for g in self.dataset.gold for e in g.events if e.actor})
+        if self.profile == "gemma_people":  # every crew member is in view in every window
+            for i, actor in enumerate(actors):
+                people[f"P{i + 1}"] = self._variant(actor)
         events = []
         lo, hi = (min(times), max(times)) if times else (0.0, -1.0)
         for g in self.dataset.gold:
@@ -227,7 +243,10 @@ class GoldOmni:
                     continue
                 self._reported_events.add(key)
                 ref = None
-                if e.actor:
+                if e.actor and self.profile == "gemma_people":
+                    ref = f"P{actors.index(e.actor) + 1}"
+                    people[ref] = e.actor  # the actor of an event keeps the exact gold text (actor_accuracy)
+                elif e.actor:
                     ref = next((r for r, d in people.items() if d == e.actor), None) or f"P{len(people) + 1}"
                     people[ref] = e.actor
                 k = min(range(len(times)), key=lambda j: abs(times[j] - e.t))
@@ -247,11 +266,17 @@ class GoldOmni:
             if j not in self._spoken and lo - 1e-6 <= line.t <= hi + 1e-6:
                 self._spoken.add(j)
                 spoken.append(line.text)
+        people_out = [{"ref": r, "appearance": d, "activity": "handling an item"} for r, d in people.items()]
+        summary = f"{len(objects)} objects on the racks"
+        if not self._slept and times and self._quiet(lo, hi):
+            self._slept = True
+            people_out.append({"ref": f"P{len(actors) + len(people) + 1}", "appearance": SLEEPING_CREW})
+            summary = SLEEP_SUMMARY
         observation = {
-            "scene_summary": f"{len(objects)} objects on the racks",
+            "scene_summary": summary,
             "location_hint": None,
             "objects": listed,
-            "people": [{"ref": r, "appearance": d, "activity": "handling an item"} for r, d in people.items()],
+            "people": people_out,
             "events": events,
             "transcript": " ".join(spoken),
             "audio_events": [],
@@ -264,6 +289,19 @@ class GoldOmni:
             return OmniResult(status="invalid", raw=raw, model=self.model, error="; ".join(errors))
         return OmniResult(status="ok", observation=observation, raw=raw, model=self.model)
 
+
+    def _quiet(self, lo: float, hi: float) -> bool:
+        """No gold event or transcript line within SLEEP_QUIET_S of [lo, hi] and no unknown object in it."""
+        q = SLEEP_QUIET_S
+        if any(lo - q <= e.t <= hi + q for g in self.dataset.gold for e in g.events):
+            return False
+        if any(lo - q <= ln.t <= hi + q for ln in self._lines):
+            return False
+        return not any(lo - 1.0 <= a.t <= hi + 1.0 for g in self.dataset.gold if g.is_unknown for a in g.appearances)
+
+    def _variant(self, actor: str) -> str:
+        d = actor.split(", ", 1)[1] if ", " in actor else actor
+        return APPEARANCE_VARIANTS[self.calls % len(APPEARANCE_VARIANTS)].format(actor=actor, d=d)
 
     def _truncated(self, observation: dict[str, Any]) -> Any:
         """The reply a verbose model cut off at max_tokens: compact JSON ending inside the transcript echo."""

@@ -52,6 +52,10 @@ METRIC_KEYS = (
     "actor_accuracy",
     "unknown_recall",
     "revisit_new_entity_rate",
+    "person_track_recall",
+    "person_tracks_per_person",
+    "sleep_window_media",
+    "sleep_window_person_sightings",
 )
 UNKNOWN_CLASS = "unknown"
 DETECTION_IOU = 0.5
@@ -223,6 +227,79 @@ def revisit_new_entity_rate(revisit: RevisitResult | None) -> float | None:
     return len(revisit.new_entity_ids) / revisit.objects if revisit.objects else 0.0
 
 
+# ------------------------------------------------------------------------------------------------------- people
+# perception AC-PER-35..38: words that say nothing about which crew member it is
+GENERIC_PERSON_WORDS = frozenset(
+    {"crew", "member", "person", "astronaut", "a", "an", "the", "in", "with", "wearing", "and"}
+)
+# GoldOmni's sleep-cue window carries this neutral summary (no sleep cue: only people[] can reveal it); summaries are
+# stored for private windows too (perception AC-PER-11), so the scorer finds the window by it.
+SLEEP_SUMMARY = "Crew member resting in the module"
+
+
+def _words(text: str | None) -> set[str]:
+    import re
+
+    return set(re.findall(r"[a-z0-9]+", str(text or "").lower()))
+
+
+def gold_people(dataset: Dataset) -> list[str]:
+    """Distinct actor descriptors of the gold events (the people present in the scene)."""
+    return sorted({e.actor for g in dataset.gold for e in g.events if e.actor})
+
+
+def _person_entities(snapshot: Snapshot) -> list[Any]:
+    return [e for e in snapshot.entities.values() if e.kind == "person"]
+
+
+def person_track_recall(dataset: Dataset, snapshot: Snapshot) -> float:
+    """Gold actors with a person track whose description contains the actor's descriptor words (everything but
+    generic words: "crew member, blue shirt" -> {blue, shirt}) / gold actors; 1.0 when the scene has no actor."""
+    actors = gold_people(dataset)
+    if not actors:
+        return 1.0
+    descriptions = [_words(e.description) for e in _person_entities(snapshot)]
+    tracked = [a for a in actors if any((_words(a) - GENERIC_PERSON_WORDS) <= d for d in descriptions)]
+    return len(tracked) / len(actors)
+
+
+def person_tracks_per_person(dataset: Dataset, snapshot: Snapshot) -> float:
+    """Person entities / gold actors (over-splitting); 0.0 for a scene without actors and without person tracks."""
+    actors = gold_people(dataset)
+    n = len(_person_entities(snapshot))
+    if not actors:
+        return float(n)
+    return n / len(actors)
+
+
+def _sleep_window_ids(snapshot: Snapshot) -> set[str]:
+    return {w.window_id for w in snapshot.windows if w.scene_summary == SLEEP_SUMMARY}
+
+
+def sleep_window_person_sightings(dataset: Dataset, snapshot: Snapshot) -> int | None:
+    """Person sightings recorded in the sleep-cue window(s): nobody is tracked inside a private zone (perception
+    AC-PER-36); None when no such window was recorded."""
+    ids = _sleep_window_ids(snapshot)
+    if not ids:
+        return None
+    return sum(
+        1
+        for s in snapshot.sightings
+        if s.window_id in ids and (e := snapshot.entities.get(s.entity_id)) is not None and e.kind == "person"
+    )
+
+
+def sleep_window_media(dataset: Dataset, snapshot: Snapshot) -> int | None:
+    """Stored raw replies + sighting frames of the sleep-cue window(s) (scene summary ``SLEEP_SUMMARY``); None when no
+    such window was recorded (the gate then fails: never a silent pass)."""
+    ids = _sleep_window_ids(snapshot)
+    if not ids:
+        return None
+    raws = sum(1 for w in snapshot.windows if w.window_id in ids and w.raw_uri)
+    frames = sum(1 for s in snapshot.sightings if s.window_id in ids and s.frame_uri)
+    return raws + frames
+
+
 def score(
     dataset: Dataset,
     snapshot: Snapshot,
@@ -329,6 +406,10 @@ def score(
         "actor_accuracy": ev.actor_accuracy,
         "unknown_recall": m.unknown_recall(gold_unknowns, reviewed),
         "revisit_new_entity_rate": revisit_new_entity_rate(snapshot.revisit),
+        "person_track_recall": person_track_recall(dataset, snapshot),
+        "person_tracks_per_person": person_tracks_per_person(dataset, snapshot),
+        "sleep_window_media": sleep_window_media(dataset, snapshot),
+        "sleep_window_person_sightings": sleep_window_person_sightings(dataset, snapshot),
     }
     counts = {
         "gold_objects": len(dataset.gold),
@@ -348,6 +429,8 @@ def score(
         "unknown_reviews": len(reviewed),
         "location_scored": loc.n,
         "revisit_new_entities": None if snapshot.revisit is None else len(snapshot.revisit.new_entity_ids),
+        "gold_people": len(gold_people(dataset)),
+        "person_tracks": len(_person_entities(snapshot)),
     }
     log.info(
         "scored dataset=%s pairwise_f1=%.3f sighting_recall=%.3f duplicate_rate=%.3f location_acc=%.3f "

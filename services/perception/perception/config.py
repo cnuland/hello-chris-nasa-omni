@@ -12,6 +12,8 @@ Environment variables (all optional unless noted):
   PERCEPTION_MIN_CROP_PX (AC-PER-22, default 32), PERCEPTION_NO_EXEMPLAR_MATCH_S (AC-PER-22, default 600),
   PERCEPTION_CONSOLIDATE_IOU (AC-PER-19, default 0.5, <= 1),
   PERCEPTION_HINT_CONFLICT_CONFIDENCE (AC-PER-23, default 0.5, <= 1),
+  PERCEPTION_PERSON_MATCH_FLOOR (AC-PER-35, default 0.5, <= 1),
+  PERCEPTION_PRIVACY_HOLD_S (AC-PER-37, default 30, 0 = off),
   OMNI_MAX_TOKENS (AC-PER-25, default 700, 1..32768), OMNI_MAX_OBJECTS (AC-PER-25/27, default 12, 1..40),
   OMNI_REPETITION_PENALTY (AC-PER-25, default 1.05, > 0 and <= 2; not sent when 1.0),
   OMNI_TRUNCATED_CONFIDENCE (AC-PER-26, default 0.5, <= 1).
@@ -83,6 +85,8 @@ class PerceptionConfig:
     min_crop_px: int = 32  # AC-PER-22 no exemplar when the crop's short side is below this (hires pixels)
     no_exemplar_match_s: float = 600.0  # AC-PER-22 class-and-place match horizon for sightings without exemplar
     hint_conflict_confidence: float = 0.5  # AC-PER-23 sighting confidence cap when a fixed camera's hint conflicts
+    person_match_floor: float = 0.5  # AC-PER-35 appearance-text similarity needed to attach a person sighting
+    privacy_hold_s: float = 30.0  # AC-PER-37 windows of the camera starting this soon after a private one stay private
     min_transit_s: float = 20.0
     assign_p: float = 0.85
     ask_p: float = 0.5
@@ -164,6 +168,8 @@ _NUMBER_VARS: dict[str, tuple[str, type]] = {
     "no_exemplar_match_s": ("PERCEPTION_NO_EXEMPLAR_MATCH_S", float),
     "consolidate_iou": ("PERCEPTION_CONSOLIDATE_IOU", float),
     "hint_conflict_confidence": ("PERCEPTION_HINT_CONFLICT_CONFIDENCE", float),
+    "person_match_floor": ("PERCEPTION_PERSON_MATCH_FLOOR", float),
+    "privacy_hold_s": ("PERCEPTION_PRIVACY_HOLD_S", float),
     "omni_max_tokens": ("OMNI_MAX_TOKENS", int),
     "omni_max_objects": ("OMNI_MAX_OBJECTS", int),
     "omni_repetition_penalty": ("OMNI_REPETITION_PENALTY", float),
@@ -176,6 +182,7 @@ _MAX_VALUES: dict[str, float] = {
     "detect_long_side": MAX_DETECT_LONG_SIDE,
     "consolidate_iou": 1.0,
     "hint_conflict_confidence": 1.0,
+    "person_match_floor": 1.0,
     "omni_max_tokens": 32768,
     "omni_max_objects": 40,  # observation.schema.json objects.maxItems
     "omni_repetition_penalty": 2.0,

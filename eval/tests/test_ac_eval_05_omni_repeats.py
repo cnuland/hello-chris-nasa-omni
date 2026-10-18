@@ -3,8 +3,8 @@
 On real NASA ISS tour footage, Qwen2.5-Omni-7B listed each object once per frame, every entry with the same coarse
 box (services/perception/tests/fixtures/omni_iss_tour_window0.json: 6 laptops + 6 headsets in one window), and
 perception created one entity per listing. The old GoldOmni reported each gold object once per window, so the eval
-gate could not see this. GoldOmni's ``repeat_per_frame`` profile (the default for the local target, set by
-EVAL_OMNI_PROFILE) answers the way the real model did; ``once`` keeps the old behaviour.
+gate could not see this. GoldOmni's ``repeat_per_frame`` profile (set by EVAL_OMNI_PROFILE; the default ``gemma_people`` adds people[] on
+top of it, perception AC-PER-38) answers the way the real model did; ``once`` keeps the old behaviour.
 """
 from __future__ import annotations
 
@@ -58,8 +58,13 @@ def _present(ds, window):
 def test_ac_eval_05_gold_omni_default_profile_repeats_per_frame(synth_ds, perception_on_path):
     from nasa_eval.collaborators import DEFAULT_OMNI_PROFILE, GoldOmni, catalog_labels
 
-    assert DEFAULT_OMNI_PROFILE == "repeat_per_frame"
-    assert GoldOmni(synth_ds, catalog_labels()).profile == "repeat_per_frame"
+    # AC-PER-38: the default is now gemma_people, which keeps the per-frame object repeats and adds people[]
+    assert DEFAULT_OMNI_PROFILE == "gemma_people"
+    assert GoldOmni(synth_ds, catalog_labels()).profile == "gemma_people"
+    window = _window(synth_ds, 0)
+    repeat = GoldOmni(synth_ds, catalog_labels(), profile="repeat_per_frame").analyze(window).observation
+    gemma = GoldOmni(synth_ds, catalog_labels()).analyze(window).observation
+    assert gemma["objects"] == repeat["objects"]
 
 
 def test_ac_eval_05_gold_omni_repeat_profile_lists_objects_once_per_frame_with_one_box(synth_ds, perception_on_path):
@@ -99,7 +104,7 @@ def test_ac_eval_05_omni_profile_from_environment(synth_ds, perception_on_path, 
 
     monkeypatch.delenv("DECISION_URL", raising=False)
     monkeypatch.delenv("EVAL_OMNI_PROFILE", raising=False)
-    assert build_collaborators(synth_ds, "local")["omni"].profile == "repeat_per_frame"
+    assert build_collaborators(synth_ds, "local")["omni"].profile == "gemma_people"
     monkeypatch.setenv("EVAL_OMNI_PROFILE", "once")
     assert build_collaborators(synth_ds, "local")["omni"].profile == "once"
     monkeypatch.setenv("EVAL_OMNI_PROFILE", "bogus")

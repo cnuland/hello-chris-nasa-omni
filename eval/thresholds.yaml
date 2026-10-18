@@ -9,3 +9,11 @@ sighting_recall: {min: 0.8}
 # Revisit dedup (perception AC-PER-32, docs/QUESTIONS.md #29): the scene replayed after a 15 min gap must re-identify
 # its objects. new entities on the revisit / gold objects of the scene.
 revisit_new_entity_rate: {max: 0.05}
+# Person tracks from people[] (perception AC-PER-35/38): Gemma 4 reports people only in people[]; 0 person tracks
+# went unnoticed. Gold actors with a matching person track / gold actors, and person tracks / gold actors.
+person_track_recall: {min: 0.99}
+person_tracks_per_person: {max: 1.5}
+# Sleep-cue privacy (perception AC-PER-37): the window with a sleeping crew member stores no raw reply and no frame.
+sleep_window_media: {max: 0}
+# ... and records no person sighting there (perception AC-PER-36: nobody is tracked inside a private zone).
+sleep_window_person_sightings: {max: 0}

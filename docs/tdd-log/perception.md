@@ -796,3 +796,102 @@ eval/tests/test_ac_eval_08_revisit.py.
 - **Final:** 758 passed (754 before + 4). **Test changes:** none.
 - **Contract:** `SightingIn.bbox_source` (`detector|omni|null`, optional) in inventory-api; migration
   `004_ui_review_round2.sql`.
+
+## Person tracks from people[] and sleep-cue privacy (Gemma 4 run, 2026-10-18)
+- **Why (docs/QUESTIONS.md #33):** Gemma 4 12B reports people only in `people[]`. The reconciler built person
+  entities only from objects labelled "person" (Qwen listed both), so the Gemma run had 0 person tracks against 8–10
+  with Qwen. The same run described "dark hair, sleeping in a blue sleeping bag" in Harmony and the window was stored.
+- **Spec:** AC-PER-35 (person tracks from `people[]`, appearance-text matching through the AC-PER-29 class-and-place
+  machinery), AC-PER-36 (person privacy), AC-PER-37 (sleep cues), AC-PER-38 (eval gates), plus a review-round section.
+- **Existing code checked first:** `_assignment` already set `kind=person` from the catalog category, and a no_capture
+  window already dropped person exemplars. But a detector-linked person object in a capture window was embedded
+  (DINOv2) and its crop uploaded. **Decision (AC-PER-36):** person sightings never get a crop or an exemplar (a
+  person crop shows the face, and its embedding is a re-identification vector). In a no_capture window no person
+  sighting is recorded and `actor_desc` is null.
+- **Red (perception):** tests/test_ac_per_35_38_people_privacy.py had 44 failed and 1 passed. The pass was the guard
+  "no person class → people ignored". The failures were:
+  - 13 × `ModuleNotFoundError: perception.people`;
+  - person assignments missing (`IndexError` / empty lists);
+  - `person_match_floor` missing from the config;
+  - no `window.privacy` key;
+  - sleep-cue windows still uploading frames and raw replies.
+- **Green:**
+  - New module `perception/people.py` with `sanitise_text`, `appearance_descriptors`, `appearance_similarity`
+    and `sleep_cue` / `find_sleep_cue`.
+  - In `reconciler.py`:
+    - `_with_people` pairs person objects with people entries and creates people-only observations;
+    - `_match_people` reuses `_place_items`, `_same_place`, `_attach_item` and the `no_exemplar_match_s` horizon,
+      and assigns globally best first;
+    - persons are never embedded (`_match_instances`);
+    - the sleep cue is checked after the AC-PER-23 privacy rules, before anything is uploaded;
+    - `window.privacy` records the private reason;
+    - `actor_desc` is sanitised, and null in no_capture windows.
+  - New setting `PERCEPTION_PERSON_MATCH_FLOOR`.
+- **First green: 8 regressions, all expected.**
+  - 7 tests in test_ac_per_19_23_real_video_dedup counted every live entity. The real Qwen fixture has one
+    `people[]` entry ("man wearing black shirt and gray shorts"), which is now a person track. The helpers now
+    count objects only. The six-window test also asserts that this man is exactly one person track across the six
+    windows (real-data person dedup).
+  - `test_ac_per_11_no_capture_window_sends_no_person_exemplar` now asserts the stricter AC-PER-36: no person
+    assignment at all.
+  - `FakeInventory` now stores `new_entity.description` (inventory-api returns it on `/items`).
+- **Eval (AC-PER-38):**
+  - **Red:** test_ac_eval_09 failed at collection (`PredWindow` missing).
+  - **Changes:**
+    - `GoldOmni` has a new `gemma_people` profile, now the default. It is `repeat_per_frame` objects plus every
+      gold actor in every window, with varied text; an event's actor keeps the exact gold text.
+    - In every profile, one quiet window lists the sleeping crew member, with the cue-free summary
+      `SLEEP_SUMMARY`.
+    - The snapshot now carries entity descriptions, sighting `window_id`/`frame_uri` and window rows.
+    - New metrics, each with a threshold: `person_track_recall`, `person_tracks_per_person`,
+      `sleep_window_media` and `sleep_window_person_sightings`.
+    - The reference snapshot was regenerated. Object entities and sightings are unchanged; person tracks and
+      windows were added.
+  - **Expected test changes:**
+    - the perfect-snapshot gate test gained person tracks and a sleep window;
+    - two assertions about the default profile.
+- **Integration finding (make test, tests/e2e):** the first draft put the sleeper in the window that starts at the
+  scene start. That window also holds the transcript line "Starting the tool inventory survey", and
+  `test_e2e_06`/`test_e2e_09` search for it. A private window stores no transcript, so 2 e2e tests failed.
+  - **Spec amended:** the sleeper goes in the first *quiet* window, with no event, no unknown object and no
+    transcript line within 6 s. The scorer finds that window by its stored summary.
+  - Red: 6 failed; then green.
+- **`make eval` before / after the perception fix** (perception reverted to HEAD, then restored; eval code is the same
+  in both runs):
+  - before: gate FAILED, with `person_track_recall` = 0.0 and `sleep_window_media` = 5 (10 with the first-draft
+    window). `person_tracks_per_person` was 0.0 and `sleep_window_person_sightings` 0; both passed vacuously.
+  - after: gate PASSED. `person_track_recall` = 1.0, `person_tracks_per_person` = 1.0, `sleep_window_media` = 0,
+    `sleep_window_person_sightings` = 0. Every earlier gate is unchanged (1.0 / 0.0).
+- **Adversarial review:** an independent read-only reviewer found 8 issues.
+  - **Fixed, test-first** (perception `test_review_*`: 21 new, 20 red; eval: 1 new, red):
+    - **P1 sleep-cue bypasses.** "sleepingbag", a soft hyphen or zero-width space inside "sleeping", and
+      "sleeps"/"napping"/"dozing"/"sleep pod" were missed. `sanitise_text` now deletes format characters, and the
+      cue list was extended.
+    - **P1 lenient matching.** "dark hair" matched "blonde hair, red shirt". Colour families were added for
+      dark/light.
+    - **P1 tie steal.** "blue shirt, headset" took the entity "headset" (another person's) from its exact match. A
+      Dice tie-break now applies.
+    - **P2 unsanitised person-object descriptions.** Now sanitised.
+    - **P2 clashing leftover pairing.** A red-shirt object was relabelled "green shirt". Clashing leftovers are no
+      longer paired.
+    - **P2 privacy not carried into the next overlapping window.** Fixed with `PERCEPTION_PRIVACY_HOLD_S` (default
+      30 s).
+    - **P3 parsing.** "white and blue shirt", "red haired … white shirt" and polo vs shirt are now handled.
+    - **P3 eval.** No gate for a person sighting in the sleep window. Added `sleep_window_person_sightings`.
+  - **Accepted (spec review round):**
+    - lenient overlap against a short first description (the documented over-merge);
+    - greedy rather than optimal assignment;
+    - private windows keep their scene summary;
+    - names in `appearance` are not stripped;
+    - `person_track_recall` cannot see a track that absorbed another actor's sightings.
+  - **Checked by the reviewer, no defect:** schema validation closes the crash routes; no person crop or exemplar
+    is produced on any path; the cue check runs before any upload.
+- **Final runs:**
+  - perception: 824 passed (758 + 66); ruff clean.
+  - eval: 365 passed + 1 skipped (351 + 14); ruff clean.
+  - `make test`: all suites passed. inventory-api 450, perception 824, agent 510, eval 365 + gates, dashboard
+    341, e2e 27.
+  - `make eval`: gate PASSED.
+- **New env vars:** `PERCEPTION_PERSON_MATCH_FLOOR` (0.5) and `PERCEPTION_PRIVACY_HOLD_S` (30).
+- **Not done (outside this scope):** `/ingest/window` does not accept a person-entity link for events
+  (`event.actor_entity` exists in the DB). Events still carry `actor_desc` only, which needs a contracts change.

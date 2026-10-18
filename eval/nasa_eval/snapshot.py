@@ -17,6 +17,7 @@ class PredEntity:
     kind: str = "object"
     last_location: str | None = None
     last_seen_at: datetime | None = None
+    description: str | None = None  # person tracks: the appearance descriptor (perception AC-PER-35)
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,19 @@ class PredSighting:
     seen_at: datetime
     location_id: str | None = None
     bbox: tuple[float, float, float, float] | None = None
+    window_id: str | None = None
+    frame_uri: str | None = None
+
+
+@dataclass(frozen=True)
+class PredWindow:
+    """An observation window as stored (perception AC-PER-37 privacy gate: ``raw_uri`` must be null when private)."""
+
+    window_id: str
+    t_start: datetime
+    t_end: datetime
+    raw_uri: str | None = None
+    scene_summary: str | None = None
 
 
 @dataclass(frozen=True)
@@ -61,6 +75,7 @@ class Snapshot:
     events: list[PredEvent] = field(default_factory=list)  # entity_id resolved through merged_into
     reviews: list[PredReview] = field(default_factory=list)
     locations: dict[str, tuple[str | None, str]] = field(default_factory=dict)  # id -> (parent_id, kind)
+    windows: list[PredWindow] = field(default_factory=list)
     revisit: RevisitResult | None = None  # recorded by the runner (or the reference snapshot); not in the DB
 
 
@@ -94,20 +109,25 @@ def read_snapshot(database_url: str) -> Snapshot:
         for loc_id, parent, kind in conn.execute("SELECT location_id, parent_id, kind FROM location"):
             snap.locations[loc_id] = (parent, kind)
         rows = conn.execute(
-            "SELECT entity_id::text, catalog_id, status, kind, last_location, last_seen_at, merged_into::text "
-            "FROM entity ORDER BY created_at, entity_id"
+            "SELECT entity_id::text, catalog_id, status, kind, last_location, last_seen_at, merged_into::text, "
+            "description FROM entity ORDER BY created_at, entity_id"
         ).fetchall()
         merged_into = {r[0]: r[6] for r in rows if r[2] == "merged"}
         resolve = _resolver(merged_into)
-        for eid, catalog_id, status, kind, last_location, last_seen_at, _ in rows:
+        for eid, catalog_id, status, kind, last_location, last_seen_at, _, description in rows:
             if status == "merged":
                 continue
-            snap.entities[eid] = PredEntity(eid, catalog_id, status, kind, last_location, last_seen_at)
-        for sid, eid, seen_at, loc, bbox in conn.execute(
-            "SELECT sighting_id::text, entity_id::text, seen_at, location_id, bbox FROM sighting "
-            "ORDER BY seen_at, sighting_id"
+            snap.entities[eid] = PredEntity(eid, catalog_id, status, kind, last_location, last_seen_at, description)
+        for sid, eid, seen_at, loc, bbox, wid, frame_uri in conn.execute(
+            "SELECT sighting_id::text, entity_id::text, seen_at, location_id, bbox, window_id::text, frame_uri "
+            "FROM sighting ORDER BY seen_at, sighting_id"
         ):
-            snap.sightings.append(PredSighting(sid, resolve(eid), seen_at, loc, _bbox(bbox)))
+            snap.sightings.append(PredSighting(sid, resolve(eid), seen_at, loc, _bbox(bbox), wid, frame_uri))
+        for wid, t_start, t_end, raw_uri, summary in conn.execute(
+            "SELECT window_id::text, t_start, t_end, raw_uri, scene_summary FROM observation_window "
+            "ORDER BY t_start, window_id"
+        ):
+            snap.windows.append(PredWindow(wid, t_start, t_end, raw_uri, summary))
         for etype, eid, occurred_at, actor, to_loc in conn.execute(
             "SELECT event_type, entity_id::text, occurred_at, actor_desc, to_location FROM event "
             "ORDER BY occurred_at, event_id"
@@ -153,6 +173,7 @@ def snapshot_to_dict(snap: Snapshot, **meta: object) -> dict:
                 "kind": e.kind,
                 "last_location": e.last_location,
                 "last_seen_at": _ts(e.last_seen_at),
+                **({} if e.description is None else {"description": e.description}),
             }
             for e in snap.entities.values()
         ],
@@ -163,8 +184,20 @@ def snapshot_to_dict(snap: Snapshot, **meta: object) -> dict:
                 "seen_at": _ts(s.seen_at),
                 "location_id": s.location_id,
                 "bbox": None if s.bbox is None else list(s.bbox),
+                **({} if s.window_id is None else {"window_id": s.window_id}),
+                **({} if s.frame_uri is None else {"frame_uri": s.frame_uri}),
             }
             for s in snap.sightings
+        ],
+        "windows": [
+            {
+                "window_id": w.window_id,
+                "t_start": _ts(w.t_start),
+                "t_end": _ts(w.t_end),
+                "raw_uri": w.raw_uri,
+                "scene_summary": w.scene_summary,
+            }
+            for w in snap.windows
         ],
         "events": [
             {
@@ -204,11 +237,18 @@ def snapshot_from_dict(d: dict) -> Snapshot:
             e.get("kind", "object"),
             e.get("last_location"),
             _parse_ts(e.get("last_seen_at")),
+            e.get("description"),
         )
     for s in d.get("sightings", []):
         snap.sightings.append(
             PredSighting(
-                s["sighting_id"], s["entity_id"], _parse_ts(s["seen_at"]), s.get("location_id"), _bbox(s.get("bbox"))
+                s["sighting_id"],
+                s["entity_id"],
+                _parse_ts(s["seen_at"]),
+                s.get("location_id"),
+                _bbox(s.get("bbox")),
+                s.get("window_id"),
+                s.get("frame_uri"),
             )
         )
     for e in d.get("events", []):
@@ -219,6 +259,12 @@ def snapshot_from_dict(d: dict) -> Snapshot:
         )
     for r in d.get("reviews", []):
         snap.reviews.append(PredReview(r["kind"], r.get("entity_id"), r.get("status", "open")))
+    for w in d.get("windows", []):
+        snap.windows.append(
+            PredWindow(
+                w["window_id"], _parse_ts(w["t_start"]), _parse_ts(w["t_end"]), w.get("raw_uri"), w.get("scene_summary")
+            )
+        )
     rv = d.get("revisit")
     if isinstance(rv, dict):
         snap.revisit = RevisitResult(

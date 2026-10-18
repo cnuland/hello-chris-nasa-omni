@@ -244,3 +244,8 @@
   the check. `/chat/stream` now sends the grounded reply in chunks of a few words with `AGENT_STREAM_TOKEN_DELAY_S`
   (default 0.03 s) between them, so the UI animates it. The token texts still concatenate to `done.reply`. A client
   disconnect during pacing stops the stream; no further work runs (the loop has finished).
+
+### AC-AGT-26 Rewrite stubs (live 2026-10-18)
+- After the usual-stowage rewrite (AC-AGT-18), kept fragments that are only a lead-in ending in ':' (optionally
+  followed by a bare list marker such as "1." or "-") are dropped, because their content was removed. Seen live:
+  "...usually kept in the following location: 1." Tests: tests/test_ac_agt_26_rewrite_stubs.py.

@@ -181,11 +181,13 @@ class FakeInventory:
     # -- setup
     def add_entity(self, *, catalog_id: str | None, label: str | None = None, embedding=None,
                    last_location: str | None = None, last_seen_at: datetime | None = None,
-                   status: str = "provisional", kind: str = "object", entity_id: str | None = None) -> str:
+                   status: str = "provisional", kind: str = "object", entity_id: str | None = None,
+                   description: str | None = None) -> str:
         eid = entity_id or str(uuid.uuid4())
         self.entities[eid] = {
             "entity_id": eid, "catalog_id": catalog_id, "kind": kind, "status": status,
             "label": label or (CATALOG_BY_ID[catalog_id]["class_name"] if catalog_id else "unknown object"),
+            "description": description,
             "last_location": last_location, "last_seen_at": last_seen_at, "first_seen_at": last_seen_at,
             "embeddings": [unit(embedding)] if embedding is not None else [], "needs_review": False,
             "review_reason": None, "sightings": [],
@@ -309,7 +311,8 @@ class FakeInventory:
                 ne = a["new_entity"]
                 eid = self.add_entity(catalog_id=ne.get("catalog_id"), label=ne["label"],
                                       last_location=s.get("location_id"), last_seen_at=seen,
-                                      status=ne.get("status", "provisional"), kind=ne.get("kind", "object"))
+                                      status=ne.get("status", "provisional"), kind=ne.get("kind", "object"),
+                                      description=ne.get("description"))
                 self.entities[eid]["new_entity"] = ne
             e = self.entities[eid]
             e["sightings"].append(s)

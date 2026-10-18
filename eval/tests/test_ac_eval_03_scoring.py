@@ -278,6 +278,14 @@ def test_ac_eval_03_synth_perfect_per_frame_passes_repo_gate(synth7):
 
     snap = _synth_snapshot(synth7)
     snap.revisit = RevisitResult(gap_s=900.0, objects=len(synth7.gold), new_entity_ids=[])  # AC-PER-32: perfect revisit
+    # AC-PER-35/37: one person track per gold actor, and a sleep-cue window that stored nothing
+    from nasa_eval.snapshot import PredWindow
+
+    for i, actor in enumerate(sorted({e.actor for g in synth7.gold for e in g.events if e.actor})):
+        snap.entities[f"P-{i}"] = PredEntity(f"P-{i}", "crew-member", "provisional", "person", description=actor)
+    from nasa_eval.scoring import SLEEP_SUMMARY
+
+    snap.windows = [PredWindow("w0", at(0), at(5), None, SLEEP_SUMMARY)]
     mt = score(synth7, snap)["metrics"]
     assert mt["pairwise_f1"] == pytest.approx(1.0) and mt["sighting_recall"] == pytest.approx(1.0)
     assert _gate(mt).passed, _gate(mt).failures

@@ -592,3 +592,7 @@ give no window; a disconnect while pacing is safe.
   `before=22:50Z` excludes the 22:53 drill event). Data issue seen live: the drill event says
   `from_location: USOS`, a segment, not a module; the reviewer's "Node 1" expectation was wrong.
 - **e2e:** the proposed one-line change from round 1 (`set(names[:-1]) <= {"status", "token"}`) still applies.
+
+## AC-AGT-26 rewrite stubs (live 2026-10-18)
+- **Red:** 1 of 3 failed (the live stub); 2 guards passed.
+- **Green:** 513 passed; ruff is clean. **Test changes:** none.
