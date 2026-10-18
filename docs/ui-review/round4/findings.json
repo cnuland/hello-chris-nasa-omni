@@ -1,0 +1,209 @@
+[
+ {
+  "id": "UI4-01",
+  "priority": "P1",
+  "title": "Privacy: a close-up of a crew member's face is stored and shown as the unknown object \"window\"",
+  "page": "/review?kind=unknown_object, /items/bb545ad4-31f4-449d-a903-9c572fec42b9",
+  "steps": "Open /review?kind=unknown_object and look at the 2nd card, \"window: circular window showing Earth below\" (04:36 UTC). Or GET /api/media/crops/cam-handheld/2026-10-18/043649.880320-30.jpg.",
+  "expected": "Person imagery is only ever shown as whole scene frames. No crop that contains a face is stored, displayed or usable as a catalog exemplar. A misplaced object box that overlaps a person region is rejected or blurred, and the card falls back to the whole frame.",
+  "actual": "The crop is 915x258 and is the lower-left part of frame 04:36:49: a crew member's face and upper body in profile. The window is in the top-left of the frame and is not in the crop. The card shows it at natural size with the caption \"Close-up crop. Click to enlarge.\" The Classify button would save it as an exemplar for a catalog item. The other 22 crops I checked do not show faces.",
+  "suggested_fix": "In perception, before writing an object crop, drop it (or blur it) when its box overlaps a people[] / detector person box by more than ~20%, or when the class is structural (window, hatch). In the API, refuse to promote a crop to an exemplar if the source frame has a person box that overlaps it. Purge 043649.880320-30.jpg. Add a test: a synthetic frame with a person and a misplaced box gives no crop.",
+  "files": [
+   "services/perception/perception/reconciler.py (crop writing)",
+   "services/perception/perception/people.py",
+   "services/inventory-api/inventory_api/routers/review.py (classify -> exemplar)",
+   "dashboard/src/components/FrameImage.tsx"
+  ],
+  "screenshot": [
+   "review-unknown-card1.png",
+   "review-unknown-facecrop-1440.png"
+  ]
+ },
+ {
+  "id": "UI4-02",
+  "priority": "P2",
+  "title": "Wide crops at natural size overflow the review card and push the Classify/Dismiss actions off screen",
+  "page": "/review?kind=unknown_object",
+  "steps": "Open /review?kind=unknown_object at 1440x1000 and at 1024x768. Scroll to the \"window\" card (its crop is 915 px wide).",
+  "expected": "The crop fits its column (max-width: 100%), and the description and actions stay beside it or below it, inside the card.",
+  "actual": "The image renders 915 px wide inside a 688 px card. The catalog select and the Classify / New catalog item / Dismiss buttons sit at x=1678 at 1440 (document scrollWidth 1890) and at x=974 at 1024 (scrollWidth 1186). The page scrolls sideways, and the card shows only the image.",
+  "suggested_fix": "In the review card and on the detail hero, cap crops with max-width:100%, or use cropDisplayWidth(natural, containerWidth), which today only the Lightbox applies. Add a ui_check assertion: documentElement.scrollWidth <= innerWidth on /review with a 1000 px crop.",
+  "files": [
+   "dashboard/src/components/FrameImage.tsx (~l.36-40, 148-160)",
+   "dashboard/src/pages/ReviewPage.tsx",
+   "dashboard/src/styles/*",
+   "dashboard/scripts/ui_check.py"
+  ],
+  "screenshot": [
+   "review-unknown-facecrop-1440.png",
+   "review-unknown-facecrop-1024.png"
+  ]
+ },
+ {
+  "id": "UI4-03",
+  "priority": "P2",
+  "title": "In the standard conversation, \"Who was in the Cupola?\" answers with the station-wide people list",
+  "page": "/chat",
+  "steps": "In one conversation, ask the standard questions in order, with \"show more changes\" after Q4. Then ask \"Who was in the Cupola?\".",
+  "expected": "\"2 person tracks were seen in Cupola (CUP1) today: grey shirt, black shorts; blue shorts, grey long-sleeve shirt\" plus the caveat. A fresh chat gives exactly this.",
+  "actual": "After 11.4 s the answer is \"23 person tracks were seen between 00:00 and 04:44 UTC: USOS 9, NOD3 3, Cupola 2, \u2026\" with 10 tracks, 8 of them outside the Cupola. people_seen was called without location=CUP1. The same question in a new chat is correct, so the location argument is lost depending on the conversation history.",
+  "suggested_fix": "Extract the module from the question deterministically (the location name/alias matcher already used for the other tools) and pass it to people_seen, overriding the model's argument. Reject a people_seen call with no location when the question names a module. Add an e2e test: the question as Q6 of the standard conversation returns only CUP1 tracks.",
+  "files": [
+   "services/agent/nasa_agent/harness.py (tool routing)",
+   "services/agent/nasa_agent/tools.py (people_seen)"
+  ],
+  "screenshot": [
+   "chat-q7.png",
+   "chat-count-recheck.png"
+  ]
+ },
+ {
+  "id": "UI4-04",
+  "priority": "P2",
+  "title": "\"What changed in the last hour?\" starts at row 2 (\"showing 2-11 of 76\"), so the newest change is never shown",
+  "page": "/chat",
+  "steps": "Ask \"What changed in the last hour?\" (Q4 of the standard conversation), then \"show more changes\".",
+  "expected": "The first answer shows rows 1-10 and the next page shows 11-20.",
+  "actual": "Page 1: \"(showing 2-11 of 76)\", a numbered list starting at 2. Page 2: \"(showing 12-21 of 76)\". Rows 1 (the newest change) and 11 are never shown. The model called recent_changes with offset=1, and paging continued from there. Also, page 2 cites the drill twice, and some lines have no place: \"Camera moved\", \"Laptop used by person (grey t-shirt, black shorts)\".",
+  "suggested_fix": "Force offset=0 for recent_changes / people_seen unless is_show_more(question) is true (the harness owns paging). De-duplicate citations by entity_id. In change_line, say \"(place not seen)\" when an event has no location.",
+  "files": [
+   "services/agent/nasa_agent/harness.py",
+   "services/agent/nasa_agent/render.py (changes_reply, change_line)",
+   "services/agent/nasa_agent/tools.py (~l.1260)"
+  ],
+  "screenshot": [
+   "chat-q4.png",
+   "chat-q5.png"
+  ]
+ },
+ {
+  "id": "UI4-05",
+  "priority": "P2",
+  "title": "The unknown-object queue is all station structure, so the demo step \"classify an unknown\" cannot be done",
+  "page": "/review?kind=unknown_object",
+  "steps": "Open the Unknown objects tab and try to classify any card. For example, type \"handle\" into Search catalog.",
+  "expected": "The unknowns are loose items an operator can classify into the catalog. Structure (windows, hatches, handrails, visiting vehicles) is filtered out in perception, or can be dismissed in one click as \"Not inventory: station structure\".",
+  "actual": "All 6 unknowns are structure or outside views: a docked spacecraft outside the window, the window, a hatch, a hatchway, a hatch handle, and a green fabric cover. Catalog search \"handle\" gives \"No matches\". The only honest action is Dismiss, which warns \"Not an object? \u2026 marks the item as dismissed\". No object item has a box (0 of 41).",
+  "suggested_fix": "Add a structural-class denylist to the perception prompt and post-filter (window, hatch, hatchway, handle, handrail, panel, spacecraft, Earth). Add a \"Not inventory (structure)\" quick action that records a reason. For the demo, seed one or two real unknown loose items.",
+  "files": [
+   "services/perception/perception/reconciler.py",
+   "services/perception/perception/prompts*",
+   "dashboard/src/pages/ReviewPage.tsx (~l.380-520)"
+  ],
+  "screenshot": [
+   "review-unknown-card0.png",
+   "walk-7-catalog-search-handle.png",
+   "walk-8-dismiss-confirm.png"
+  ]
+ },
+ {
+  "id": "UI4-06",
+  "priority": "P2",
+  "title": "Overview events: person rows show an id instead of the appearance, \"seen\" has no place, \"left\" contradicts the location, and object events have no place",
+  "page": "/overview (and the item Activity)",
+  "steps": "Open /overview, then /items/737f632b-7988-4896-aaac-0623b0f82026.",
+  "expected": "\"Person: blue shirt and white gloves left US Orbital Segment\", consistent with the detail page title. \"seen in <module>\". No \"left X\" while the track's current location is still X. Object events always state a place, or say \"place not seen\".",
+  "actual": "The rows read \"PERSON Person 737f632b left US Orbital Segment (USOS)\" (twice, 04:30 and 04:38) while that track's last location is still USOS (sightings at 04:38:54 and 04:42:24 in USOS). \"Person 64db166f seen\", \"Person 54b2c660 seen\" and \"Person 77a6e1ca seen\" have no place. \"MOVED camera cb9268bb\" has no from/to. \"USED laptop d977201c by person (...)\" and \"USED drill 48f6f551 by person (...)\" have no place. The OverviewPage code wants \"Person: <appearance> seen in \u2026\", but /events has no entity description.",
+  "suggested_fix": "Add entity_description (the appearance) and the entity's last_location to /events. When to_location is null and a later sighting of the same track is in the same module, don't emit or render \"left\". Render \"seen\" only with a place, and fall back to the event's sighting location.",
+  "files": [
+   "services/inventory-api/inventory_api/routers/catalog.py (/events)",
+   "dashboard/src/lib/format.ts (~l.144-182)",
+   "dashboard/src/pages/OverviewPage.tsx",
+   "services/perception/perception/reconciler.py (person moved events)"
+  ],
+  "screenshot": [
+   "overview-1440.png",
+   "person-detail-1440-fold.png"
+  ]
+ },
+ {
+  "id": "UI4-07",
+  "priority": "P3",
+  "title": "46% of items are located only to the segment (\"US Orbital Segment\"), and /stats by_module silently leaves them out",
+  "page": "/, /overview, /api/stats, chat",
+  "steps": "GET /api/items?limit=500 and count last_location; compare with /api/stats by_module.",
+  "expected": "Most items have a module. Items without one are marked \"module not resolved\" and counted in a visible bucket.",
+  "actual": "30 of 65 items (20 objects, 10 person tracks) have last_location USOS. by_module sums to 35 and has no USOS/unresolved key. The chat answers \"Laptop: US Orbital Segment (USOS)\" twice for the laptop question. The 0.750 module-resolution eval score doesn't match what an operator sees in this run.",
+  "suggested_fix": "Add an \"unresolved (segment only)\" bucket to /stats and an Overview tile. Show a \"module not resolved\" chip in inventory rows. Track the segment-only rate in the live eval.",
+  "files": [
+   "services/inventory-api/inventory_api/routers/search.py (/stats)",
+   "dashboard/src/pages/OverviewPage.tsx",
+   "dashboard/src/pages/InventoryPage.tsx",
+   "services/perception/perception/ (module resolution)"
+  ],
+  "screenshot": [
+   "inventory-1440.png",
+   "chat-q1.png"
+  ]
+ },
+ {
+  "id": "UI4-08",
+  "priority": "P3",
+  "title": "\"Where is the laptop right now?\" lists 5 laptops with no total and no caveat",
+  "page": "/chat",
+  "steps": "Ask \"Where is the laptop right now?\".",
+  "expected": "\"9 laptop items are on record (some may be duplicates); the most recent: \u2026\", with a link or filter to see them all, or a question back asking which laptop.",
+  "actual": "\"I have found multiple laptops in the following locations:\", then 5 rows (two of them \"US Orbital Segment\"). There is no total (9 laptop items) and no duplicate caveat, and the first token took 23.2 s.",
+  "suggested_fix": "Use count_items with the where_is result: give the total, then the top 5, and offer \"show more\". Mention the open duplicate reviews for that label.",
+  "files": [
+   "services/agent/nasa_agent/tools.py (where_is)",
+   "services/agent/nasa_agent/render.py"
+  ],
+  "screenshot": [
+   "chat-q1.png"
+  ]
+ },
+ {
+  "id": "UI4-09",
+  "priority": "P3",
+  "title": "Chat latency: 8-23 s before any text; streaming is a paced replay after the answer is complete; the status timer briefly shows the previous question's seconds",
+  "page": "/chat",
+  "steps": "Ask the standard questions and record the first-text time and the done time.",
+  "expected": "First text in under ~5 s for deterministic answers (counts, people, changes). The elapsed timer starts at 0.",
+  "actual": "First text at 23.2 / 7.6 / 9.2 / 5.7 / 0.1 (show more) / 16.8 / 8.6 / 18.9 s. The text then grows over 0.3-2.8 s. The status reads \"Reading the question\" for 5-8+ s, and opens with \"Thinking: looking up the inventory\u2026 24\" (the last question's seconds) before resetting to 0.",
+  "suggested_fix": "Reset the elapsed counter before rendering the status. Route people / count / changes questions straight to the deterministic tools without an LLM planning turn. Emit tool status as soon as routing decides.",
+  "files": [
+   "dashboard/src/pages/ChatPage.tsx (~l.140-150)",
+   "services/agent/nasa_agent/harness.py"
+  ],
+  "screenshot": [
+   "chat-q1.png",
+   "chat-q8.png"
+  ]
+ },
+ {
+  "id": "UI4-10",
+  "priority": "P3",
+  "title": "Items first seen in a private window show \"no image\" with no explanation",
+  "page": "/items/f35c003c-19c5-467b-ae7d-925c380eb662 (laptop), /items/00e13462-\u2026 (camera)",
+  "steps": "Open the laptop f35c003c (first seen in NOD2 at 04:24:49, a private window).",
+  "expected": "\"No image: seen during a private window (privacy hold).\" Sightings in that window are labelled the same way.",
+  "actual": "The hero shows a bare \"no image\". The history shows \"Seen at NOD2 (confidence 0.70)\" with no frame, and nothing tells the operator why. This is correct for privacy but looks like a broken pipeline in a demo.",
+  "suggested_fix": "Expose an is_private flag on sightings (the window flag already exists) and caption them in FrameImage / history.",
+  "files": [
+   "services/inventory-api/inventory_api/routers/catalog.py (history)",
+   "dashboard/src/pages/ItemDetailPage.tsx",
+   "dashboard/src/components/FrameImage.tsx"
+  ],
+  "screenshot": [
+   "private-laptop-1440-fold.png"
+  ]
+ },
+ {
+  "id": "UI4-11",
+  "priority": "P3",
+  "title": "Very small crops are shown at 1x as the detail hero (e.g. 76x62 px in a 638 px slot)",
+  "page": "/items/03e45b90-cbfa-44e0-84d8-05876b56ab8b",
+  "steps": "Open the camera 03e45b90.",
+  "expected": "Small crops are shown up to 2x (the rule the Lightbox already uses), with the source frame next to them for context.",
+  "actual": "The hero is a 76x62 thumbnail in the top-left of an empty 638 px column, captioned \"Close-up crop\". It looks like a broken image.",
+  "suggested_fix": "Apply cropDisplayWidth in the hero too, and show the source frame (with a box once boxes exist) under the crop.",
+  "files": [
+   "dashboard/src/components/FrameImage.tsx",
+   "dashboard/src/pages/ItemDetailPage.tsx"
+  ],
+  "screenshot": [
+   "crop-detail-1440-fold.png"
+  ]
+ }
+]
