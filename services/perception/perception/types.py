@@ -143,3 +143,5 @@ class ReplayStats:
     errors: int = 0
     asr_calls: int = 0
     decisions: int = 0
+    structure_filtered: int = 0  # AC-PER-50: omni objects dropped as station structure
+    person_crops_dropped: int = 0  # AC-PER-49: object crops dropped because they overlapped a person

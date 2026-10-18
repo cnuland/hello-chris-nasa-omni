@@ -743,3 +743,110 @@ Residual risks accepted:
 - *Eval coverage.* The synthetic actors' shirts always clash and there are fewer of them than `expected_count`, so
   the eval exercises cross-module continuity but neither the cap nor look-alike merges. Those are covered by the
   unit tests and the real-fixture purity check (≤ 5 clashing pairs).
+
+## Amendments: crop privacy, structure filter, event places (UI review round 4, 2026-10-18)
+
+Round 4 (docs/ui-review/round4) found, live:
+- **UI4-01 (P1).** An unknown "window" object whose omni box was misplaced was linked by IoU to a detector box over a
+  crew member, so its 915×258 crop (top of a 1080×608 frame) showed the person's face and upper body. The crop was
+  stored as the item snapshot, embedded as an exemplar and shown as the review image (purged by hand). Pass 1 of
+  linking accepted a detector box of **any** label, including the detector's own `person` box.
+- **UI4-05.** All 6 open unknowns were station structure (window, hatch, hatchway, handle, fabric cover, a spacecraft
+  outside the window): nothing an operator can classify.
+- **UI4-06.** "Person … left USOS" while the track's next sightings were still in USOS; "Person … seen" with no place.
+
+AC-PER-49 to AC-PER-52 amend AC-PER-5, AC-PER-8, AC-PER-10, AC-PER-13, AC-PER-22, AC-PER-24 and AC-PER-36.
+
+- AC-PER-49 **No crop ever overlaps a person** (amends AC-PER-8, AC-PER-13, AC-PER-22, AC-PER-36).
+  - *Detector labels.* The replay's detector query labels are the catalog class names plus `person` and `face`
+    (added when missing). A `person`/`face` detection is never linked to, stored as, or counted as an object.
+  - *Body labels* (`perception.privacy.is_body_label`, matched with the AC-PER-50 head-noun rule on the `label_key`
+    normalisation): face, head, hand(s), arm(s), finger(s), leg(s), foot/feet, torso, body, human, man, woman, people.
+    An omni object with a body label is never an instance (no sighting, entity, review or event target). Its box is a
+    person region.
+  - *Person regions of a frame:* every detector box of that frame whose label maps to the person class (catalog
+    `category = person`) or is a body label; every omni object box whose label maps to the person class or is a body
+    label, on its `frame_index` (an omni box without a `frame_index` counts for every frame of the window). `people[]`
+    entries carry no box in the observation schema (contract), so they add no region; a person seen only in `people[]`
+    and missed by the detector cannot be localised (residual risk below).
+  - *Linking.* A person-class detection links only to a person instance; a face/body detection links to nothing
+    (both passes: IoU and label). A non-person instance can therefore never take a person's box.
+  - *Overlap rule* (`perception.privacy.overlaps_person(crop_box, regions)`, normalised coordinates; ratios are
+    invariant under the frame's aspect ratio). A crop box C overlaps a person region P when **any** of:
+    - IoU(C, P) > 0.05;
+    - area(C ∩ P) > 10 % of area(C);
+    - C covers ≥ 25 % of P's *head zone*: the top third of P (the whole box for a face/head region).
+  - *Dropping.* Before an exemplar crop is embedded, it is checked against every person region of its frame. When it
+    overlaps one, the instance gets **no embedding, no exemplar and no crop**; nothing is uploaded for it. The
+    sighting is still recorded (with its box) and carries `person_overlap: true`; the instance is matched like any
+    exemplar-less sighting (AC-PER-22/29); its reviews use the whole frame (`image_uri` = frame), never a crop.
+  - *Defence in depth.* Every sighting of a capturable window whose frame has person regions carries
+    `person_boxes` (at most 10, rounded to 6 decimals), so inventory-api checks the crop itself (AC-API-41).
+  - *Statistic.* `window.person_crops_dropped` = the number of crops dropped (inventory-api ignores unknown window
+    fields).
+  - *Accepted.* A person the detector misses and omni boxes nowhere has no region, so a crop over them is not
+    caught. OWLv2 queries `person` and `face` on every frame at full resolution (AC-PER-21), and the misplaced-box case
+    seen live is closed by the linking rule (the crop is always the linked detector box, never omni's box).
+- AC-PER-50 **Station structure is not inventory** (amends AC-PER-7, AC-PER-8).
+  - *Denylist* (`perception.labels.is_structure_label`). The label is normalised (`normalise_label`), cut before the
+    first preposition or participle ("of", "with", "on", "in", "showing", "visible", "seen", "leading", ...), and
+    matched with `label_key`: the whole cut phrase, its last two words or its last word (the head noun) against the
+    structure keys: hatch, hatchway, hatch handle, window, porthole, viewport, handle, handrail, handhold, wall, panel,
+    rack, cable(s), cabling, wire(s), wiring, cover, fabric cover, light(s), lamp, vent, grille, duct, fan, ceiling,
+    floor, deck, bulkhead, hull, module, node, station, space station, ISS, structure, station structure, airlock,
+    cupola, opening, port, docking port, frame, bracket, mount, rail, interior, background, view, spacecraft, vehicle,
+    capsule, Dragon, Soyuz, Progress, Cygnus, solar array, truss, radiator, Earth, planet, space, stars.
+  - *Catalog first.* Only objects whose label maps to `UNKNOWN` (AC-PER-7) are checked, so a catalogued item is kept
+    however structural it sounds (a cargo transfer bag, a `cable` of the seed's power-cable class).
+  - *Effect.* A denylisted object is dropped before consolidation and linking: no entity, no sighting, no review, no
+    exemplar, and its detector box stays available to other objects. Omni events naming it are dropped as events for
+    an unobserved object. `window.structure_filtered` counts them (a window statistic only), and `ReplayStats`
+    sums them.
+  - *Measured* on the real Gemma 4 replies (tests/fixtures/gemma4_tour/ and gemma4_tour_people_2026-10-18.json): 17 of
+    the 19 unknown listings (7 of 8 distinct labels) are structure; the two kept are `watch` (a wristwatch). No
+    listing that maps to a catalog class is filtered.
+  - *Prompt* (amends AC-PER-24): the budget line says to skip station structure (walls, panels, racks, handrails,
+    handles, hatches, windows, lights, vents, covers, cables) and anything outside the station (Earth, spacecraft),
+    and that people go in `people`, never in `objects`.
+- AC-PER-51 **Event places** (amends AC-PER-10, AC-PER-44).
+  - An omni event other than `moved` whose destination hint does not resolve gets `to_location` = the target's
+    sighting location in this window: where it happened ("seen"/"used" always name a place when the window has one).
+    `from_location` is unchanged (the entity's previous place). `removed` and `consumed` are not filled: the object
+    leaves the inventory there, so a destination would be false (the eval scores them as out of scope).
+  - A `moved` event whose destination hint does not resolve gets `to_location` = the target's sighting location
+    when that place differs from `from_location` (not the same location, not one inside the other, not the same
+    module).
+  - *Person tracks.* A `moved` event of a person track (the target maps to the person class) is emitted only when the
+    track has a known previous place (`from_location`) and its destination (the resolved hint, else this window's
+    sighting) is a different place by the rule above. Otherwise it is dropped (logged): "left USOS" while the track's
+    sighting in the same window is still in USOS is the contradiction seen live. A new track (no previous place) keeps
+    the event with `to_location` = its sighting ("arrived in").
+- AC-PER-52 **Tests** (tests/test_ac_per_49_52_crop_privacy_structure.py). Real geometry: the live 915×258 crop at the
+  top of a 1080×608 frame over a person box; partial overlaps (each rule alone), several people, a face box, an omni
+  person box, a crop clear of everyone (kept). The denylist on the real fixtures (fraction removed, no catalog match
+  removed). Event places on the live "left USOS" case.
+
+### Review round (AC-PER-49..52): fixes and residual risks accepted
+
+Fixes (each test-first, `test_review_*` in tests/test_ac_per_49_52_crop_privacy_structure.py):
+- *Body labels vs the catalog (P1).* "head" fuzzy-maps to the `headset` class, so a head box became a headset instance
+  and its crop was uploaded. A body label is now kept as an item only when it is an exact/synonym catalog name of a
+  non-person class (e.g. a catalogued "robot hand"), and never for face/head labels; otherwise it is a person region
+  and not an instance.
+- *Determiners (P1).* `label_heads` drops leading determiners ("the man", "a woman", "the head"); `figure` and
+  `silhouette` are body heads.
+- *Face kind for the API.* Sightings send `person_box_kinds` (parallel to `person_boxes`, "person" | "face") so
+  inventory-api applies the whole-box head zone to face boxes too. Boxes are sent ordered (x1 <= x2, y1 <= y2), the
+  geometry orders inverted boxes itself, and a crop with no area fails closed (as in the API).
+- *Box cap.* Before the 10-box cap, the regions that overlap the object come first.
+- *Structure false positives.* `module`, `fan`, `mount`, `frame`, `cover` are structure only as the whole label
+  ("memory module", "portable fan", "camera mount", "laptop cover", "picture frame" are kept; "fabric cover" stays a
+  two-word key). `robot arm` joins `robotic arm` and Canadarm.
+- *Event dedup.* Filled destinations vary with the zone of the box centre, so the cross-window event dedup key uses the
+  destination's module (the place itself outside modules).
+
+Residual risks accepted:
+- *Detector misses.* A person neither detected nor boxed by omni has no region (people[] has no box).
+- *Recall cost.* Any object held in front of a crew member loses its exemplar (matched by class and place instead).
+- *Broad heads that remain* (handle, panel, rack, light, port): an unknown "bag handle" or "rack of tools" is dropped
+  silently as structure.

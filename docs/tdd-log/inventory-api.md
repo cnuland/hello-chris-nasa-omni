@@ -606,3 +606,26 @@ docs/spec/10-inventory-api.md, plus the AC-API-25 order amendment. Perception's 
 ### Test counts
 - inventory-api: 465 passed (450 + 15 new). One existing assertion edited: the 004 runner test asserted 004 was the
   last migration file; it now asserts 004 is applied (005 follows).
+
+## UI review round 4 (AC-API-41..44) (2026-10-18)
+
+- **Spec first:** docs/spec/10-inventory-api.md "UI review round 4". Migration `006_crop_privacy.sql` (idempotent,
+  guarded DO block): `sighting.person_overlap`, `entity_exemplar.sighting_id` (FK, on delete set null, partial index).
+- **Red:** tests/test_ac_api_41_44_ui_review_round4.py, 30 cases: missing columns, crops stored over people, missing
+  `entity_appearance` / `location_source` / `by_location_level` / `snapshot_withheld_reason` / `is_private`.
+- **Test edit before green:** one "clear of people" case used a second person box that does overlap the crop (my
+  geometry error); replaced with a box that does not.
+- **Green:** `inventory_api/privacy.py` (same rule as perception), `SightingIn.person_boxes/person_overlap`, ingest
+  withholds crop + exemplar (and any person-entity exemplar), review image falls back to the frame (422 without one),
+  exemplars record `sighting_id`, Classify deletes exemplars of person_overlap sightings (`withheld_exemplar_ids` in the
+  audit), merge/unmerge keep the link; `/events` `entity_appearance`, `entity_last_location(_name)`, sighting-place fill
+  with `location_source`; `/stats` segment keys + `by_location_level`; Items `snapshot_withheld_reason`; detail
+  sightings `person_overlap`, `is_private`.
+- **Follow-up during integration:** `make test` e2e_04 showed `removed` events gaining a destination from the sighting.
+  `removed`/`consumed` leave the inventory, so neither perception nor the API fills them (spec + tests added).
+- **Adversarial review fixes** (test-first): withheld crops deleted from the bucket after commit when unreferenced
+  (`/media` served them at a guessable key); `person_box_kinds` with the face rule; inverted person boxes 422; filled
+  destination role uses containment / same module, not equality; migration 006 guarded so restarts take no table lock.
+  Accepted and documented: the Classify guard cannot fire for data ingest itself produces (only for later flags) and
+  does not cover legacy exemplars; event place fill ignores window privacy (location facts only).
+- **Final:** inventory-api **506 passed** (465 + 41); ruff clean.

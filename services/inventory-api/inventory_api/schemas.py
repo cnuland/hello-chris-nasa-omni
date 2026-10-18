@@ -27,6 +27,17 @@ BboxSource = Literal["detector", "omni"]
 ItemSort = Literal["last_seen_at", "-last_seen_at", "label", "-label", "confidence", "-confidence"]
 
 Probability = Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]
+UnitFloat = Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]
+
+
+def _check_person_box(box: list[float]) -> list[float]:
+    if box[2] <= box[0] or box[3] <= box[1]:
+        raise ValueError("person box must be [x1,y1,x2,y2] with x2 > x1 and y2 > y1")
+    return box
+
+
+PersonBox = Annotated[list[UnitFloat], Field(min_length=4, max_length=4), AfterValidator(_check_person_box)]
+MAX_PERSON_BOXES = 20
 NonEmptyStr = Annotated[str, Field(min_length=1)]
 
 
@@ -171,11 +182,19 @@ class SightingIn(_Model):
     confidence: Probability
     frame_uri: str | None = None
     description: str | None = None
+    # AC-API-41: person regions of the sighting's frame (normalised boxes) and perception's own verdict. A crop that
+    # overlaps a person is never stored.
+    person_boxes: Annotated[list[PersonBox], Field(max_length=MAX_PERSON_BOXES)] | None = None
+    person_overlap: bool | None = None
+    # review round: "face" boxes use the whole box as the head zone (perception AC-PER-49); default "person"
+    person_box_kinds: list[Literal["person", "face"]] | None = None
 
     @model_validator(mode="after")
     def _source_needs_box(self) -> SightingIn:
         if self.bbox is None:
             self.bbox_source = None
+        if self.person_box_kinds is not None and len(self.person_box_kinds) != len(self.person_boxes or []):
+            raise ValueError("person_box_kinds must have one entry per person box")
         return self
 
 

@@ -40,6 +40,7 @@ from .window import WindowBuilder
 logger = logging.getLogger(__name__)
 
 DETECTION_CACHE_SIZE = 64
+PERSON_REGION_LABELS = ("person", "face")
 
 
 def _iter_items(
@@ -117,7 +118,8 @@ class _Pipeline:
         self._transcribed: set[tuple[datetime, int]] = set()
 
     def _use_catalog(self, catalog: list[dict[str, Any]], locations: list[dict[str, Any]]) -> None:
-        self.labels = sorted({c["class_name"] for c in catalog if c.get("class_name")})
+        # AC-PER-49: the detector always looks for people and faces (person regions; never object sightings)
+        self.labels = sorted({c["class_name"] for c in catalog if c.get("class_name")} | set(PERSON_REGION_LABELS))
         if self._fill_omni_names:
             self.omni.catalog_names = list(self.labels)
         self.asr_context = build_asr_context(catalog, locations)
@@ -191,6 +193,9 @@ class _Pipeline:
         if outcome.status == "posted":
             self.stats.posted += 1
             self.stats.decisions += len((outcome.payload or {}).get("decisions") or [])
+            window_doc = (outcome.payload or {}).get("window") or {}
+            self.stats.structure_filtered += int(window_doc.get("structure_filtered") or 0)
+            self.stats.person_crops_dropped += int(window_doc.get("person_crops_dropped") or 0)
         elif outcome.status == "invalid":
             self.stats.invalid += 1
         else:

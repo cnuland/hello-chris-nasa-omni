@@ -42,7 +42,11 @@ ITEM_SELECT = """
            e.ims_barcode, e.created_by, e.created_at, e.updated_at, e.location_set_at, e.location_set_by,
            mv.actor_desc AS last_moved_by, mv.occurred_at AS last_moved_at,
            lh.event_type AS lh_event_type, lh.actor_desc AS lh_actor_desc, lh.occurred_at AS lh_occurred_at,
-           sb.bbox AS snapshot_bbox, sb.bbox_source AS snapshot_bbox_source
+           sb.bbox AS snapshot_bbox, sb.bbox_source AS snapshot_bbox_source,
+           CASE WHEN e.snapshot_uri IS NULL AND EXISTS (
+                     SELECT 1 FROM sighting ps JOIN observation_window pw ON pw.window_id = ps.window_id
+                      WHERE ps.entity_id = e.entity_id AND pw.is_private)
+                THEN 'private_window' END AS snapshot_withheld_reason
       FROM entity e
       LEFT JOIN catalog_item c ON c.catalog_id = e.catalog_id
       LEFT JOIN location l ON l.location_id = e.last_location
@@ -71,16 +75,48 @@ ITEM_SELECT = ITEM_SELECT.replace("%(handled)s", ",".join(HANDLED_EVENT_TYPES))
 EVENT_COLUMNS = """event_id, event_type, entity_id, actor_entity, actor_desc, from_location, to_location, occurred_at,
                    confidence, evidence_uri, source, created_at"""
 
-# AC-API-29: events with the entity's label/catalog and the location display names.
-EVENT_SELECT = """
+# AC-API-42: an event without a destination takes the place of the entity's sighting nearest to it within this many
+# seconds (later wins ties).
+EVENT_SIGHTING_WINDOW_S = 300
+
+# AC-API-29/40/42: events with the entity's label/catalog/kind/appearance/current place, the location display names,
+# and the sighting place used when the event names no destination.
+EVENT_SELECT = f"""
+    WITH RECURSIVE loc_anc(location_id, ancestor, kind, depth) AS (
+        SELECT location_id, location_id, kind, 0 FROM location
+        UNION ALL
+        SELECT a.location_id, p.location_id, p.kind, a.depth + 1
+          FROM loc_anc a JOIN location l ON l.location_id = a.ancestor JOIN location p ON p.location_id = l.parent_id
+         WHERE a.depth < 32
+    )
     SELECT ev.event_id, ev.event_type, ev.entity_id, ev.actor_entity, ev.actor_desc, ev.from_location,
            ev.to_location, ev.occurred_at, ev.confidence, ev.evidence_uri, ev.source, ev.created_at,
            en.label AS entity_label, en.catalog_id AS entity_catalog_id, en.kind AS entity_kind,
-           lf.display_name AS from_location_name, lt.display_name AS to_location_name
+           CASE WHEN en.kind = 'person' THEN en.description END AS entity_appearance,
+           en.last_location AS entity_last_location, le.display_name AS entity_last_location_name,
+           lf.display_name AS from_location_name, lt.display_name AS to_location_name,
+           sp.location_id AS sighting_location, ls.display_name AS sighting_location_name,
+           (sp.location_id IS NOT NULL AND ev.from_location IS NOT NULL AND (
+                EXISTS (SELECT 1 FROM loc_anc WHERE location_id = sp.location_id AND ancestor = ev.from_location)
+             OR EXISTS (SELECT 1 FROM loc_anc WHERE location_id = ev.from_location AND ancestor = sp.location_id)
+             OR EXISTS (SELECT 1 FROM loc_anc a JOIN loc_anc b ON b.ancestor = a.ancestor AND b.kind = 'module'
+                         WHERE a.location_id = sp.location_id AND a.kind = 'module'
+                           AND b.location_id = ev.from_location))) AS sighting_same_area
       FROM event ev
       LEFT JOIN entity en ON en.entity_id = ev.entity_id
+      LEFT JOIN location le ON le.location_id = en.last_location
       LEFT JOIN location lf ON lf.location_id = ev.from_location
       LEFT JOIN location lt ON lt.location_id = ev.to_location
+      LEFT JOIN LATERAL (
+            SELECT sg.location_id FROM sighting sg
+             WHERE ev.to_location IS NULL AND ev.event_type NOT IN ('removed', 'consumed')
+               AND sg.entity_id = ev.entity_id AND sg.location_id IS NOT NULL
+               AND sg.seen_at BETWEEN ev.occurred_at - interval '{EVENT_SIGHTING_WINDOW_S} seconds'
+                                  AND ev.occurred_at + interval '{EVENT_SIGHTING_WINDOW_S} seconds'
+             ORDER BY abs(extract(epoch FROM sg.seen_at - ev.occurred_at)), sg.seen_at DESC, sg.sighting_id DESC
+             LIMIT 1
+      ) sp ON TRUE
+      LEFT JOIN location ls ON ls.location_id = sp.location_id
 """
 
 
@@ -148,6 +184,8 @@ def serialize_item(row: dict[str, Any], bucket: str, url_for) -> dict[str, Any]:
         ),
         "location_set_at": row["location_set_at"],
         "location_set_by": row["location_set_by"],
+        # AC-API-44: why there is no image ("private_window": first seen only in private windows), else null
+        "snapshot_withheld_reason": row.get("snapshot_withheld_reason"),
     }
 
 
@@ -171,6 +209,14 @@ def event_actor_kind(source: str | None, actor_desc: str | None, actor_entity: A
 
 
 def serialize_event(row: dict[str, Any], bucket: str, url_for) -> dict[str, Any]:
+    to_location, to_name = row["to_location"], row.get("to_location_name")
+    source = "event" if (row["from_location"] or to_location) else None
+    filled = to_location is None and row.get("sighting_location") is not None
+    if filled:  # AC-API-42: the place the entity was sighted at the time of the event
+        to_location, to_name, source = row["sighting_location"], row.get("sighting_location_name"), "sighting"
+    role = event_location_role(row["event_type"], row["from_location"], to_location)
+    if filled and (row["from_location"] is None or row.get("sighting_same_area")):
+        role = "at"  # seen there (the same place, inside it, or the same module); it did not leave
     out = {
         "event_id": row["event_id"],
         "event_type": row["event_type"],
@@ -178,19 +224,24 @@ def serialize_event(row: dict[str, Any], bucket: str, url_for) -> dict[str, Any]
         "actor_entity": row["actor_entity"],
         "actor_desc": row["actor_desc"],
         "from_location": row["from_location"],
-        "to_location": row["to_location"],
+        "to_location": to_location,
         "occurred_at": row["occurred_at"],
         "confidence": real(row["confidence"]),
         "evidence_url": url_for(row["evidence_uri"], bucket),
         "source": row["source"],
         "created_at": row["created_at"],
-        "location_role": event_location_role(row["event_type"], row["from_location"], row["to_location"]),
+        "location_role": role,
         "actor_kind": event_actor_kind(row["source"], row["actor_desc"], row["actor_entity"]),
     }
     # entity_kind (AC-API-40): "object" | "person"; a person track has no catalog_id, so clients need not guess
-    for key in ("entity_label", "entity_catalog_id", "entity_kind", "from_location_name", "to_location_name"):
+    for key in ("entity_label", "entity_catalog_id", "entity_kind", "from_location_name", "entity_appearance",
+                "entity_last_location", "entity_last_location_name"):
         if key in row:
             out[key] = row[key]
+    if "to_location_name" in row:
+        out["to_location_name"] = to_name
+    if "sighting_location" in row:
+        out["location_source"] = source  # AC-API-42: "event" | "sighting" | null
     return out
 
 

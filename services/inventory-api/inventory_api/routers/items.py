@@ -264,9 +264,10 @@ def get_item(entity_id: UUID, ctx: Ctx) -> dict[str, Any]:
     with ctx.db.connection() as conn:
         item = fetch_item(conn, entity_id, ctx.bucket, uri_to_url)
         sightings = conn.execute(
-            """SELECT sighting_id, window_id, location_id, seen_at, bbox, bbox_source, confidence, frame_uri,
-                      description
-                 FROM sighting WHERE entity_id = %s ORDER BY seen_at DESC, sighting_id DESC LIMIT %s""",
+            """SELECT s.sighting_id, s.window_id, s.location_id, s.seen_at, s.bbox, s.bbox_source, s.confidence,
+                      s.frame_uri, s.description, s.person_overlap, COALESCE(w.is_private, FALSE) AS is_private
+                 FROM sighting s LEFT JOIN observation_window w ON w.window_id = s.window_id
+                WHERE s.entity_id = %s ORDER BY s.seen_at DESC, s.sighting_id DESC LIMIT %s""",
             (entity_id, DETAIL_LIMIT),
         ).fetchall()
         events = conn.execute(
@@ -287,6 +288,8 @@ def get_item(entity_id: UUID, ctx: Ctx) -> dict[str, Any]:
             "confidence": real(s["confidence"]),
             "frame_url": uri_to_url(s["frame_uri"], ctx.bucket),
             "description": s["description"],
+            "person_overlap": s["person_overlap"],  # AC-API-41: its crop overlapped a person and was not stored
+            "is_private": s["is_private"],  # AC-API-44: seen in a private window (no image by design)
         }
         for s in sightings
     ]

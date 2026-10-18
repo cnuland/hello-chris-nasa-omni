@@ -1102,3 +1102,45 @@ No window had the wrong module; all 14 misses stayed at segment level (USOS).
   - `make eval`: gate PASSED (`person_tracks_per_person` 1.0, `person_track_recall` 1.0).
   - `make lint`: clean.
 - **New env vars:** `PERCEPTION_PERSON_CROSS_MODULE_S` (600, 0 = off) and `PERCEPTION_PERSON_SOFT_CAP` (true).
+
+## UI review round 4: crop privacy, structure filter, event places (AC-PER-49..52) (2026-10-18)
+
+- **Spec first:** docs/spec/20-perception.md "Amendments: crop privacy, structure filter, event places". Root cause of
+  UI4-01, read in the code: in `_link` pass 1 an omni box could IoU-link to a detector box of **any** label, including
+  the detector's own `person` box (the catalog class name "person" is already an OWLv2 query), and that detector box
+  was then cropped, embedded and uploaded.
+- **Red:** tests/test_ac_per_49_52_crop_privacy_structure.py, 83 failing for the right reasons (missing
+  `perception.privacy` / `is_structure_label`, crops uploaded over people, "left USOS" events emitted, structure
+  entities created); 3 passing (geometry helpers that exist already).
+- **Test edits before green (no weakening):** a geometry case of mine was wrong (the "leg sliver" crop covered 25 % of
+  the crop, so the 10 % rule correctly fires; the sliver was narrowed); the drill-move test needed an exemplar to reach
+  the existing entity; my count of distinct real unknown labels was wrong (8, not 9; 7 removed, not 8).
+- **Green:** `perception/privacy.py` (overlap rule, body labels), `labels.label_heads` / `is_structure_label`,
+  reconciler (structure + body filtering before linking, person regions per frame, person/face detections link only to
+  person instances / nothing, crop dropped with `person_overlap`, `person_boxes`, window statistics, event places),
+  replay (queries `person` + `face`, `ReplayStats.structure_filtered/person_crops_dropped`), prompt.
+- **Existing test amended (justified):** `test_ac_per_10_event_to_location_hint_unknown_is_null` asserted
+  `to_location is None` for an unresolvable hint. AC-PER-51 now fills the sighting place (LAB1); the test still proves
+  the hint text never becomes a location.
+- **Denylist on the real Gemma 4 replies** (gemma4_tour/ + gemma4_tour_people_2026-10-18.json):
+  19 listings map to UNKNOWN; **17 (89 %) are removed** (hatch 7, spacecraft 3, window 2, hatchway 2, handle 1, fabric
+  cover 1, bracket 1); kept: `watch` x2. 7 of 8 distinct unknown labels. All 6 live open unknowns of round 4 (window,
+  hatch, hatchway, handle, fabric cover, docked spacecraft) are removed. No listing that maps to a catalog class is ever
+  filtered (asserted, plus every seed class name and synonym).
+- **Adversarial review** (independent reviewer agent; all fixes test-first unless marked):
+  1. *P1: "head" fuzzy-maps to `headset`*, so with my first catalog exception a head box became a headset instance and
+     its crop was uploaded. Body labels are now items only for exact/synonym catalog names, never face/head.
+  2. *P1: "the man", "a woman" escaped the whole-label body match.* Leading determiners are dropped; figure/silhouette
+     added.
+  3. *P2: face kind not sent to the API* → `person_box_kinds`; inverted boxes ordered; zero-area crop fails closed.
+  4. *P3: box cap could cut the overlapping box* → overlapping regions first.
+  5. *P3: broad structure heads dropped loose items* (memory module, portable fan, camera mount, laptop cover, picture
+     frame) → whole-label only for module/fan/mount/frame/cover; `robot arm` added. (`robotic arm` as a body label was
+     found by my own probe before the review; test added with the fix, not red first.)
+  6. *P3: filled destinations broke cross-window event dedup* → dedup key on the destination's module.
+  7. *Test quality:* the person-link test's docstring claimed an unknown case it did not exercise; renamed, and an
+     unknown-vs-person-box test added. Pipeline tests for `head` and `the man` added.
+  - Accepted (spec): detector misses with no omni box; recall cost for held objects; remaining broad heads.
+- **Final runs:** perception **1228 passed** (1110 → +118 cases in the new file); ruff clean. `make test` all suites
+  passed (inventory-api 506, perception 1228, agent 632, eval 408 + 1 skipped, dashboard 422, e2e 29). `make eval`
+  gate PASSED.

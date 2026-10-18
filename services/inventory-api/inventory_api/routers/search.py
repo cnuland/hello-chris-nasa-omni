@@ -77,10 +77,35 @@ def search(
     return merged[:limit]
 
 
+def _location_levels(rows: list[dict[str, Any]]) -> dict[str, tuple[str, str]]:
+    """AC-API-43: location_id -> (level, key). level "module" with the module id (zones roll up), or "segment" with
+    the segment id for a place at segment level (or below a segment but outside any module); places with neither
+    are left out (they count as unknown)."""
+    parent = {r["location_id"]: r["parent_id"] for r in rows}
+    kind = {r["location_id"]: r["kind"] for r in rows}
+    out: dict[str, tuple[str, str]] = {}
+    for loc in parent:
+        current, seen, segment = loc, set(), None
+        while current is not None and current not in seen:
+            seen.add(current)
+            if kind.get(current) == "module":
+                out[loc] = ("module", current)
+                break
+            if kind.get(current) == "segment" and segment is None:
+                segment = current
+            current = parent.get(current)
+        else:
+            if segment is not None:
+                out[loc] = ("segment", segment)
+    return out
+
+
 @router.get("/stats")
 def stats(ctx: Ctx) -> dict[str, dict[str, int]]:
-    """Counts by status (all entities), by kind and by module (live entities only, zones rolled up to their module),
-    open review items by kind, and observation windows (total and private, AC-API-39: a count reveals nothing)."""
+    """Counts by status (all entities), by kind and by module (live entities only, zones rolled up to their module;
+    items placed only at a segment, e.g. USOS, under the segment's own key: perception could not place them inside a
+    module), live entities by location level (AC-API-43), open review items by kind, and observation windows (total and
+    private, AC-API-39: a count reveals nothing)."""
     hidden = list(HIDDEN_STATUSES)
     with ctx.db.connection() as conn:
         by_status = {
@@ -92,25 +117,11 @@ def stats(ctx: Ctx) -> dict[str, dict[str, int]]:
                 "SELECT kind AS k, count(*) AS n FROM entity WHERE status <> ALL(%s) GROUP BY kind", (hidden,)
             )
         }
-        by_module = {
-            r["k"]: r["n"]
-            for r in conn.execute(
-                """WITH RECURSIVE anc(start_id, location_id, parent_id, kind, depth) AS (
-                   SELECT location_id, location_id, parent_id, kind, 0 FROM location
-                   UNION ALL
-                   SELECT a.start_id, l.location_id, l.parent_id, l.kind, a.depth + 1
-                     FROM anc a JOIN location l ON l.location_id = a.parent_id
-                    WHERE a.kind <> 'module' AND a.depth < 32
-               ), module_of AS (
-                   SELECT start_id, location_id AS module_id FROM anc WHERE kind = 'module'
-               )
-               SELECT m.module_id AS k, count(*) AS n
-                 FROM entity e JOIN module_of m ON m.start_id = e.last_location
-                WHERE e.status <> ALL(%s)
-                GROUP BY m.module_id""",
-                (hidden,),
-            )
-        }
+        levels = _location_levels(conn.execute("SELECT location_id, parent_id, kind FROM location").fetchall())
+        by_location = conn.execute(
+            "SELECT last_location AS k, count(*) AS n FROM entity WHERE status <> ALL(%s) GROUP BY last_location",
+            (hidden,),
+        ).fetchall()
         open_reviews = {
             r["k"]: r["n"]
             for r in conn.execute(
@@ -120,10 +131,18 @@ def stats(ctx: Ctx) -> dict[str, dict[str, int]]:
         windows = conn.execute(
             "SELECT count(*) AS total, count(*) FILTER (WHERE is_private) AS private FROM observation_window"
         ).fetchone()
+    by_module: dict[str, int] = {}
+    by_level = {"module": 0, "segment": 0, "unknown": 0}
+    for r in by_location:
+        level, key = levels.get(r["k"], ("unknown", None)) if r["k"] is not None else ("unknown", None)
+        by_level[level] += r["n"]
+        if key is not None:
+            by_module[key] = by_module.get(key, 0) + r["n"]
     return {
         "windows": {"total": windows["total"], "private": windows["private"]},
         "by_status": {s: by_status.get(s, 0) for s in EntityStatus.__args__},
         "by_kind": {k: by_kind.get(k, 0) for k in EntityKind.__args__},
         "by_module": by_module,
+        "by_location_level": by_level,
         "open_reviews_by_kind": {k: open_reviews.get(k, 0) for k in ReviewKind.__args__},
     }

@@ -247,3 +247,62 @@ on its own (defence in depth) and redacts what is already stored.
   `entity_catalog_id`, so the agent and dashboard no longer guess. Optional and additive (OpenAPI `Event`).
 - **Window hits expose `is_private`** (always `false`, because private windows are never returned). The agent's
   `search_observations` filters on exactly this name.
+
+## UI review round 4 (docs/ui-review/round4: UI4-01, UI4-06, UI4-07, UI4-10)
+
+All additions are optional ingest fields, optional response fields and migration `006_crop_privacy.sql`
+(idempotent, applied at start like every migration). Existing clients keep working.
+
+- AC-API-41 **No crop over a person, defence in depth** (UI4-01, P1; perception AC-PER-49).
+  - **Ingest fields** on `sighting`: `person_boxes` (optional, at most 20 boxes `[x1,y1,x2,y2]` with values in 0..1;
+    anything else is 422) and `person_overlap` (optional boolean).
+  - **Rule.** A sighting *overlaps a person* when `person_overlap` is true, or it has `person_boxes` and an exemplar
+    crop and either its `bbox` is null (the crop cannot be checked) or `bbox` overlaps any person box under the
+    perception rule (`inventory_api.privacy.overlaps_person`: IoU > 0.05, or the intersection is > 10 % of the crop,
+    or the crop covers ≥ 25 % of the top third of the person box).
+  - **Effect.** For such a sighting the crop and the exemplar are **not stored** (no embedding, no `crop_uri`), the
+    entity snapshot falls back to the frame, and `sighting.person_overlap = true` is stored. A review whose
+    `image_uri` is that crop is stored with the sighting's frame instead (422 when the sighting has no stored frame:
+    a review needs an image). The window is still recorded; nothing else changes.
+  - **Person entities.** An exemplar or crop for an entity of kind `person` is never stored, in any window (a person
+    crop is face-bearing; perception AC-PER-36 already sends none).
+  - **Classify guard.** Exemplars now record their `sighting_id`. On `assign_catalog` / `new_catalog`, every exemplar
+    of the review's entity whose sighting is `person_overlap` is deleted before the entity joins the catalog class,
+    and the deleted ids are listed in the classify audit (`withheld_exemplar_ids`). A crop of a person can therefore
+    never become a catalog exemplar.
+  - **Item detail** sightings carry `person_overlap` and `is_private` (the sighting's window is private).
+  - Migration 006: `sighting.person_overlap boolean not null default false`, `entity_exemplar.sighting_id bigint`
+    (FK, on delete set null). Merge and unmerge keep the link.
+- AC-API-42 **Event context, round 4** (UI4-06). Every event (`/events`, item detail `events`) also carries:
+  - `entity_appearance`: the entity's description when it is a person track (its appearance text), else null;
+  - `entity_last_location`, `entity_last_location_name`: the entity's current location and its display name;
+  - **sighting place:** when an event other than `removed` / `consumed` (the entity leaves the inventory; a
+    destination would be false) has no `to_location`, it is filled from the entity's sighting nearest to
+    `occurred_at` within ±300 s (ties: the later one), with `to_location_name`. `location_source` is `"event"` when
+    the stored event names a place, `"sighting"` when `to_location` was filled this way, null when no place is known.
+    `location_role` is computed after the fill; a filled destination equal to `from_location` (or without one) is
+    `"at"` (the entity was seen there; it did not leave), so a "seen" event always has its place and a person's
+    "left X" is never shown while that person was sighted in X at the time.
+- AC-API-43 **Segment-level items in /stats** (UI4-07). `by_module` also has a key for each segment (`USOS`, `ROS`)
+  counting the live entities located at the segment itself (or below it but outside any module): the items perception
+  could not place inside a module. `by_location_level = {module, segment, unknown}` counts live entities located in a
+  module (zones included), at segment level, and with no (or an unknown) location. The three add up to the live
+  entity count (`sum(by_kind)`), and `sum(by_module) = module + segment`.
+- AC-API-44 **Why an item has no image** (UI4-10). Every Item carries `snapshot_withheld_reason`: `"private_window"`
+  when it has no snapshot and at least one of its sightings is in a private window (its image was withheld for crew
+  privacy), else null. Review subjects and candidates whose thumbnail is withheld because their location is
+  no_capture (AC-API-27) also say `"private_window"`.
+
+### Review round (AC-API-41..44)
+- *Withheld crops are deleted.* Perception uploads a crop before the API can refuse it, and `/media` serves any key, so
+  after commit every withheld crop that nothing references (exemplar, snapshot, review image, frame) is deleted from the
+  bucket (best effort, logged). Test: `test_review_withheld_crop_is_deleted_from_the_object_store`.
+- *Face boxes.* Ingest accepts `sighting.person_box_kinds` (one of "person" | "face" per person box, else 422); a face
+  box's head zone is the whole box, as in perception. A person box must have x2 > x1 and y2 > y1 (else 422).
+- *Event role.* A destination filled from a sighting is `"at"` when it is the origin, inside it, contains it, or in the
+  same module (not only when equal): "moved from LAB1" sighted in LAB1S2, or "from USOS" sighted in NOD1, did not leave.
+- *Migration 006* alters tables only inside a guarded DO block, so a restart takes no ACCESS EXCLUSIVE lock.
+- *Accepted:* the Classify guard can only fire for a sighting flagged after ingest (e.g. by an operator purge), because
+  ingest never stores an exemplar for a person_overlap sighting; legacy exemplars (no `sighting_id`, such as the one
+  purged by hand in round 4) are not covered. The event place fill does not look at the window's privacy: locations
+  are facts the API already exposes, never media.

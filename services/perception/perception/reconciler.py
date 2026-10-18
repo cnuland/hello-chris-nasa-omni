@@ -71,7 +71,7 @@ import numpy as np
 
 from . import NEW, UNKNOWN
 from .config import PerceptionConfig
-from .labels import CatalogMapper, label_key, normalise_label
+from .labels import CatalogMapper, is_structure_label, label_key, normalise_label
 from .locations import LocationResolver, ModuleCarry
 from .media import crop as crop_image
 from .media import encode_jpeg
@@ -84,6 +84,7 @@ from .people import (
     find_sleep_cue,
     sanitise_text,
 )
+from .privacy import is_body_label, ordered, overlaps_person, region_kind
 from .speech import classify_utterance_logged, parse_speech_claim, split_utterances
 from .storage import crop_key, frame_key, raw_key
 from .types import DecisionResult, Detection, LabelMatch, OmniResult, Window
@@ -102,6 +103,19 @@ LOW_CONFIDENCE = "low_confidence"
 PLACE_ITEMS_LIMIT = 50  # AC-PER-29: same-class entities of one module (GET /items?catalog_id=&location=)
 PERSON_RECENT_DESCRIPTIONS = 5  # review round (AC-PER-45): a track's latest sighting appearances kept in memory
 UNKNOWN_PLACE_ITEMS_LIMIT = 200  # UNKNOWN has no class filter: every entity of the module is listed
+MAX_PERSON_BOXES = 10  # AC-PER-49: person regions sent with a sighting (inventory-api checks crops itself)
+LEAVES_INVENTORY = frozenset({"removed", "consumed"})  # AC-PER-51: no destination is filled for these
+
+
+def structure_filtered(objects: Sequence[dict[str, Any]], mapper: CatalogMapper) -> list[dict[str, Any]]:
+    """AC-PER-50: the omni objects that are station structure or an outside view. Only labels that map to UNKNOWN are
+    checked, so a catalogued item is always kept however structural it sounds."""
+    out = []
+    for o in objects:
+        label = str(o.get("label") or "")
+        if mapper.map(label).catalog_id == UNKNOWN and is_structure_label(label):
+            out.append(o)
+    return out
 
 
 @dataclass(frozen=True)
@@ -248,6 +262,7 @@ class _Observed:
     clear_claim: str | None = None  # claimed location confirmed by this sighting -> clear the speech flag
     members: list[int] = field(default_factory=list)  # omni object indexes consolidated into this instance
     candidate_ids: set[str] = field(default_factory=set)  # entities compared by appearance (have exemplars)
+    person_overlap: bool = False  # AC-PER-49: its crop overlapped a person region and was dropped
 
     @property
     def catalog_id(self) -> str | None:
@@ -312,6 +327,12 @@ class _WindowContext:
         self.place_items: dict[tuple[tuple[str, str], str], list[dict[str, Any]] | None] = {}
         self.class_items: dict[str, dict[str, dict[str, Any]]] = {}
         self.live_counts: dict[str, int] = {}
+        # AC-PER-49: person regions per frame index: (normalised box, "person" | "face")
+        self.person_regions: dict[int, list[tuple[tuple[float, float, float, float], str]]] = {}
+        self.person_crops_dropped = 0
+
+    def regions(self, idx: int) -> list[tuple[tuple[float, float, float, float], str]]:
+        return self.person_regions.get(idx, [])
 
     def frame_ts(self, idx: int) -> datetime:
         return self.window.frames[idx].timestamp
@@ -535,7 +556,19 @@ class Reconciler:
         ctx.carried = carry.carried
         dets = [list(detections[i]) if i < len(detections) else [] for i in range(len(window.frames))]
 
-        observed = self._link(window, obs.get("objects") or [], dets)
+        raw_objects = [o for o in obs.get("objects") or [] if isinstance(o, dict)]
+        # AC-PER-50: station structure / outside views are not inventory (UNKNOWN labels only); AC-PER-49: body-part
+        # labels are person regions, never instances. Both are dropped before consolidation and linking.
+        structure = structure_filtered(raw_objects, self.mapper)
+        body = [o for o in raw_objects if self._is_body(str(o.get("label") or ""))]
+        dropped_ids = {id(o) for o in structure} | {id(o) for o in body}
+        objects = [o for o in raw_objects if id(o) not in dropped_ids]
+        if structure or body:
+            logger.info("omni objects that are not inventory dropped",
+                        extra={"window": window.index, "structure": len(structure), "body_parts": len(body)})
+        ctx.person_regions = self._person_regions(window, raw_objects, dets)
+
+        observed = self._link(window, objects, dets)
         observed = self._with_people(window, obs, observed)  # AC-PER-35
         for o in observed:
             o.location = self._object_location(ctx, o)
@@ -575,6 +608,9 @@ class Reconciler:
             "privacy_reason": privacy["reason"] if privacy is not None else None,
         }
         window_doc["location"] = window_location  # AC-PER-41 metadata (inventory-api ignores unknown window fields)
+        # AC-PER-49/50 window statistics (inventory-api ignores unknown window fields)
+        window_doc["structure_filtered"] = len(structure)
+        window_doc["person_crops_dropped"] = ctx.person_crops_dropped
         if privacy is not None:
             window_doc["privacy"] = privacy  # AC-PER-37 metadata (inventory-api ignores unknown window fields)
         if not no_capture:
@@ -600,6 +636,73 @@ class Reconciler:
             "stock_updates": stock_updates,
         }
         return payload, instances, claims
+
+    def _is_person_label(self, label: str) -> bool:
+        item = self.mapper.item(self.mapper.map(label).catalog_id)
+        return bool(item and item.get("category") == "person")
+
+    def _is_body(self, label: str) -> bool:
+        """AC-PER-49 body-part label. Review round: only an exact/synonym catalog name ("robot hand") is kept as an item,
+        and never a face/head label: "head" fuzzy-maps to headset, and its box must stay a person region."""
+        if not is_body_label(label):
+            return False
+        match = self.mapper.map(label)
+        if region_kind(label) == "face" or match.catalog_id == UNKNOWN or self._is_person_label(label):
+            return True
+        return match.method not in ("exact", "synonym")
+
+    def _is_region_label(self, label: str) -> bool:
+        return self._is_body(label) or self._is_person_label(label)
+
+    def _person_regions(
+        self, window: Window, objects: Sequence[dict[str, Any]], dets: list[list[Detection]]
+    ) -> dict[int, list[tuple[tuple[float, float, float, float], str]]]:
+        """AC-PER-49: person regions per frame: detector boxes labelled as the person class or a body part, and omni
+        object boxes labelled so (on their frame_index; every frame without one). people[] carries no box."""
+        n = len(window.frames)
+        regions: dict[int, list[tuple[tuple[float, float, float, float], str]]] = {}
+        for f, frame_dets in enumerate(dets):
+            for det in frame_dets:
+                if self._is_region_label(det.label):
+                    regions.setdefault(f, []).append((tuple(float(v) for v in det.bbox), region_kind(det.label)))
+        for o in objects:
+            label = str(o.get("label") or "")
+            box = o.get("bbox")
+            if not self._is_region_label(label) or not isinstance(box, list) or len(box) != 4:
+                continue
+            try:
+                b = tuple(float(v) for v in box)
+            except (TypeError, ValueError):
+                continue
+            fi = o.get("frame_index")
+            frames = [fi] if isinstance(fi, int) and not isinstance(fi, bool) and 0 <= fi < n else range(n)
+            for f in frames:
+                regions.setdefault(f, []).append((b, region_kind(label)))
+        return regions
+
+    def _det_allowed(self, match: LabelMatch, det: Detection) -> bool:
+        """AC-PER-49: a body-part detection links to nothing; a person detection only to a person instance."""
+        if self._is_body(det.label):
+            return False
+        if self._is_person_label(det.label):
+            item = self.mapper.item(match.catalog_id)
+            return bool(item and item.get("category") == "person")
+        return True
+
+    def _overlaps_person(self, ctx: _WindowContext, o: _Observed) -> bool:
+        regions = ctx.regions(o.frame_idx)
+        if o.bbox is None or not regions:
+            return False
+        return overlaps_person(o.bbox, [r[0] for r in regions], [r[1] for r in regions])
+
+    def _same_area(self, a: str | None, b: str | None) -> bool:
+        """AC-PER-51: one place for event purposes: equal, one inside the other, or the same module."""
+        if a is None or b is None:
+            return False
+        if a == b or self.resolver.within(a, b) or self.resolver.within(b, a):
+            return True
+        module = self.resolver.module_of(a)
+        return module is not None and module == self.resolver.module_of(b)
 
     def _object_location(self, ctx: _WindowContext, o: _Observed) -> str | None:
         """Camera-configured zone (config.camera_zones) containing the centre of the object's box, when it is a
@@ -817,6 +920,8 @@ class Reconciler:
             return None
         best, found = 0.0, None
         for d_i, det in enumerate(dets[e.frame_index]):
+            if not self._det_allowed(e.match, det):
+                continue
             det_match = self.mapper.map(det.label)
             if e.match.catalog_id != UNKNOWN and det_match.catalog_id != e.match.catalog_id:
                 continue
@@ -854,7 +959,7 @@ class Reconciler:
         best, linked = 0.0, None
         for f in frames:
             for d_i, det in enumerate(dets[f]):
-                if (f, d_i) in used:
+                if (f, d_i) in used or not self._det_allowed(e.match, det):
                     continue
                 overlap = iou(e.box, det.bbox)
                 if overlap >= self.config.link_iou and overlap > best:
@@ -875,7 +980,7 @@ class Reconciler:
         best: tuple[float, tuple[int, int]] | None = None
         for f in frames:
             for d_i, det in enumerate(dets[f]):
-                if (f, d_i) in used:
+                if (f, d_i) in used or not self._det_allowed(match, det):
                     continue
                 det_match = self.mapper.map(det.label)
                 same = (
@@ -931,6 +1036,14 @@ class Reconciler:
                 continue
             image = self._crop(ctx, o)
             if not self._exemplar_ok(o, image):
+                gated.append(o)
+                continue
+            if self._overlaps_person(ctx, o):
+                # AC-PER-49: a crop that overlaps a person is never embedded, stored or uploaded
+                o.person_overlap = True
+                ctx.person_crops_dropped += 1
+                logger.info("object crop overlaps a person region; crop dropped",
+                            extra={"window": ctx.window.index, "frame": o.frame_idx})
                 gated.append(o)
                 continue
             embedded.append(o)
@@ -1379,6 +1492,17 @@ class Reconciler:
             # AC-PER-43: a sighting in a private window is a location-only fact
             "description": None if ctx.no_capture else str(o.obj.get("description") or "")[:400],
         }
+        if o.person_overlap:
+            sighting["person_overlap"] = True  # AC-PER-49: the crop was dropped
+        regions = ctx.regions(o.frame_idx)
+        if regions and not ctx.no_capture:  # AC-PER-49: inventory-api checks any crop against these itself
+            if o.bbox is not None:  # review round: the regions that overlap this object survive the cap
+                regions = sorted(regions, key=lambda r: not overlaps_person(o.bbox, [r[0]], [r[1]]))
+            sent = regions[:MAX_PERSON_BOXES]
+            sighting["person_boxes"] = [
+                [round(min(max(float(v), 0.0), 1.0), 6) for v in ordered(box)] for box, _ in sent
+            ]
+            sighting["person_box_kinds"] = [kind for _, kind in sent]
         frame_uri = ctx.frame_uri(o.frame_idx)
         if frame_uri:
             sighting["frame_uri"] = frame_uri
@@ -1523,8 +1647,24 @@ class Reconciler:
             fi = fi if isinstance(fi, int) and 0 <= fi < n_frames else n_frames - 1
             actor = people.get(actor_ref) if actor_ref else None
             to_location = self.resolver.resolve(ev.get("to_location_hint"))
+            from_location = target.previous_location if target.entity_id else None
+            event_type = str(ev.get("type"))
+            # AC-PER-51: an event names the place it was seen when the hint gives none (a move only when it differs)
+            if to_location is None and target.location is not None and event_type not in LEAVES_INVENTORY and (
+                event_type != "moved" or not self._same_area(from_location, target.location)
+            ):
+                to_location = target.location
+            if event_type == "moved" and self._is_person(target) and from_location is not None and (
+                to_location is None or self._same_area(from_location, to_location)
+            ):
+                logger.info(
+                    "person track move without a change of place dropped",
+                    extra={"window": ctx.window.index, "entity_id": target.entity_id},
+                )
+                continue
             occurred = ctx.frame_ts(fi)
-            if target.entity_id and self._is_repeat(target.entity_id, str(ev.get("type")), to_location, occurred):
+            if target.entity_id and self._is_repeat(target.entity_id, str(ev.get("type")), self._dedup_place(to_location),
+                                                    occurred):
                 logger.info(
                     "omni event already recorded from an overlapping window; dropped",
                     extra={"window": ctx.window.index, "entity_id": target.entity_id, "type": ev.get("type")},
@@ -1539,7 +1679,7 @@ class Reconciler:
                     "actor_desc": (sanitise_text(actor.get("appearance")) or None)
                     if actor and not ctx.no_capture and not self._is_person(target)
                     else None,
-                    "from_location": target.previous_location if target.entity_id else None,
+                    "from_location": from_location,
                     "to_location": to_location,
                     "occurred_at": _iso(occurred),
                     "confidence": _clamp01(ev.get("confidence"), 0.5),
@@ -1548,6 +1688,11 @@ class Reconciler:
                 }
             )
         return _collapse_window_repeats(events)
+
+    def _dedup_place(self, location: str | None) -> str | None:
+        """Review round (AC-PER-51): destinations filled from sightings vary with the zone of the box centre, so the
+        cross-window dedup key uses the module (or the place itself outside modules)."""
+        return self.resolver.module_of(location) or location
 
     def _is_repeat(self, entity_id: str, event_type: str, to_location: str | None, occurred: datetime) -> bool:
         """True when the same event was recorded within ``event_dedup_s`` (overlapping windows show the same
@@ -1721,7 +1866,7 @@ class Reconciler:
             eid = resolve(ev.get("entity_id"), ev.get("entity_ref"))
             occurred = _parse_ts(ev.get("occurred_at"))
             if eid and occurred:
-                key = (eid, str(ev.get("event_type")), ev.get("to_location"))
+                key = (eid, str(ev.get("event_type")), self._dedup_place(ev.get("to_location")))
                 self._recent_events[key] = max(self._recent_events.get(key, occurred), occurred)
         horizon = timedelta(seconds=max(self.config.event_dedup_s, 0.0) * 6 + 60)
         for key, at in list(self._recent_events.items()):

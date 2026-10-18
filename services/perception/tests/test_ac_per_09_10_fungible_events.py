@@ -132,9 +132,11 @@ def test_ac_per_10_event_frame_index_out_of_range_falls_back_to_window_frame(mak
 
 
 def test_ac_per_10_event_to_location_hint_unknown_is_null(make_reconciler, inv):
+    """Amended by AC-PER-51 (UI4-06): an unresolvable hint still never becomes a location, but the event now names
+    the place the object was sighted in this window (LAB1, the camera's module) instead of no place at all."""
     process(make_reconciler(), [[("drill-1", BOX_A)]], [obj("drill", BOX_A)], {"drill-1": "drill"},
             events=[_moved_event(frame_index=0, to="somewhere over the rainbow")])
-    assert inv.last["events"][0].get("to_location") is None
+    assert inv.last["events"][0].get("to_location") == "LAB1"
 
 
 # ---------------------------------------------------------------------------------------------- AC-PER-10 speech events

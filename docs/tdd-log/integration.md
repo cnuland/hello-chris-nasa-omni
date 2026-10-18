@@ -201,3 +201,17 @@ Reported, not changed (they need spec or contract owners):
   `private: true`.
 - `make test`: inventory-api 465, perception 1040, agent 560, eval 401 + 1 skipped (both gates PASSED), dashboard
   389, e2e 28. All suites passed.
+
+## UI review round 4: crop privacy (UI4-01) (2026-10-18)
+
+- `tests/e2e/test_e2e_crop_privacy.py::test_e2e_13` (own database, API and object store; the shared scene is untouched):
+  real perception replay on 1080x608 frames, unknown object box = the live 915x258 crop over a person, a window, a laptop
+  clear of everyone. Asserts: detector queried `person` and `face`; no exemplar or crop for the unknown, its sightings
+  `person_overlap`, its review image a frame; the laptop keeps its crop; no `window` entity or review; no person
+  exemplars; only the laptop's crops exist in the bucket. Written after the implementation; verified red by disabling
+  the perception overlap check, the person-link guard and the API check (fails: `person_crops_dropped == 0`).
+- `test_e2e_contract_agent_stream_matches_dashboard_parser` asserted status phases {llm, tool, checking}; the agent's
+  committed AC-AGT-35 (37d0993) adds phase `facts`. dashboard/src/lib/sse.ts is phase-agnostic, so the e2e contract now
+  allows `facts` (contract alignment, not a weakening).
+- `make test`: inventory-api 506, perception 1228, agent 632, eval 408 + 1 skipped, dashboard 422, e2e 29: all passed.
+  `make eval`: gate PASSED. `make lint`: clean.

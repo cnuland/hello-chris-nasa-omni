@@ -82,12 +82,13 @@ def merge_entities(
             "quality": r["quality"],
             "crop_uri": r["crop_uri"],
             "created_at": r["created_at"].isoformat(),
+            "sighting_id": r["sighting_id"],  # AC-API-41 link, restored on unmerge
         }
         for r in conn.execute(
             """DELETE FROM entity_exemplar WHERE exemplar_id IN (
                    SELECT exemplar_id FROM entity_exemplar WHERE entity_id = %s
                     ORDER BY quality DESC, created_at DESC, exemplar_id DESC OFFSET %s)
-               RETURNING exemplar_id, embedding::text AS embedding, quality, crop_uri, created_at""",
+               RETURNING exemplar_id, embedding::text AS embedding, quality, crop_uri, created_at, sighting_id""",
             (str(target_id), EXEMPLAR_CAP),
         )
     ]
@@ -381,11 +382,13 @@ def unmerge_entity(
     reinserted: list[int] = []
     for d in detail.get("dropped_exemplars") or []:
         r = conn.execute(
-            """INSERT INTO entity_exemplar (exemplar_id, entity_id, embedding, quality, crop_uri, created_at)
-               SELECT %s, %s, %s::halfvec, %s, %s, %s WHERE EXISTS (SELECT 1 FROM entity WHERE entity_id = %s)
+            """INSERT INTO entity_exemplar (exemplar_id, entity_id, embedding, quality, crop_uri, created_at,
+                   sighting_id)
+               SELECT %s, %s, %s::halfvec, %s, %s, %s, (SELECT sighting_id FROM sighting WHERE sighting_id = %s)
+                WHERE EXISTS (SELECT 1 FROM entity WHERE entity_id = %s)
                ON CONFLICT (exemplar_id) DO NOTHING RETURNING exemplar_id""",
             (d["exemplar_id"], d["entity_id"], d["embedding"], d["quality"], d["crop_uri"], d["created_at"],
-             d["entity_id"]),
+             d.get("sighting_id"), d["entity_id"]),
         ).fetchone()
         if r is not None:
             reinserted.append(r["exemplar_id"])
@@ -398,13 +401,14 @@ def unmerge_entity(
             "quality": r["quality"],
             "crop_uri": r["crop_uri"],
             "created_at": r["created_at"].isoformat(),
+            "sighting_id": r["sighting_id"],  # AC-API-41 link, restored on unmerge
         }
         for entity in (s, t)
         for r in conn.execute(
             """DELETE FROM entity_exemplar WHERE exemplar_id IN (
                    SELECT exemplar_id FROM entity_exemplar WHERE entity_id = %s
                     ORDER BY quality DESC, created_at DESC, exemplar_id DESC OFFSET %s)
-               RETURNING exemplar_id, entity_id, embedding::text AS embedding, quality, crop_uri, created_at""",
+               RETURNING exemplar_id, entity_id, embedding::text AS embedding, quality, crop_uri, created_at, sighting_id""",
             (entity, EXEMPLAR_CAP),
         )
     ]

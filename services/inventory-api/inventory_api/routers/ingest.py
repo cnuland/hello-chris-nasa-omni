@@ -20,9 +20,16 @@ from fastapi.responses import JSONResponse
 
 from ..deps import Ctx
 from ..errors import Unprocessable
+from ..privacy import overlaps_person
 from ..repo import HIDDEN_STATUSES, jsonb, real, write_audit
-from ..schemas import CandidatesRequest, IngestWindow
+from ..schemas import AssignmentIn, CandidatesRequest, IngestWindow
 from ..storage import uri_to_key
+
+# AC-API-41 review round: a withheld crop is deleted from the bucket after commit unless something references it
+_CROP_REFERENCED_SQL = """SELECT 1 FROM entity_exemplar WHERE crop_uri = %(u)s
+                          UNION ALL SELECT 1 FROM entity WHERE snapshot_uri = %(u)s
+                          UNION ALL SELECT 1 FROM review_item WHERE image_uri = %(u)s
+                          UNION ALL SELECT 1 FROM sighting WHERE frame_uri = %(u)s LIMIT 1"""
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ingest", tags=["ingest"])
@@ -296,6 +303,35 @@ def _window_privacy(
     return True, reason if reason in PRIVACY_REASONS else "private_zone"
 
 
+def _person_overlap(a: AssignmentIn) -> bool:
+    """AC-API-41: the sighting's crop overlaps a person: the client says so, or it sends person boxes and an exemplar
+    whose crop box (the sighting bbox) overlaps one of them, or cannot be checked (no bbox)."""
+    s = a.sighting
+    if s.person_overlap:
+        return True
+    if not s.person_boxes or a.exemplar is None:
+        return False
+    return s.bbox is None or overlaps_person(s.bbox, s.person_boxes, s.person_box_kinds)
+
+
+def _withheld_crops(
+    body: IngestWindow, kinds: list[str], overlaps: list[bool], privacy: _Privacy
+) -> dict[str, str | None]:
+    """AC-API-41: crop URI -> the frame a review shows instead (None when the sighting has no stored frame), for every
+    crop that is not stored because it overlaps a person or belongs to a person entity. A review that would need a
+    withheld crop and has no frame to fall back on is 422 (checked before anything is written)."""
+    withheld: dict[str, str | None] = {}
+    for a, kind, overlap, private in zip(body.assignments, kinds, overlaps, privacy.private_assignments, strict=True):
+        crop = a.exemplar.crop_uri if a.exemplar is not None else None
+        if crop and (overlap or kind == "person"):
+            withheld[crop] = None if private else a.sighting.frame_uri
+    for i, rv in enumerate(body.reviews):
+        if rv.image_uri in withheld and withheld[rv.image_uri] is None:
+            raise Unprocessable(f"reviews[{i}]: image_uri is a crop that overlaps a person and there is no frame to "
+                                "show instead")
+    return withheld
+
+
 def _request_digest(body: IngestWindow) -> str:
     canonical = json.dumps(body.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()
@@ -324,13 +360,14 @@ def ingest_window(body: IngestWindow, ctx: Ctx) -> JSONResponse:
     _check_uris(body, ctx.bucket)
     try:
         with ctx.db.connection() as conn, conn.transaction():
-            result = _record_window(conn, body)
+            result, withheld = _record_window(conn, body)
     except psycopg.IntegrityError as exc:
         logger.warning("ingest rejected by database constraint", extra={"error": exc.diag.message_primary})
         raise Unprocessable(f"constraint violation: {exc.diag.message_primary}") from exc
     except psycopg.DataError as exc:
         logger.warning("ingest rejected: invalid data", extra={"error": exc.diag.message_primary})
         raise Unprocessable(f"invalid data: {exc.diag.message_primary}") from exc
+    _purge_withheld(ctx, withheld)
     logger.info(
         "window ingested",
         extra={
@@ -344,7 +381,24 @@ def ingest_window(body: IngestWindow, ctx: Ctx) -> JSONResponse:
     return JSONResponse(jsonable_encoder(result), status_code=201)
 
 
-def _record_window(conn: psycopg.Connection, body: IngestWindow) -> dict[str, Any]:
+def _purge_withheld(ctx: Any, withheld: set[str]) -> None:
+    """Delete withheld person crops from the object store (perception uploaded them before the API refused them), so
+    /media cannot serve them at their guessable key. Best effort: a failure is logged, never fails the ingest."""
+    for uri in sorted(withheld):
+        key = uri_to_key(uri, ctx.bucket)
+        if key is None:
+            continue
+        try:
+            with ctx.db.connection() as conn:
+                if conn.execute(_CROP_REFERENCED_SQL, {"u": uri}).fetchone() is not None:
+                    continue
+            ctx.store.delete(key)
+            logger.info("withheld person crop deleted from the object store", extra={"key": key})
+        except Exception as exc:  # noqa: BLE001 - object store / DB are remote dependencies
+            logger.warning("deleting a withheld crop failed", extra={"key": key, "error": str(exc)})
+
+
+def _record_window(conn: psycopg.Connection, body: IngestWindow) -> tuple[dict[str, Any], set[str]]:
     digest = _request_digest(body)
     previous = _previous_result(conn, digest)
     if previous is not None:
@@ -352,7 +406,7 @@ def _record_window(conn: psycopg.Connection, body: IngestWindow) -> dict[str, An
             "identical ingest already recorded; returning the original result",
             extra={"window_id": str(previous["window_id"])},
         )
-        return previous
+        return previous, set()
 
     locs = _load_locations(conn)
     _validate_references(conn, body, locs)
@@ -371,6 +425,10 @@ def _record_window(conn: psycopg.Connection, body: IngestWindow) -> dict[str, An
 
     w = body.window
     private_window, privacy_reason = _window_privacy(body, locs, camera_location, privacy)
+    kinds = [a.new_entity.kind if a.new_entity is not None else survivors[a.entity_id].kind  # type: ignore[index]
+             for a in body.assignments]
+    overlaps = [_person_overlap(a) for a in body.assignments]
+    withheld = _withheld_crops(body, kinds, overlaps, privacy)
     # AC-API-39: a private window keeps no text, whatever the client sent
     window_id = conn.execute(
         """INSERT INTO observation_window (camera_id, t_start, t_end, scene_summary, transcript, audio_events, model,
@@ -393,15 +451,16 @@ def _record_window(conn: psycopg.Connection, body: IngestWindow) -> dict[str, An
     ref_map: dict[str, UUID] = {}
     created: list[UUID] = []
     updated: list[UUID] = []
-    for a, private in zip(body.assignments, privacy.private_assignments, strict=True):
+    for a, private, kind, overlap in zip(body.assignments, privacy.private_assignments, kinds, overlaps, strict=True):
         s = a.sighting
+        # AC-API-41: no crop or exemplar of a person (a crop over a person region, or of a person entity)
+        no_exemplar = overlap or kind == "person"
         frame_uri = None if private else s.frame_uri
-        crop_uri = None if private or a.exemplar is None else a.exemplar.crop_uri
+        crop_uri = None if private or no_exemplar or a.exemplar is None else a.exemplar.crop_uri
         snapshot = crop_uri or frame_uri
         if a.new_entity is not None:
             ne = a.new_entity
             entity_id = uuid4()
-            kind = ne.kind
             conn.execute(
                 """INSERT INTO entity (entity_id, catalog_id, kind, status, label, description, attributes,
                        last_location, last_seen_at, first_seen_at, confidence, snapshot_uri, created_by,
@@ -442,7 +501,7 @@ def _record_window(conn: psycopg.Connection, body: IngestWindow) -> dict[str, An
         else:
             assert a.entity_id is not None
             survivor = survivors[a.entity_id]
-            entity_id, kind = survivor.entity_id, survivor.kind
+            entity_id = survivor.entity_id
             # AC-API-31: a sighting newer than last_seen_at refreshes last_seen_at/confidence/snapshot. It moves the
             # entity only when it is also newer than location_set_at (an operator's move is not undone by a late
             # window). Both conditions are evaluated on the row before this UPDATE. first_seen_at can move earlier.
@@ -478,19 +537,20 @@ def _record_window(conn: psycopg.Connection, body: IngestWindow) -> dict[str, An
                 updated.append(entity_id)
         if a.ref:
             ref_map[a.ref] = entity_id
-        conn.execute(
+        sighting_id = conn.execute(
             """INSERT INTO sighting (entity_id, window_id, location_id, seen_at, bbox, bbox_source, confidence,
-                   frame_uri, description) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                   frame_uri, description, person_overlap) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               RETURNING sighting_id""",
             (entity_id, window_id, s.location_id, s.seen_at, s.bbox, s.bbox_source, s.confidence, frame_uri,
-             None if private_window else s.description),
-        )
-        # Appearance vectors of people captured in crew quarters / the WHC are not kept (they are derived from
-        # private pixels). Object embeddings are kept without their crop, because dedup needs them.
-        if a.exemplar is not None and not (private and kind == "person"):
+             None if private_window else s.description, overlap),
+        ).fetchone()["sighting_id"]
+        # No appearance vector of a person is kept (AC-PER-36 / AC-API-41), and none cut from a crop that overlaps a
+        # person. Object embeddings from private windows are kept without their crop, because dedup needs them.
+        if a.exemplar is not None and not no_exemplar:
             conn.execute(
-                "INSERT INTO entity_exemplar (entity_id, embedding, quality, crop_uri) "
-                "VALUES (%s, %s::halfvec, %s, %s)",
-                (entity_id, _vector_literal(a.exemplar.embedding), a.exemplar.quality, crop_uri),
+                "INSERT INTO entity_exemplar (entity_id, embedding, quality, crop_uri, sighting_id) "
+                "VALUES (%s, %s::halfvec, %s, %s, %s)",
+                (entity_id, _vector_literal(a.exemplar.embedding), a.exemplar.quality, crop_uri, sighting_id),
             )
             conn.execute(
                 """DELETE FROM entity_exemplar WHERE exemplar_id IN (
@@ -544,7 +604,7 @@ def _record_window(conn: psycopg.Connection, body: IngestWindow) -> dict[str, An
                         rv.kind,
                         review_entity,
                         [str(survivors[c].entity_id) for c in rv.candidate_ids],
-                        rv.image_uri,
+                        withheld.get(rv.image_uri) or rv.image_uri,  # AC-API-41: the frame, never a person crop
                         rv.description,
                         rv.observed_at,
                         rv.location_id,
@@ -604,7 +664,8 @@ def _record_window(conn: psycopg.Connection, body: IngestWindow) -> dict[str, An
             "decisions": len(body.decisions),
             "stock_keys": [{"catalog_id": su.catalog_id, "location_id": su.location_id} for su in body.stock_updates],
             "privacy_dropped_uris": len(privacy.dropped_uris),
+            "person_crops_withheld": len(withheld),
             "private": private_window,
         },
     )
-    return {"window_id": window_id, "entities": entities}
+    return {"window_id": window_id, "entities": entities}, set(withheld)

@@ -179,6 +179,7 @@ def _review_entity(item: dict[str, Any], counts: dict[str, int], private: set[st
         out["snapshot_url"] = None
         out["snapshot_bbox"] = None
         out["snapshot_bbox_source"] = None
+        out["snapshot_withheld_reason"] = "private_window"  # AC-API-44
     out["thumbnail_url"] = out["snapshot_url"]
     out["sighting_count"] = counts.get(str(out["entity_id"]), 0)
     return out
@@ -407,6 +408,17 @@ def resolve_review(review_id: UUID, body: ResolveRequest, ctx: Ctx) -> dict[str,
                 label = body.label or display_name
                 resolution["label"] = label
                 if entity is not None:
+                    # AC-API-41: an exemplar cut from a sighting whose crop overlapped a person never joins a
+                    # catalog class (it would match people as this item)
+                    withheld = [
+                        r["exemplar_id"]
+                        for r in conn.execute(
+                            """DELETE FROM entity_exemplar x USING sighting s
+                                WHERE x.entity_id = %s AND x.sighting_id = s.sighting_id AND s.person_overlap
+                               RETURNING x.exemplar_id""",
+                            (entity_id,),
+                        )
+                    ]
                     conn.execute(
                         """UPDATE entity SET catalog_id = %s, status = 'confirmed', label = %s, needs_review = FALSE,
                                review_reason = NULL, updated_at = now() WHERE entity_id = %s""",
@@ -426,6 +438,7 @@ def resolve_review(review_id: UUID, body: ResolveRequest, ctx: Ctx) -> dict[str,
                             },
                             "after": {"status": "confirmed", "label": label, "catalog_id": catalog_id},
                             "note": body.note,
+                            "withheld_exemplar_ids": sorted(withheld),
                         },
                     )
                 new_status = "resolved"

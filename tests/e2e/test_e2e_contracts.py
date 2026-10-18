@@ -91,7 +91,8 @@ def test_e2e_contract_agent_stream_matches_dashboard_parser(replay, make_agent):
     names = [n for n, _ in events]
     # AC-AGT-16: progress `status` events may precede the answer tokens; tokens still join to done.reply
     assert names[-1] == "done" and "token" in names and set(names[:-1]) <= {"status", "token"}
-    assert all(d.get("phase") in {"llm", "tool", "checking"} for n, d in events if n == "status")
+    # AC-AGT-35 (round 4) adds phase "facts" (structured tool totals); dashboard/src/lib/sse.ts is phase-agnostic
+    assert all(d.get("phase") in {"llm", "tool", "facts", "checking"} for n, d in events if n == "status")
     done = events[-1][1]
     assert "".join(d["text"] for n, d in events if n == "token") == done["reply"]
     assert done["citations"] and all(c.get("entity_id") and c.get("at") for c in done["citations"])

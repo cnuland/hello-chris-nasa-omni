@@ -32,6 +32,63 @@ def label_key(text: str) -> str:
     return normalise_label(text).replace(" ", "")
 
 
+# AC-PER-50: words that end a label's noun phrase ("handle on the hatch" -> "handle", "window showing Earth" -> "window")
+_PHRASE_END = frozenset(
+    ["of", "with", "on", "in", "inside", "at", "near", "behind", "under", "over", "above", "below", "beneath", "through", "from", "to", "for", "into", "onto", "by", "and", "or", "showing", "visible", "seen", "leading", "holding", "attached", "mounted", "outside", "against", "between", "around"]
+)
+
+
+_DETERMINERS = frozenset(["the", "a", "an", "his", "her", "their", "its", "this", "that", "some"])
+
+
+def label_heads(text: str) -> list[str]:
+    """AC-PER-50/49 keys of a label's noun phrase, for denylist matching: the phrase is ``normalise_label(text)``
+    without leading determiners ("the man" -> "man"), cut before the first preposition/participle (never at the first
+    word); the keys (``label_key`` form, spaces removed) are the whole phrase, its last two words and its last word
+    (the head noun), in that order. Empty for an empty label."""
+    words = normalise_label(text).split()
+    while len(words) > 1 and words[0] in _DETERMINERS:
+        words = words[1:]
+    for i, w in enumerate(words):
+        if i > 0 and w in _PHRASE_END:
+            words = words[:i]
+            break
+    if not words:
+        return []
+    keys = ["".join(words), "".join(words[-2:]), words[-1]]
+    return list(dict.fromkeys(keys))
+
+
+# AC-PER-50 (UI4-05): station structure and outside views are not inventory. Keys in label_key form; matched against
+# label_heads(). Applied only to labels that map to UNKNOWN, so a catalogued item is always kept.
+STRUCTURE_KEYS = frozenset(
+    label_key(k)
+    for k in (
+        "hatch", "hatchway", "hatch handle", "window", "porthole", "viewport", "handle", "handrail", "handhold",
+        "wall", "panel", "rack", "cable", "cables", "cabling", "wire", "wires", "wiring", "cover", "fabric cover",
+        "light", "lights", "lamp", "vent", "grille", "duct", "fan", "ceiling", "floor", "deck", "bulkhead", "hull",
+        "module", "node", "station", "space station", "iss", "structure", "station structure", "airlock", "cupola",
+        "opening", "port", "docking port", "frame", "bracket", "mount", "rail", "interior", "background", "view",
+        "spacecraft", "vehicle", "capsule", "dragon", "soyuz", "progress", "cygnus", "solar array", "truss",
+        "radiator", "earth", "planet", "space", "stars", "robotic arm", "robot arm", "canadarm", "canadarm2",
+    )
+)
+# Review round: broad nouns that also head real loose items ("memory module", "portable fan", "camera mount",
+# "laptop cover", "picture frame") are structure only as the whole label
+STRUCTURE_WHOLE_ONLY = frozenset(label_key(k) for k in ("module", "fan", "mount", "frame", "cover"))
+
+
+def is_structure_label(text: str) -> bool:
+    """AC-PER-50: the label names station structure or an outside view (hatch, window, handrail, spacecraft, Earth, ...).
+    Callers apply it only to labels that map to UNKNOWN."""
+    heads = label_heads(text)
+    if not heads:
+        return False
+    return heads[0] in STRUCTURE_KEYS or any(
+        k in STRUCTURE_KEYS and k not in STRUCTURE_WHOLE_ONLY for k in heads[1:]
+    )
+
+
 def _bigrams(text: str) -> Counter[str]:
     padded = f" {text} "
     return Counter(padded[i : i + 2] for i in range(len(padded) - 1))
