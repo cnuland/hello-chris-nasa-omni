@@ -1,0 +1,16 @@
+# GB10 single-node profile (UNTESTED). Data + app tiers are shared with the cluster profile; perception's GPU
+# nodeSelector/toleration are removed and stride is shortened via the patch below.
+resources:
+  - ../data
+  - inference-gb10.yaml
+  - ../app
+patches:
+  - target: {kind: Deployment, name: perception-cam-handheld}
+    patch: |-
+      - op: remove
+        path: /spec/template/spec/nodeSelector
+      - op: remove
+        path: /spec/template/spec/tolerations
+      - op: replace
+        path: /spec/template/spec/containers/0/env/2
+        value: {name: PERCEPTION_STRIDE_S, value: "12"}

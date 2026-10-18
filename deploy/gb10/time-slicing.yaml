@@ -1,0 +1,13 @@
+# One GB10 GPU shared by every model pod: the device plugin advertises 6 nvidia.com/gpu "replicas". Memory is NOT
+# isolated by time-slicing; each vLLM process is bounded by its --gpu-memory-utilization fraction (see README).
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: time-slicing-config, namespace: nvidia-gpu-operator}
+data:
+  gb10: |-
+    version: v1
+    sharing:
+      timeSlicing:
+        resources:
+          - name: nvidia.com/gpu
+            replicas: 6

@@ -1,0 +1,114 @@
+# GB10 inference tier (UNTESTED, see README.md). No sm75 patches, no nodeSelectors (single node), 1 time-sliced GPU each.
+apiVersion: v1
+kind: Namespace
+metadata: {name: nasa-inference, labels: {app.kubernetes.io/part-of: nasa-omni}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: gemma4, namespace: nasa-inference, labels: {app: gemma4}}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: gemma4}}
+  template:
+    metadata: {labels: {app: gemma4}}
+    spec:
+      containers:
+        - name: vllm
+          image: docker.io/vllm/vllm-openai:v0.31.0   # verify an sm_121 / CUDA 13 build; pin a digest
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              pip install --quiet --no-cache-dir 'librosa>=0.10' 'soundfile>=0.12'   # vllm[audio]: else input_audio is dropped
+              exec vllm serve RedHatAI/gemma-4-12B-it-FP8-Dynamic --served-model-name gemma4 agent \
+                --host 0.0.0.0 --port 8000 --max-model-len 16384 --max-num-seqs 4 \
+                --gpu-memory-utilization 0.24 --limit-mm-per-prompt '{"image":8,"audio":1}' \
+                --enable-auto-tool-choice --tool-call-parser gemma4 --reasoning-parser gemma4 \
+                --default-chat-template-kwargs '{"enable_thinking": false}'
+          env: [{name: HOME, value: /cache}, {name: HF_HOME, value: /cache/hf}]
+          ports: [{containerPort: 8000, name: openai}]
+          resources: {limits: {nvidia.com/gpu: "1"}}
+          volumeMounts: [{name: cache, mountPath: /cache}]
+          startupProbe: {httpGet: {path: /health, port: 8000}, periodSeconds: 15, failureThreshold: 240}
+          readinessProbe: {httpGet: {path: /health, port: 8000}, periodSeconds: 10}
+      volumes: [{name: cache, persistentVolumeClaim: {claimName: model-cache}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: gemma4, namespace: nasa-inference}
+spec: {selector: {app: gemma4}, ports: [{name: openai, port: 8000}]}
+---
+# chat uses the same server: the agent's AGENT_LLM_URL points here (alias service keeps the app config unchanged)
+apiVersion: v1
+kind: Service
+metadata: {name: agent-llm, namespace: nasa-inference}
+spec: {selector: {app: gemma4}, ports: [{name: openai, port: 8000}]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: asr, namespace: nasa-inference, labels: {app: asr}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: asr}}
+  template:
+    metadata: {labels: {app: asr}}
+    spec:
+      containers:
+        - name: vllm
+          image: docker.io/vllm/vllm-openai:v0.31.0
+          args: ["openai/whisper-large-v3-turbo", "--served-model-name", "asr", "--host", "0.0.0.0", "--port", "8000",
+                 "--gpu-memory-utilization", "0.05", "--max-num-seqs", "4"]
+          env: [{name: HOME, value: /cache}, {name: HF_HOME, value: /cache/hf}]
+          ports: [{containerPort: 8000, name: openai}]
+          resources: {limits: {nvidia.com/gpu: "1"}}
+          volumeMounts: [{name: cache, mountPath: /cache}]
+          readinessProbe: {httpGet: {path: /health, port: 8000}, periodSeconds: 10}
+      volumes: [{name: cache, persistentVolumeClaim: {claimName: model-cache}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: asr, namespace: nasa-inference}
+spec: {selector: {app: asr}, ports: [{name: openai, port: 8000}]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: dgemma, namespace: nasa-inference, labels: {app: dgemma}}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: dgemma}}
+  template:
+    metadata: {labels: {app: dgemma}}
+    spec:
+      containers:
+        - name: vllm
+          image: docker.io/vllm/vllm-openai:v0.31.0
+          args: ["aidendle94/diffusiongemma-26B-A4B-it-INT8-dynamic", "--served-model-name", "dgemma", "--host", "0.0.0.0",
+                 "--port", "8000", "--diffusion-config", '{"canvas_length":64}', "--max-logprobs", "32",
+                 "--max-model-len", "4096", "--max-num-seqs", "2", "--gpu-memory-utilization", "0.30",
+                 "--limit-mm-per-prompt", '{"image":2}']
+          env: [{name: HOME, value: /cache}, {name: HF_HOME, value: /cache/hf}]
+          ports: [{containerPort: 8000, name: openai}]
+          resources: {limits: {nvidia.com/gpu: "1"}}
+          volumeMounts: [{name: cache, mountPath: /cache}]
+          startupProbe: {httpGet: {path: /health, port: 8000}, periodSeconds: 15, failureThreshold: 240}
+        - name: decision-server
+          image: docker.io/vllm/vllm-openai:v0.31.0
+          command: ["python3", "/vllm-workspace/examples/features/structured_diffusion/structured_server.py",
+                    "--upstream=http://127.0.0.1:8000", "--tokenizer=aidendle94/diffusiongemma-26B-A4B-it-INT8-dynamic",
+                    "--model=dgemma", "--canvas=64", "--host=0.0.0.0", "--port=8011"]   # TP1: constrained reads OK
+          env: [{name: HOME, value: /cache}, {name: HF_HOME, value: /cache/hf}]
+          ports: [{containerPort: 8011, name: decision}]
+          volumeMounts: [{name: cache, mountPath: /cache}]
+      volumes: [{name: cache, persistentVolumeClaim: {claimName: model-cache}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: dgemma, namespace: nasa-inference}
+spec: {selector: {app: dgemma}, ports: [{name: openai, port: 8000}, {name: decision, port: 8011}]}
+---
+# models are downloaded once and kept (no internet on orbit: pre-seed this volume before launch)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: model-cache, namespace: nasa-inference}
+spec: {accessModes: [ReadWriteMany], resources: {requests: {storage: 200Gi}}}
