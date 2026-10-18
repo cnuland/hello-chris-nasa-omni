@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import math
 from typing import Any, Literal
 from uuid import UUID
 
@@ -20,6 +19,7 @@ from ..repo import (
     like_pattern,
     location_subtree_sql,
     no_capture_locations,
+    normalised_bbox,
     real,
     write_audit,
 )
@@ -53,20 +53,32 @@ _MODULE_OF_CTE = """
 _BEST_EXEMPLAR_SQL = """(SELECT bx.embedding FROM entity_exemplar bx WHERE bx.entity_id = s.entity_id
                           ORDER BY bx.quality DESC, bx.created_at DESC, bx.exemplar_id DESC LIMIT 1)"""
 
-# AC-API-25: up to 8 suggested duplicates per subject, for many subjects in ONE statement (no per-review queries).
-_SUGGEST_SQL = f"""
-WITH RECURSIVE {_MODULE_OF_CTE},
-subj AS (
-    SELECT s.entity_id, s.kind, s.catalog_id, {_KEY_SQL.format(col="s.label")} AS key, mo.module_id,
-           {_BEST_EXEMPLAR_SQL} AS best
-      FROM entity s LEFT JOIN module_of mo ON mo.location_id = s.last_location
-     WHERE s.entity_id = ANY(%(subjects)s::uuid[])
-)
-SELECT subj.entity_id AS subject_id, c.entity_id, c.similarity
-  FROM subj
-  CROSS JOIN LATERAL (
-        SELECT e.entity_id, sim.similarity,
-               (subj.module_id IS NOT NULL AND em.module_id = subj.module_id) AS same_module, e.last_seen_at
+# AC-API-35 ranking weights. score = W_APPEARANCE * max(cosine, 0)        (only when both sides have exemplars)
+#                                  + W_TEXT * pg_trgm similarity(label + description)
+#                                  + W_ZONE (same zone) or W_MODULE (same module, other zone)
+#                                  + W_TIME / (1 + |delta last_seen_at| in hours)
+W_APPEARANCE, W_TEXT, W_ZONE, W_MODULE, W_TIME = 1.0, 0.5, 0.3, 0.15, 0.2
+# match_reasons thresholds: cosine, description-only trigram similarity, |delta last_seen_at| in seconds.
+REASON_APPEARANCE, REASON_DESCRIPTION, REASON_TIME_S = 0.7, 0.3, 3600.0
+
+_SUBJ_COLUMNS = f"""s.entity_id, s.kind, s.catalog_id, {_KEY_SQL.format(col="s.label")} AS key, mo.module_id,
+           s.last_location, sl.kind AS location_kind, s.last_seen_at,
+           lower(s.label || ' ' || coalesce(s.description, '')) AS text,
+           nullif(btrim(lower(s.description)), '') AS descr,
+           {_BEST_EXEMPLAR_SQL} AS best"""
+_SUBJ_FROM = """entity s LEFT JOIN module_of mo ON mo.location_id = s.last_location
+                LEFT JOIN location sl ON sl.location_id = s.last_location"""
+
+# Score components of candidate e for subject subj (used for suggestions and for stored candidates).
+_COMPONENTS_SQL = """
+        SELECT e.entity_id, e.last_seen_at, sim.similarity,
+               similarity(subj.text, lower(e.label || ' ' || coalesce(e.description, ''))) AS text_sim,
+               CASE WHEN subj.descr IS NOT NULL AND nullif(btrim(e.description), '') IS NOT NULL
+                    THEN similarity(subj.descr, lower(e.description)) END AS desc_sim,
+               (subj.last_location IS NOT NULL AND e.last_location = subj.last_location
+                AND subj.location_kind IN ('zone', 'container')) AS same_zone,
+               (subj.module_id IS NOT NULL AND em.module_id = subj.module_id) AS same_module,
+               abs(extract(epoch FROM e.last_seen_at - subj.last_seen_at)) AS dt
           FROM entity e
           LEFT JOIN catalog_item ci ON ci.catalog_id = e.catalog_id
           LEFT JOIN module_of em ON em.location_id = e.last_location
@@ -74,41 +86,62 @@ SELECT subj.entity_id AS subject_id, c.entity_id, c.similarity
                 SELECT max(1 - (x.embedding <=> subj.best)) AS similarity
                   FROM entity_exemplar x WHERE x.entity_id = e.entity_id AND subj.best IS NOT NULL
           ) sim ON TRUE
-         WHERE e.entity_id <> subj.entity_id
+         WHERE {where}
+"""
+
+_SCORE_SQL = f"""(
+      {W_APPEARANCE} * COALESCE(GREATEST(f.similarity, 0), 0)
+    + {W_TEXT} * f.text_sim
+    + CASE WHEN f.same_zone THEN {W_ZONE} WHEN f.same_module THEN {W_MODULE} ELSE 0 END
+    + COALESCE({W_TIME} / (1 + f.dt / 3600.0), 0)
+)"""
+
+_POOL_WHERE = f"""e.entity_id <> subj.entity_id
            AND e.status <> ALL(%(hidden)s)
            AND e.kind = subj.kind
            AND CASE WHEN subj.catalog_id IS NOT NULL THEN e.catalog_id = subj.catalog_id
                     ELSE subj.key <> '' AND ({_KEY_SQL.format(col="e.label")} = subj.key
-                                             OR {_KEY_SQL.format(col="ci.class_name")} = subj.key) END
-         ORDER BY sim.similarity DESC NULLS LAST, same_module DESC, e.last_seen_at DESC NULLS LAST, e.entity_id
+                                             OR {_KEY_SQL.format(col="ci.class_name")} = subj.key) END"""
+
+_RESULT_COLUMNS = "c.entity_id, c.similarity, c.score, c.desc_sim, c.same_zone, c.same_module, c.dt"
+
+# AC-API-25/35: up to 8 suggested duplicates per subject, ranked by score, for many subjects in ONE statement.
+_SUGGEST_SQL = f"""
+WITH RECURSIVE {_MODULE_OF_CTE},
+subj AS (SELECT {_SUBJ_COLUMNS} FROM {_SUBJ_FROM} WHERE s.entity_id = ANY(%(subjects)s::uuid[]))
+SELECT subj.entity_id AS subject_id, {_RESULT_COLUMNS}
+  FROM subj
+  CROSS JOIN LATERAL (
+        SELECT f.*, {_SCORE_SQL} AS score FROM ({_COMPONENTS_SQL.format(where=_POOL_WHERE)}) f
+         ORDER BY score DESC, f.similarity DESC NULLS LAST, f.last_seen_at DESC NULLS LAST, f.entity_id
          LIMIT %(cap)s
   ) c
- ORDER BY subj.entity_id
+ ORDER BY subj.entity_id, c.score DESC, c.similarity DESC NULLS LAST, c.last_seen_at DESC NULLS LAST, c.entity_id
 """
 
-# Similarity of stored candidates to their review subject's best exemplar, for all pairs in one statement.
-_PAIR_SIMILARITY_SQL = f"""
-WITH pairs AS (
-    SELECT p.subject_id, p.candidate_id FROM unnest(%(subjects)s::uuid[], %(candidates)s::uuid[])
+# The same score for stored candidates (their stored order is kept), for all pairs in one statement.
+_PAIR_SCORE_SQL = f"""
+WITH RECURSIVE {_MODULE_OF_CTE},
+pairs AS (
+    SELECT DISTINCT p.subject_id, p.candidate_id FROM unnest(%(subjects)s::uuid[], %(candidates)s::uuid[])
         AS p(subject_id, candidate_id)
-), subj AS (
-    SELECT s.entity_id, {_BEST_EXEMPLAR_SQL} AS best
-      FROM entity s WHERE s.entity_id IN (SELECT subject_id FROM pairs)
-)
-SELECT pairs.subject_id, pairs.candidate_id, max(1 - (x.embedding <=> subj.best)) AS similarity
+),
+subj AS (SELECT {_SUBJ_COLUMNS} FROM {_SUBJ_FROM} WHERE s.entity_id IN (SELECT subject_id FROM pairs))
+SELECT pairs.subject_id, {_RESULT_COLUMNS}
   FROM pairs JOIN subj ON subj.entity_id = pairs.subject_id
-  JOIN entity_exemplar x ON x.entity_id = pairs.candidate_id
- WHERE subj.best IS NOT NULL
- GROUP BY pairs.subject_id, pairs.candidate_id
+  CROSS JOIN LATERAL (
+        SELECT f.*, {_SCORE_SQL} AS score FROM ({_COMPONENTS_SQL.format(where="e.entity_id = pairs.candidate_id")}) f
+  ) c
 """
 
-# AC-API-26: bbox of the sighting (of the review's entity) whose frame is the review image, nearest observed_at.
+# AC-API-26/37: bbox (and its source) of the sighting of the review's entity whose frame is the review image, nearest
+# observed_at.
 _IMAGE_BBOX_SQL = """
-SELECT r.review_id, sg.bbox
+SELECT r.review_id, sg.bbox, sg.bbox_source
   FROM unnest(%(reviews)s::uuid[], %(entities)s::uuid[], %(uris)s::text[], %(observed)s::timestamptz[])
        AS r(review_id, entity_id, image_uri, observed_at)
   CROSS JOIN LATERAL (
-        SELECT s.bbox FROM sighting s
+        SELECT s.bbox, s.bbox_source FROM sighting s
          WHERE s.entity_id = r.entity_id AND s.frame_uri = r.image_uri AND s.bbox IS NOT NULL
          ORDER BY abs(extract(epoch FROM s.seen_at - r.observed_at)), s.sighting_id DESC
          LIMIT 1
@@ -116,14 +149,27 @@ SELECT r.review_id, sg.bbox
 """
 
 
-def _normalised_bbox(raw: Any) -> list[float] | None:
-    if raw is None or len(raw) != 4:
-        return None
-    box = [real(v) for v in raw]
-    if any(v is None or not math.isfinite(v) or v < 0.0 or v > 1.0 for v in box):
-        return None
-    x1, y1, x2, y2 = box
-    return box if x2 > x1 and y2 > y1 else None
+def _match_reasons(row: dict[str, Any]) -> list[str]:
+    """AC-API-35: why a candidate is suggested, in a fixed order."""
+    reasons: list[str] = []
+    if row["similarity"] is not None and row["similarity"] >= REASON_APPEARANCE:
+        reasons.append("similar appearance")
+    if row["desc_sim"] is not None and row["desc_sim"] >= REASON_DESCRIPTION:
+        reasons.append("similar description")
+    if row["same_zone"]:
+        reasons.append("same zone")
+    elif row["same_module"]:
+        reasons.append("same module")
+    if row["dt"] is not None and float(row["dt"]) <= REASON_TIME_S:
+        reasons.append("seen around the same time")
+    return reasons
+
+
+def _ranking(row: dict[str, Any]) -> dict[str, Any]:
+    return {"similarity": real(row["similarity"]), "score": real(row["score"]), "match_reasons": _match_reasons(row)}
+
+
+_UNSCORED: dict[str, Any] = {"similarity": None, "score": None, "match_reasons": []}
 
 
 def _review_entity(item: dict[str, Any], counts: dict[str, int], private: set[str]) -> dict[str, Any]:
@@ -131,6 +177,8 @@ def _review_entity(item: dict[str, Any], counts: dict[str, int], private: set[st
     out = dict(item)
     if out.get("last_location") in private:
         out["snapshot_url"] = None
+        out["snapshot_bbox"] = None
+        out["snapshot_bbox_source"] = None
     out["thumbnail_url"] = out["snapshot_url"]
     out["sighting_count"] = counts.get(str(out["entity_id"]), 0)
     return out
@@ -148,13 +196,13 @@ def _expand(conn, rows: list[dict[str, Any]], bucket: str) -> list[dict[str, Any
         if not stored[rid] and r["kind"] == "possible_duplicate" and r["entity_id"] is not None:
             to_suggest.append(str(r["entity_id"]))
 
-    suggestions: dict[str, list[tuple[str, float | None]]] = {}
+    suggestions: dict[str, list[tuple[str, dict[str, Any]]]] = {}
     if to_suggest:
-        for s in conn.execute(
+        for sg in conn.execute(
             _SUGGEST_SQL,
             {"subjects": list(dict.fromkeys(to_suggest)), "hidden": list(HIDDEN_STATUSES), "cap": MAX_SUGGESTED},
         ):
-            suggestions.setdefault(str(s["subject_id"]), []).append((str(s["entity_id"]), real(s["similarity"])))
+            suggestions.setdefault(str(sg["subject_id"]), []).append((str(sg["entity_id"]), _ranking(sg)))
 
     pair_subjects: list[str] = []
     pair_candidates: list[str] = []
@@ -163,13 +211,13 @@ def _expand(conn, rows: list[dict[str, Any]], bucket: str) -> list[dict[str, Any
             for c in stored[str(r["review_id"])]:
                 pair_subjects.append(str(r["entity_id"]))
                 pair_candidates.append(c)
-    pair_similarity: dict[tuple[str, str], float | None] = {}
+    pair_ranking: dict[tuple[str, str], dict[str, Any]] = {}
     if pair_subjects:
-        for p in conn.execute(_PAIR_SIMILARITY_SQL, {"subjects": pair_subjects, "candidates": pair_candidates}):
-            pair_similarity[(str(p["subject_id"]), str(p["candidate_id"]))] = real(p["similarity"])
+        for p in conn.execute(_PAIR_SCORE_SQL, {"subjects": pair_subjects, "candidates": pair_candidates}):
+            pair_ranking[(str(p["subject_id"]), str(p["entity_id"]))] = _ranking(p)
 
     with_entity = [r for r in rows if r["entity_id"] is not None and r["image_uri"]]
-    bboxes: dict[str, list[float] | None] = {}
+    bboxes: dict[str, tuple[list[float], str | None]] = {}
     if with_entity:
         for b in conn.execute(
             _IMAGE_BBOX_SQL,
@@ -180,7 +228,9 @@ def _expand(conn, rows: list[dict[str, Any]], bucket: str) -> list[dict[str, Any
                 "observed": [r["observed_at"] for r in with_entity],
             },
         ):
-            bboxes[str(b["review_id"])] = _normalised_bbox(b["bbox"])
+            box = normalised_bbox(b["bbox"])
+            if box is not None:
+                bboxes[str(b["review_id"])] = (box, b["bbox_source"])
 
     ids = {str(r["entity_id"]) for r in rows if r["entity_id"] is not None}
     ids |= {c for cs in stored.values() for c in cs}
@@ -203,15 +253,14 @@ def _expand(conn, rows: list[dict[str, Any]], bucket: str) -> list[dict[str, Any
         subject_id = str(r["entity_id"]) if r["entity_id"] is not None else None
         if stored[rid]:
             source = "stored"
-            picked = [(c, pair_similarity.get((subject_id, c)) if subject_id else None) for c in stored[rid]]
+            picked = [(c, pair_ranking.get((subject_id, c), _UNSCORED) if subject_id else _UNSCORED)
+                      for c in stored[rid]]
         elif subject_id is not None and suggestions.get(subject_id) and r["kind"] == "possible_duplicate":
             source = "suggested"
             picked = suggestions[subject_id]
         else:
             source, picked = "none", []
-        candidates = [
-            {**_review_entity(items[c], counts, private), "similarity": sim} for c, sim in picked if c in items
-        ]
+        candidates = [{**_review_entity(items[c], counts, private), **rank} for c, rank in picked if c in items]
         subject = _review_entity(items[subject_id], counts, private) if subject_id and subject_id in items else None
         out.append(_serialize_review(r, candidates, source, subject, bboxes.get(rid), private, bucket))
     return out
@@ -222,7 +271,7 @@ def _serialize_review(
     candidates: list[dict[str, Any]],
     candidates_source: str,
     subject: dict[str, Any] | None,
-    image_bbox: list[float] | None,
+    image_bbox: tuple[list[float], str | None] | None,
     private: set[str],
     bucket: str,
 ) -> dict[str, Any]:
@@ -238,7 +287,9 @@ def _serialize_review(
         "subject": subject,
         # Only URLs /media can serve; arbitrary stored strings never reach the dashboard.
         "image_url": None if hidden_image else uri_to_url(row["image_uri"], bucket),
-        "image_bbox": None if hidden_image else image_bbox,
+        "image_bbox": None if hidden_image or image_bbox is None else image_bbox[0],
+        # AC-API-37: 'detector' (solid box), 'omni' (approximate box) or null (unknown / legacy sighting)
+        "image_bbox_source": None if hidden_image or image_bbox is None else image_bbox[1],
         "description": row["description"],
         "observed_at": row["observed_at"],
         "location_id": row["location_id"],

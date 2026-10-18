@@ -432,9 +432,10 @@ def _record_window(conn: psycopg.Connection, body: IngestWindow) -> dict[str, An
         if a.ref:
             ref_map[a.ref] = entity_id
         conn.execute(
-            """INSERT INTO sighting (entity_id, window_id, location_id, seen_at, bbox, confidence, frame_uri,
-                   description) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
-            (entity_id, window_id, s.location_id, s.seen_at, s.bbox, s.confidence, frame_uri, s.description),
+            """INSERT INTO sighting (entity_id, window_id, location_id, seen_at, bbox, bbox_source, confidence,
+                   frame_uri, description) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            (entity_id, window_id, s.location_id, s.seen_at, s.bbox, s.bbox_source, s.confidence, frame_uri,
+             s.description),
         )
         # Appearance vectors of people captured in crew quarters / the WHC are not kept (they are derived from
         # private pixels). Object embeddings are kept without their crop, because dedup needs them.

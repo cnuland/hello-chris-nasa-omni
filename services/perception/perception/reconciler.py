@@ -1110,6 +1110,8 @@ class Reconciler:
             "location_id": o.location,
             "seen_at": _iso(seen_at),
             "bbox": [round(float(v), 6) for v in o.bbox] if o.bbox is not None else None,
+            # AC-PER-34: a linked detector box is exact; omni's own box is coarse (the UI draws it as approximate)
+            "bbox_source": None if o.bbox is None else ("detector" if o.detection is not None else "omni"),
             "confidence": confidence,
             "description": str(o.obj.get("description") or "")[:400],
         }

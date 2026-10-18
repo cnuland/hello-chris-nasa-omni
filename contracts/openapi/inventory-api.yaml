@@ -23,7 +23,7 @@ paths:
         - {name: seen_after, in: query, schema: {type: string, format: date-time}}
         - {name: seen_before, in: query, schema: {type: string, format: date-time}}
         - {name: needs_review, in: query, schema: {type: boolean}}
-        - {name: sort, in: query, schema: {enum: [last_seen_at, -last_seen_at, label, -label, confidence, -confidence], default: -last_seen_at}}
+        - {name: sort, in: query, schema: {enum: [last_seen_at, -last_seen_at, label, -label, confidence, -confidence], default: -last_seen_at}, description: 'label sorts case-insensitively (lower(label), then label, then entity_id) whatever the database collation (AC-API-36)'}
         - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 500, default: 50}}
         - {name: offset, in: query, schema: {type: integer, minimum: 0, default: 0}}
       responses:
@@ -85,6 +85,17 @@ paths:
       parameters: [{name: entity_id, in: path, required: true, schema: {type: string, format: uuid}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [into_entity_id], properties: {into_entity_id: {type: string, format: uuid}, operator: {type: string}, note: {type: string}}}}}}
       responses: {'200': {description: merged}, '409': {description: invalid merge (self, already merged, kind mismatch)}}
+
+  /items/{entity_id}/unmerge:
+    post:
+      summary: Undo the merge of this (merged, source) entity, restoring source and target from the merge audit detail (AC-API-33)
+      parameters: [{name: entity_id, in: path, required: true, schema: {type: string, format: uuid}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [operator], properties: {operator: {type: string, minLength: 1}, note: {type: [string, 'null']}}}}}}
+      responses:
+        '200': {description: unmerged, content: {application/json: {schema: {$ref: '#/components/schemas/UnmergeResult'}}}}
+        '404': {description: unknown entity}
+        '409': {description: 'not merged; target merged again since; no merge audit with undo detail; or new target sightings match the source appearance'}
+        '422': {description: missing operator or malformed id}
 
   /items/{entity_id}/history:
     get:
@@ -227,6 +238,57 @@ components:
             - {$ref: '#/components/schemas/LastHandled'}
         location_set_at: {type: [string, 'null'], format: date-time, description: when the current last_location was set (sighting time for the pipeline, edit time for an operator)}
         location_set_by: {type: [string, 'null'], description: "'pipeline' or the operator name"}
+        merged_into:
+          description: survivor of a merged item (AC-API-34); null unless status=merged
+          oneOf:
+            - {type: 'null'}
+            - {$ref: '#/components/schemas/MergedInto'}
+        merged_at: {type: [string, 'null'], format: date-time, description: time of the merge (null unless status=merged, or for a legacy merge without audit)}
+        merged_from:
+          type: array
+          description: items merged into this one, oldest merge first (AC-API-34)
+          items: {$ref: '#/components/schemas/MergedFrom'}
+        snapshot_bbox:
+          description: '[x1,y1,x2,y2] normalised 0..1 of the object in snapshot_url when the snapshot is a whole frame; null for a crop or when unknown (AC-API-37)'
+          oneOf:
+            - {type: 'null'}
+            - {type: array, items: {type: number, minimum: 0, maximum: 1}, minItems: 4, maxItems: 4}
+        snapshot_bbox_source: {enum: [detector, omni, null], description: "'detector' = exact box, 'omni' = approximate box, null = unknown"}
+    MergedInto:
+      type: object
+      required: [entity_id, label]
+      properties:
+        entity_id: {type: string, format: uuid}
+        label: {type: string}
+    MergedFrom:
+      type: object
+      required: [entity_id, label, merged_at]
+      properties:
+        entity_id: {type: string, format: uuid}
+        label: {type: string}
+        merged_at: {type: [string, 'null'], format: date-time}
+    UnmergeResult:
+      type: object
+      required: [unmerged_entity_id, target_entity_id, source, target, restored]
+      properties:
+        unmerged_entity_id: {type: string, format: uuid}
+        target_entity_id: {type: string, format: uuid}
+        source: {$ref: '#/components/schemas/Item'}
+        target: {$ref: '#/components/schemas/Item'}
+        restored:
+          type: object
+          description: what was moved back (ids), plus the review reopened (review merge_into) and the target fields put back
+          properties:
+            sighting_ids: {type: array, items: {type: integer}}
+            event_ids: {type: array, items: {type: string, format: uuid}}
+            exemplar_ids: {type: array, items: {type: integer}}
+            reinserted_exemplar_ids: {type: array, items: {type: integer}}
+            actor_event_ids: {type: array, items: {type: string, format: uuid}}
+            child_entity_ids: {type: array, items: {type: string, format: uuid}}
+            review_ids: {type: array, items: {type: string, format: uuid}}
+            candidate_review_ids: {type: array, items: {type: string, format: uuid}}
+            reopened_review_id: {type: [string, 'null'], format: uuid}
+            target_fields: {type: array, items: {type: string}}
     LastHandled:
       type: object
       required: [event_type, occurred_at]
@@ -247,9 +309,14 @@ components:
       allOf:
         - $ref: '#/components/schemas/ReviewEntity'
         - type: object
-          required: [similarity]
+          required: [similarity, score, match_reasons]
           properties:
             similarity: {type: [number, 'null'], description: max cosine similarity to the review entity's best exemplar; null when either has no exemplar}
+            score: {type: [number, 'null'], description: 'ranking score (AC-API-35): appearance + description text + same zone/module + time proximity; higher = more likely the same item'}
+            match_reasons:
+              type: array
+              description: why the candidate is suggested (AC-API-35)
+              items: {enum: [similar appearance, similar description, same zone, same module, seen around the same time]}
     ItemPage:
       type: object
       required: [items, total]
@@ -259,7 +326,16 @@ components:
         - $ref: '#/components/schemas/Item'
         - type: object
           properties:
-            sightings: {type: array, items: {type: object}}
+            sightings:
+              type: array
+              items:
+                type: object
+                properties:
+                  bbox:
+                    oneOf:
+                      - {type: 'null'}
+                      - {type: array, items: {type: number}, minItems: 4, maxItems: 4}
+                  bbox_source: {enum: [detector, omni, null]}
             events: {type: array, items: {$ref: '#/components/schemas/Event'}}
             exemplar_count: {type: integer}
     TimelineEntry:
@@ -274,6 +350,8 @@ components:
         count: {type: integer, description: audit entries only; >1 for a collapsed run of routine pipeline updates}
         first_at: {type: string, format: date-time, description: collapsed entries only; time of the oldest folded audit}
         audit_ids: {type: array, items: {type: string}, description: collapsed entries only; the folded audit ids}
+        location_role: {enum: [at, from_to, null], description: event entries only (AC-API-38)}
+        actor_kind: {enum: [operator, person, null], description: event entries only (AC-API-38)}
     Event:
       type: object
       properties:
@@ -291,6 +369,8 @@ components:
         entity_catalog_id: {type: [string, 'null']}
         from_location_name: {type: [string, 'null']}
         to_location_name: {type: [string, 'null']}
+        location_role: {enum: [at, from_to, null], description: "'from_to' for a move (moved, or from != to), 'at' when it happened in one place, null without location (AC-API-38)"}
+        actor_kind: {enum: [operator, person, null], description: "'operator' when source=operator, 'person' otherwise, null when no actor is named (AC-API-38)"}
     ReviewItem:
       type: object
       required: [review_id, kind, image_url, description, observed_at, status]
@@ -312,6 +392,7 @@ components:
           oneOf:
             - {type: 'null'}
             - {type: array, items: {type: number, minimum: 0, maximum: 1}, minItems: 4, maxItems: 4}
+        image_bbox_source: {enum: [detector, omni, null], description: "where image_bbox came from: 'detector' (exact), 'omni' (approximate), null (unknown/legacy or no box) (AC-API-37)"}
         description: {type: string}
         observed_at: {type: string, format: date-time}
         location_id: {type: [string, 'null']}
@@ -364,7 +445,7 @@ components:
               sighting:
                 type: object
                 required: [seen_at, confidence]
-                properties: {location_id: {type: [string, 'null']}, seen_at: {type: string, format: date-time}, bbox: {type: [array, 'null']}, confidence: {type: number}, frame_uri: {type: string}, description: {type: string}}
+                properties: {location_id: {type: [string, 'null']}, seen_at: {type: string, format: date-time}, bbox: {type: [array, 'null']}, bbox_source: {enum: [detector, omni, null], description: 'optional (AC-API-37); ignored when bbox is null'}, confidence: {type: number}, frame_uri: {type: string}, description: {type: string}}
               exemplar: {type: [object, 'null'], properties: {embedding: {type: array, items: {type: number}}, quality: {type: number}, crop_uri: {type: string}}}
               ref: {type: string, description: local ref so events/reviews in the same payload can point at new entities}
         events:

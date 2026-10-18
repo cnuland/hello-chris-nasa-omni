@@ -461,3 +461,99 @@ Spec: AC-API-24 to AC-API-32 in `docs/spec/10-inventory-api.md`. Contracts: `con
   already the case and is unchanged; parse the values, do not compare strings. Seen in the new e2e test.
 - **Agent:** nothing breaks. It can now use `GET /events?types=moved,used,handed_over` plus `entity_label` to answer
   "who used the drill" (UI-02).
+
+## UI review round 2 contract (2026-10-18, developer)
+
+Source: docs/ui-review/round2 (REPORT.md and findings.json). The spec additions are AC-API-33..38 in
+docs/spec/10-inventory-api.md, plus the AC-API-25 order amendment. Perception's part is AC-PER-34
+(docs/spec/20-perception.md, docs/tdd-log/perception.md).
+
+### Result
+- **inventory-api:** 396 -> **450 passed** (54 new tests in `tests/test_ac_api_33_38_ui_review_round2.py`); ruff is
+  clean.
+- **perception:** 754 -> **758 passed** (4 new `test_ac_per_08_bbox_source_*` tests). The task brief quoted 749,
+  which was stale; AC-PER-33 had already added tests.
+- **tests/e2e:** 2 new tests. 26 passed and 1 failed. The failure is `test_e2e_08_agent_refuses_an_ungrounded_location`,
+  where the agent's reply now gives a grounded summary instead of "don't have a record". It comes from the agent
+  changes in progress in services/agent (grounding.py and harness.py, not mine). Nothing in this change touches it.
+- **make test:**
+  - agent 501, eval 351 + 1 skipped + gates.
+  - The dashboard had 1 failure in `tests/ui2_detail_overview.test.tsx`, a dashboard agent file that was being
+    edited; it passes 22/22 when re-run alone.
+
+### Process (red first)
+- **Red:**
+  - The first run of the new file gave 49 failed and 4 passed. The 4 that passed were guards: the label sort tests
+    and two ranking guards.
+  - **Label sort:** the local test DB is en_US.utf8, which already sorts case-insensitively, so it hid UI-16. The
+    cluster's CNPG DB uses `C`. The fixture `c_collation` switches `entity.label` to `COLLATE "C"` for those tests
+    and restores it afterwards. With it, the sort test is red as it should be.
+- **First green:** 1 failure, which was a wrong expectation in the test. With 12+12 exemplars, the merge cap drops 4
+  source exemplars, so only 8 are moved back and 4 are re-inserted. The test was fixed to assert both numbers.
+- **Self-review, issue found:** an ingest that waited on the merge's row lock has a window `created_at` from before
+  the merge. A "window created after the merge" rule would therefore miss its sighting.
+  - **Fix:** the merge now records `sighting_watermark`, which is max(sighting_id) inside the locked merge.
+    Ingest locks the target before inserting, so later sightings always have higher ids.
+  - The comparison set of the target's "own" exemplars now excludes the probe exemplars.
+  - **Proven red-then-green:** `test_ac_api_33_ingest_that_waited_on_the_merge_lock_still_counts_as_after_the_merge`
+    fails when the watermark is ignored.
+
+### Decisions (the dashboard codes against these exact names)
+- **`POST /items/{id}/unmerge`:**
+  - **Request:** `{operator (required, non-empty), note?}`.
+  - **200:** `{unmerged_entity_id, target_entity_id, source: Item, target: Item, restored: {sighting_ids, event_ids,
+    exemplar_ids, reinserted_exemplar_ids, actor_event_ids, child_entity_ids, review_ids, candidate_review_ids,
+    reopened_review_id, target_fields}}`.
+  - **Errors:** 404 for an unknown id; 409 as listed in AC-API-33; 422 for a bad body or id.
+  - **Audit:** the row has op `split` (the schema's CHECK already allows it, so no constraint change is needed),
+    with `detail.action = "unmerge"`.
+- **Item:**
+  - `merged_into: {entity_id, label} | null`, which **was a bare uuid**. No in-repo client read it. The agent's
+    `get_item` passes it through, and an object is fine for the LLM.
+  - `merged_at: datetime | null` and `merged_from: [{entity_id, label, merged_at}]`.
+  - `snapshot_bbox: [x1,y1,x2,y2] | null` and `snapshot_bbox_source: "detector" | "omni" | null`.
+- **Review:** `image_bbox_source: "detector" | "omni" | null`. Each candidate gains `score: number | null` (null only
+  for a stored candidate when the review has no entity) and `match_reasons: string[]`. The vocabulary is fixed:
+  `similar appearance`, `similar description`, `same zone`, `same module`, `seen around the same time`.
+- **Item detail:** `sightings[].bbox_source`.
+- **Events:** `location_role: "at" | "from_to" | null` and `actor_kind: "operator" | "person" | null`. History event
+  entries carry both, and their summary reads "used at USOS by X".
+- **Ranking:**
+  - The score is computed in SQL with fixed weights (`review.py`: `W_*`, `REASON_*`).
+  - `"similar description"` uses description-only trigram similarity. Same-catalog candidates share the label, so
+    a label-inclusive score would always flag it.
+  - Stored candidates get scores too, but keep the order the pipeline stored.
+- **Unmerge, target fields:** a field is restored only if it still equals the value the merge wrote. That value is
+  derived from the unchanged source row plus `target_previous`, so it also works for merges recorded before this
+  change. This keeps later sightings and operator moves of the target (tested).
+- **Unmerge, review merges:** the resolving review is reopened, since an undone decision should come back to the
+  queue. Its previous resolution is kept in the audit.
+
+### Adversarial self-review
+| # | Concern | Finding / resolution |
+|---|---------|----------------------|
+| 1 | Unmerge clobbers newer target state | Fields are restored only while they hold the merge's value. Rows are moved back only `WHERE entity_id = target`. Candidate lists are restored only when unchanged. Tests cover an operator move after the merge and a new target sighting after the merge. |
+| 2 | Sightings that belong to the source stay on the target | 409 when a post-merge sighting's exemplar is closer to the source's exemplars. The lock-wait race is closed by the watermark (tested). **Accepted:** omni-only sightings (no exemplar) cannot be attributed and stay on the target; the response lists what moved back. |
+| 3 | Concurrency | Unmerge locks source and target `FOR UPDATE` in entity_id order (as merge does) and re-checks `merged_into` after the lock. **Residual:** an ingest that already resolved the source id to the target before the unmerge commits still attaches to the target. This is the same window as for merges, and the data stays valid. |
+| 4 | N+1 | Merge links take one statement per `fetch_items` call. Candidate scoring replaces the old pair-similarity statement. `test_ac_api_25_review_queue_query_count_does_not_grow_with_reviews` still passes (equal counts for 1 and 6 subjects). |
+| 5 | Migration on live data | `ADD COLUMN IF NOT EXISTS` (nullable, so metadata-only). The CHECK is added only if `pg_constraint` lacks it; it scans `sighting` once and old rows are NULL. `CREATE INDEX IF NOT EXISTS` for the merged_into partial index and the audit GIN index. It runs under the runner's advisory lock at API start. Tested: SQL run twice on a DB with data after dropping the column, and the real `apply_migrations` run twice on a 001..003 DB holding entities, sightings and a merge audit. |
+| 6 | Float underflow | The time term is `0.2 / (1 + h)`, not `exp(-h)`, because Postgres raises on float underflow. |
+| 7 | Privacy | `snapshot_bbox(_source)` is nulled with the thumbnail for review entities in no_capture zones (tested). Boxes are coordinates only. |
+
+### Test changes
+- **`tests/e2e/test_e2e_ui_review_contract.py`:** 2 tests added (new fields with OpenAPI validation; scored
+  suggestions; a review merge, then unmerge, checked against `UnmergeResult` with the target restored and the review
+  reopened). No existing test was edited.
+- **inventory-api and perception:** no existing test was edited.
+
+### Notes for other components
+- **Dashboard:**
+  - `merged_into` is an object.
+  - `score` can be null only on stored candidates of an entity-less review.
+  - Draw `image_bbox_source`/`snapshot_bbox_source` = `omni` dashed, and `detector` solid. Null means legacy/unknown.
+- **Deploy:** 004 must run before the new pods serve. The API applies migrations at start; the image bundles
+  `contracts/db`. If the migrate Job is used, re-create the `inventory-migrations` ConfigMap (`scripts/bootstrap.sh`).
+  Perception can roll out before or after the API: an older API ignores the extra field (`extra="ignore"`).
+- **Live data:** review 85c4f568 (`d34865e0...` into `99eba10e...`) can now be undone with
+  `POST /items/d34865e0-e208-486f-a248-b8873bd92fc9/unmerge`. Its merge audit predates the watermark, so the
+  window-time rule applies.

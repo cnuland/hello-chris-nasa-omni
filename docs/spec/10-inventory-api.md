@@ -77,8 +77,8 @@ All additions are optional fields or optional query parameters, so existing clie
     the review entity. When the review entity has no catalog_id, the pool is the entities whose label, or whose
     catalog class_name, has the same normalised key as the review entity's label. The key is lower case with spaces
     and hyphens removed.
-  - **Order:** `similarity` desc (nulls last). When there is no similarity, same-module entities come first (module
-    of `last_location`, by hierarchy), then `last_seen_at` desc (nulls last), then `entity_id`.
+  - **Order:** by `score` (AC-API-35, which replaces the round-1 order "similarity, then same module, then
+    recency"), then `similarity` desc (nulls last), `last_seen_at` desc (nulls last) and `entity_id`.
   - All suggestions for one page of reviews are computed in one SQL statement, not one per review.
 - AC-API-26 **`image_bbox`** on every review is `[x1,y1,x2,y2]`, normalised 0..1, for the object in `image_url`.
   - The API uses the bbox of the sighting of the review's entity whose `frame_uri` equals the review's `image_uri`;
@@ -129,3 +129,76 @@ All additions are optional fields or optional query parameters, so existing clie
   - **Other audit entries:** every other audit entry carries `count: 1`. Operator `update` summaries list the changed
     fields (`field: old -> new`).
   - **Raw audit:** `collapse=false` returns the raw audit rows unchanged in content.
+
+## UI review round 2 contract (docs/ui-review/round2: UI2-05, UI2-06, UI-16, UI2-07, UI2-09/UI-13)
+
+All additions are optional response fields, an optional ingest field and one new endpoint. One field changes type:
+`Item.merged_into`, from a bare uuid to an object. No client read it.
+
+- AC-API-33 **Unmerge.** `POST /items/{id}/unmerge` with body `{operator, note?}`. `operator` is required (422 when
+  it is missing or empty), and `{id}` is the merged (source) entity.
+  - **What it uses:** the latest `merge` audit row for (source, current `merged_into`).
+  - **What it moves back:** sightings, events, exemplars, actor references (`event.actor_entity`), children
+    (`entity.parent_entity`) and re-pointed open reviews. Only rows still where the merge put them are moved.
+    - **Candidate lists:** each review's `candidate_ids` is restored only while it still equals what the merge made
+      of it.
+    - **Dropped exemplars:** the exemplars the merge dropped for the cap are re-inserted with their original ids.
+      Then the cap of 20 is re-applied to both entities, and anything dropped then is kept in the audit.
+  - **Source:** gets back its previous `status`, `needs_review` and `review_reason`, and `merged_into` becomes null.
+  - **Target fields:** `last_seen_at`, location (`last_location`, `location_set_at`, `location_set_by`) and
+    `first_seen_at` get their pre-merge values, but only where they still hold exactly what the merge wrote. A
+    later sighting or operator edit of the target is kept. `needs_review` and `review_reason` are restored when
+    re-pointed reviews were moved back and no open review remains on the target.
+  - **Review merges:** when the merge came from a review (`merge_into`), that review is reopened (`status=open`,
+    resolution cleared).
+  - **409 cases:**
+    - the entity is not merged;
+    - the target has itself been merged since;
+    - there is no merge audit row with undo detail (legacy);
+    - any target sighting recorded after the merge has an exemplar (stored by the same ingest) more similar to the
+      source's moved exemplars than to the target's own.
+  - **"After the merge":** a sighting id above the merge's new `sighting_watermark`. For older merges without one, it
+    means a window created after the merge.
+  - **Sightings without an exemplar** (omni-only) cannot be attributed and stay on the target.
+  - **Writes:** one `split` audit row: `{action: "unmerge", merge_audit_id, source_entity_id, target_entity_id,
+    restored, dropped_exemplars, previous_resolution, note}`.
+  - **Response 200:** `{unmerged_entity_id, target_entity_id, source: Item, target: Item, restored: {sighting_ids,
+    event_ids, exemplar_ids, reinserted_exemplar_ids, actor_event_ids, child_entity_ids, review_ids,
+    candidate_review_ids, reopened_review_id, target_fields}}`.
+- AC-API-34 **Merge links on every Item.** These fields are computed in one extra statement per page, not per item:
+  - `merged_into: {entity_id, label} | null`: the survivor, set when `status=merged`.
+  - `merged_at: datetime | null`: the time of that merge's audit row. It is null for a legacy merge with no audit.
+  - `merged_from: [{entity_id, label, merged_at}]`: the entities merged into this one, oldest first.
+- AC-API-35 **Ranked duplicate candidates.**
+  - **Score:** every review candidate (suggested and stored) carries `score`, which is the sum of:
+    - `1.0 x max(cosine, 0)`, when both sides have exemplars;
+    - `0.5 x` pg_trgm `similarity(lower(label || ' ' || description))`;
+    - `0.3` for the same zone (same `last_location` of kind zone or container), or `0.15` for the same module;
+    - `0.2 / (1 + |delta last_seen_at| in hours)`.
+  - `similarity` is unchanged: cosine, or null.
+  - **match_reasons:** a list built in this order:
+    - `"similar appearance"` when cosine >= 0.7;
+    - `"similar description"` when both have a description and their trigram similarity is >= 0.3;
+    - `"same zone"`, or else `"same module"`;
+    - `"seen around the same time"` when the gap is <= 1 h.
+  - **Order:** suggestions are ordered by `score` desc. Stored candidates keep their stored order.
+- AC-API-36 **Label sort.** `sort=label` orders by `lower(label)`, then `label`, then `entity_id` (`-label` reverses
+  the first two). It is case-insensitive under any database collation; the cluster's CNPG DB uses C.
+- AC-API-37 **bbox provenance.**
+  - **Storage:** `sighting.bbox_source` holds `detector`, `omni` or null (migration `004_ui_review_round2.sql`,
+    idempotent, CHECK constraint, no backfill). Ingest accepts the optional `sighting.bbox_source`, ignores it when
+    `bbox` is null, and returns 422 for any other value.
+  - **Reviews:** `image_bbox_source` is returned next to `image_bbox`, and both are null together.
+  - **Item detail:** each sighting has `bbox` and `bbox_source`.
+  - **Items:** every Item has `snapshot_bbox` and `snapshot_bbox_source`. They come from the newest sighting of the
+    item whose `frame_uri` equals the item's snapshot, so they are null when the snapshot is a crop. In review
+    entities from no_capture locations they are nulled with the thumbnail.
+  - Migration 004 also adds `entity_merged_into_idx` and a GIN index `audit_log_entity_ids_gin`.
+- AC-API-38 **Event wording.**
+  - **On every event** (`/events`, item detail `events`):
+    - `location_role` is `"from_to"` for `moved`, or for any event whose from and to are both set and differ. It is
+      `"at"` when the event names one place (or from = to), and null with no location.
+    - `actor_kind` is `"operator"` when `source=operator` and `"person"` otherwise. It is null when the event names
+      no actor (no `actor_desc` and no `actor_entity`).
+  - **History event entries** carry the same two fields, and their summary reads `used at USOS by X`. Only moves
+    read `moved A -> B by X`.

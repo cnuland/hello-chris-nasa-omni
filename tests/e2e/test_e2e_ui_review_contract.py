@@ -144,3 +144,54 @@ def test_e2e_ui_review_duplicate_review_gets_server_suggestions(replay, api, dat
     assert len(review["candidates"]) <= 8
     assert review["image_bbox"] == pytest.approx([0.25, 0.25, 0.5, 0.75])
     assert review["subject"]["label"] == "drill"
+
+
+# ------------------------------------------------------------------ UI review round 2 (AC-API-33..38)
+def test_e2e_ui_review2_items_events_and_sightings_carry_the_new_fields(replay, api):
+    drill = _drill(api)
+    for key in ("merged_into", "merged_at", "merged_from", "snapshot_bbox", "snapshot_bbox_source"):
+        assert key in drill
+    assert drill["merged_into"] is None and drill["merged_from"] == []
+    sources = set()
+    for item in api.get("/items", params={"limit": 500}).json()["items"]:
+        detail = api.get(f"/items/{item['entity_id']}").json()
+        assert errors(ref("ItemDetail"), detail) == []
+        sources |= {s["bbox_source"] for s in detail["sightings"] if s["bbox"] is not None}
+    # perception now says where its boxes came from (only the hand-written e2e duplicate window has no source)
+    assert sources & {"detector", "omni"} and sources <= {"detector", "omni", None}
+    events = api.get("/events", params={"limit": 1000}).json()
+    assert errors({"type": "array", "items": ref("Event")}, events) == []
+    for ev in events:
+        assert ev["location_role"] in {"at", "from_to", None} and ev["actor_kind"] in {"operator", "person", None}
+        if ev["event_type"] == "moved":
+            assert ev["location_role"] == "from_to"
+    labels = [i["label"] for i in api.get("/items", params={"sort": "label", "limit": 500}).json()["items"]]
+    assert [x.lower() for x in labels] == sorted(x.lower() for x in labels)
+
+
+def test_e2e_ui_review2_suggestions_are_scored_and_merge_can_be_undone(replay, api):
+    dup = api.get("/review", params={"kind": "possible_duplicate"}).json()[0]  # created by the test above
+    assert errors(ref("ReviewItem"), dup) == []
+    assert "image_bbox_source" in dup
+    cands = dup["candidates"]
+    assert cands and all(isinstance(c["score"], float) and isinstance(c["match_reasons"], list) for c in cands)
+    assert [c["score"] for c in cands] == sorted((c["score"] for c in cands), reverse=True)
+    source, target = dup["entity_id"], cands[0]["entity_id"]
+    before_target = api.get(f"/items/{target}").json()
+    resolved = api.post(f"/review/{dup['review_id']}/resolve",
+                        json={"action": "merge_into", "target_entity_id": target, "operator": "e2e-op"})
+    assert resolved.status_code == 200, resolved.text
+    merged = api.get(f"/items/{source}").json()
+    assert merged["merged_into"]["entity_id"] == target and merged["merged_at"]
+    assert source in [m["entity_id"] for m in api.get(f"/items/{target}").json()["merged_from"]]
+    undone = api.post(f"/items/{source}/unmerge", json={"operator": "e2e-op", "note": "e2e undo"})
+    assert undone.status_code == 200, undone.text
+    body = undone.json()
+    assert errors(ref("UnmergeResult"), body) == []
+    assert body["restored"]["reopened_review_id"] == dup["review_id"]
+    assert body["source"]["status"] == "provisional" and body["source"]["merged_into"] is None
+    after_target = api.get(f"/items/{target}").json()
+    for key in ("last_seen_at", "last_location", "first_seen_at", "needs_review", "location_set_at"):
+        assert after_target[key] == before_target[key], key
+    assert api.get(f"/review/{dup['review_id']}").json()["status"] == "open"
+    assert api.post(f"/items/{source}/unmerge", json={"operator": "e2e-op"}).status_code == 409

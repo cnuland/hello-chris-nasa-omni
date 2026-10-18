@@ -17,13 +17,15 @@ from fastapi.responses import JSONResponse
 from ..deps import AppContext, Ctx, operator_actor
 from ..errors import Conflict, NotFound, Unprocessable
 from ..images import sniff_image
-from ..merging import merge_entities
+from ..merging import merge_entities, unmerge_entity
 from ..repo import (
     EVENT_COLUMNS,
     EVENT_SELECT,
     FUZZY_LABEL_THRESHOLD,
     HIDDEN_STATUSES,
     catalog_exists,
+    event_actor_kind,
+    event_location_role,
     fetch_item,
     fetch_items,
     jsonb,
@@ -35,7 +37,7 @@ from ..repo import (
     serialize_event,
     write_audit,
 )
-from ..schemas import EntityKind, EntityStatus, ItemPatch, ItemSort, MergeRequest
+from ..schemas import EntityKind, EntityStatus, ItemPatch, ItemSort, MergeRequest, UnmergeRequest
 from ..storage import uri_to_url
 
 logger = logging.getLogger(__name__)
@@ -46,8 +48,10 @@ DETAIL_LIMIT = 20
 _SORT_SQL: dict[str, str] = {
     "last_seen_at": "e.last_seen_at ASC NULLS LAST",
     "-last_seen_at": "e.last_seen_at DESC NULLS LAST",
-    "label": "e.label ASC",
-    "-label": "e.label DESC",
+    # AC-API-36: case-insensitive whatever the database collation (the cluster's CNPG DB is C), then the exact label;
+    # entity_id is appended to every order as the final tiebreak, so pages are stable.
+    "label": "lower(e.label) ASC, e.label ASC",
+    "-label": "lower(e.label) DESC, e.label DESC",
     "confidence": "e.confidence ASC",
     "-confidence": "e.confidence DESC",
 }
@@ -260,7 +264,8 @@ def get_item(entity_id: UUID, ctx: Ctx) -> dict[str, Any]:
     with ctx.db.connection() as conn:
         item = fetch_item(conn, entity_id, ctx.bucket, uri_to_url)
         sightings = conn.execute(
-            """SELECT sighting_id, window_id, location_id, seen_at, bbox, confidence, frame_uri, description
+            """SELECT sighting_id, window_id, location_id, seen_at, bbox, bbox_source, confidence, frame_uri,
+                      description
                  FROM sighting WHERE entity_id = %s ORDER BY seen_at DESC, sighting_id DESC LIMIT %s""",
             (entity_id, DETAIL_LIMIT),
         ).fetchall()
@@ -278,6 +283,7 @@ def get_item(entity_id: UUID, ctx: Ctx) -> dict[str, Any]:
             "location_id": s["location_id"],
             "seen_at": s["seen_at"],
             "bbox": [real(b) for b in s["bbox"]] if s["bbox"] is not None else None,
+            "bbox_source": s["bbox_source"] if s["bbox"] is not None else None,
             "confidence": real(s["confidence"]),
             "frame_url": uri_to_url(s["frame_uri"], ctx.bucket),
             "description": s["description"],
@@ -361,6 +367,27 @@ def merge_item(entity_id: UUID, body: MergeRequest, ctx: Ctx) -> dict[str, Any]:
         target = fetch_item(conn, body.into_entity_id, ctx.bucket, uri_to_url)
     logger.info("entities merged", extra={"source": str(entity_id), "target": str(body.into_entity_id), "actor": actor})
     return {"merged_entity_id": str(entity_id), "target": target, "moved": detail["moved"]}
+
+
+# ------------------------------------------------------------------ POST /items/{id}/unmerge
+@router.post("/items/{entity_id}/unmerge")
+def unmerge_item(entity_id: UUID, body: UnmergeRequest, ctx: Ctx) -> dict[str, Any]:
+    """AC-API-33: undo the merge of ``entity_id`` (the merged source) using the merge's audit detail."""
+    actor = operator_actor(body.operator)
+    with ctx.db.connection() as conn:
+        with conn.transaction():
+            result = unmerge_entity(conn, entity_id, actor, note=body.note)
+        target_id = result["target_entity_id"]
+        source = fetch_item(conn, entity_id, ctx.bucket, uri_to_url)
+        target = fetch_item(conn, target_id, ctx.bucket, uri_to_url)
+    logger.info("entities unmerged", extra={"source": str(entity_id), "target": target_id, "actor": actor})
+    return {
+        "unmerged_entity_id": str(entity_id),
+        "target_entity_id": target_id,
+        "source": source,
+        "target": target,
+        "restored": result["restored"],
+    }
 
 
 # ------------------------------------------------------------------ GET /items/{id}/history
@@ -481,9 +508,13 @@ def item_history(
             }
         )
     for e in events:
+        # AC-API-38: a use/sighting/addition happened "at" one place; only moves read "from -> to".
+        role = event_location_role(e["event_type"], e["from_location"], e["to_location"])
         summary = e["event_type"]
-        if e["from_location"] or e["to_location"]:
+        if role == "from_to":
             summary += f" {e['from_location'] or '?'} -> {e['to_location'] or '?'}"
+        elif role == "at":
+            summary += f" at {e['to_location'] or e['from_location']}"
         if e["actor_desc"]:
             summary += f" by {e['actor_desc']}"
         timeline.append(
@@ -496,6 +527,8 @@ def item_history(
                 "image_url": uri_to_url(e["evidence_uri"], bucket),
                 "event_type": e["event_type"],
                 "source": e["source"],
+                "location_role": role,
+                "actor_kind": event_actor_kind(e["source"], e["actor_desc"], e["actor_entity"]),
             }
         )
     key = str(entity_id)

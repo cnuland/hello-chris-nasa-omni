@@ -339,3 +339,22 @@ seen in this module 15 min ago. AC-PER-29 to AC-PER-32 amend AC-PER-8, AC-PER-19
 - *Fallback attaches are reviewed.* With several candidates and no confident decision, the attached entity may be
   the wrong one of the candidates. A `low_confidence` review is opened (not in `no_capture` windows), so NASA can
   correct it.
+
+### AC-PER-33 Box sanity (Gemma 4 A/B, 2026-10-18)
+- Well-formed object boxes (4 numbers) are normalised before validation: inverted coordinates are swapped, values
+  clamped to [0, 1], and boxes with a side under 2% of the frame become null (the object is kept). Malformed boxes
+  (wrong length, non-numbers) are left for schema validation to reject (AC-PER-3).
+  Seen live: Gemma 4 returned "cabling" [0.58,0.1,0.2,0.91] and "hatch" [0.35,0.55,0.64,0.54].
+  Tests: tests/test_ac_per_33_box_sanity.py.
+
+### AC-PER-34 bbox provenance (UI review round 2, finding UI2-07)
+- Every assignment's `sighting` carries `bbox_source`, which says where `sighting.bbox` came from:
+  - `"detector"` when the omni object is linked to a detector box (by IoU or by label, AC-PER-8). The bbox is then the
+    detector's box.
+  - `"omni"` when there is no linked detector box and the bbox is the omni model's own (coarse) box.
+  - `null` when the sighting has no bbox.
+- inventory-api stores it on the sighting (`sighting.bbox_source`, migration 004, AC-API-37) and returns it with review
+  images (`image_bbox_source`), item sightings and item snapshots. The dashboard draws detector boxes solid and omni
+  boxes dashed ("approximate").
+- The field is optional in the ingest contract, so an older perception build keeps working (its sightings get null).
+  Tests: `tests/test_ac_per_08_reconciler.py::test_ac_per_08_bbox_source_*`.

@@ -23,6 +23,7 @@ ReviewKind = Literal["unknown_object", "possible_duplicate", "low_confidence", "
 ReviewStatus = Literal["open", "resolved", "dismissed"]
 CatalogCategory = Literal["object", "person", "container"]
 ResolveAction = Literal["assign_catalog", "new_catalog", "merge_into", "dismiss"]
+BboxSource = Literal["detector", "omni"]
 ItemSort = Literal["last_seen_at", "-last_seen_at", "label", "-label", "confidence", "-confidence"]
 
 Probability = Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]
@@ -94,6 +95,13 @@ class MergeRequest(_Model):
     note: str | None = None
 
 
+class UnmergeRequest(_Model):
+    """AC-API-33: undo a merge. The operator is required (it is the most consequential edit after a merge)."""
+
+    operator: NonEmptyStr
+    note: str | None = None
+
+
 # ------------------------------------------------------------------ review
 class ResolveRequest(_Model):
     action: ResolveAction
@@ -153,9 +161,17 @@ class SightingIn(_Model):
     location_id: str | None = None
     seen_at: datetime
     bbox: Annotated[list[Annotated[float, Field(allow_inf_nan=False)]], Field(min_length=4, max_length=4)] | None = None
+    # AC-API-37: 'detector' (linked detector box) or 'omni' (the omni model's coarse box). Optional; ignored without bbox.
+    bbox_source: BboxSource | None = None
     confidence: Probability
     frame_uri: str | None = None
     description: str | None = None
+
+    @model_validator(mode="after")
+    def _source_needs_box(self) -> SightingIn:
+        if self.bbox is None:
+            self.bbox_source = None
+        return self
 
 
 class ExemplarIn(_Model):

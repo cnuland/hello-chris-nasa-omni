@@ -777,3 +777,22 @@ eval/tests/test_ac_eval_08_revisit.py.
     dashboard 190, e2e 19.
 - **Env vars.** None new. `PERCEPTION_NO_EXEMPLAR_MATCH_S` now bounds only the "recent" rule: past it, a module
   attaches its single candidate or asks the decision model, while a segment keeps the horizon.
+
+## AC-PER-33 box sanity (Gemma 4 A/B, 2026-10-18)
+- **Red:** 4 failed, 1 guard passed.
+- **First green:** 1 regression. AC-PER-3's "3-number bbox is invalid" test failed, because the sanitiser nulled
+  malformed boxes. **Resolved in favour of AC-PER-3:** only well-formed boxes are normalised, and malformed ones still
+  fail validation.
+- **Final:** 754 passed; ruff is clean. **Test changes:** none.
+
+## AC-PER-34 bbox provenance (UI review round 2, UI2-07; owned by the inventory-api change)
+- **Why:** the review image's box often framed an empty patch. It was omni's coarse box, because no detector box was
+  linked, and nothing told the UI that the box was approximate.
+- **Red:** 4 failed (`KeyError: 'bbox_source'`). The cases are: detector-linked by IoU, detector-linked by label,
+  omni-only box, and no box.
+- **Green:** `_assignment` sets `sighting.bbox_source`. It is `"detector"` when `o.detection` is set (the bbox is then
+  the detector's box, see `_link`), `"omni"` when only omni's box exists, and null when there is no bbox. This is a
+  one-line change.
+- **Final:** 758 passed (754 before + 4). **Test changes:** none.
+- **Contract:** `SightingIn.bbox_source` (`detector|omni|null`, optional) in inventory-api; migration
+  `004_ui_review_round2.sql`.

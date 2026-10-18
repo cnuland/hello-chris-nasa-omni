@@ -425,6 +425,33 @@ def test_ac_per_08_omni_object_without_bbox_linked_by_label(make_reconciler, inv
     assert cosine(a["exemplar"]["embedding"], vec("drill-1")) > 0.999
 
 
+# ---------------------------------------------------------------------------------------------- bbox_source (UI2-07)
+def test_ac_per_08_bbox_source_detector_when_linked_to_a_detector_box(make_reconciler, inv):
+    omni_box = (0.12, 0.11, 0.31, 0.42)  # linked to BOX_A by IoU: the sighting carries the detector's box
+    process(make_reconciler(), [[("laptop-A", BOX_A)]], [obj("laptop", omni_box)], {"laptop-A": "laptop"})
+    s = inv.last["assignments"][0]["sighting"]
+    assert s["bbox_source"] == "detector"
+
+
+def test_ac_per_08_bbox_source_detector_when_linked_by_label(make_reconciler, inv):
+    process(make_reconciler(), [[("drill-1", BOX_A)]], [obj("drill", None, frame_index=None)], {"drill-1": "PGT"})
+    s = inv.last["assignments"][0]["sighting"]
+    assert s["bbox"] is not None and s["bbox_source"] == "detector"
+
+
+def test_ac_per_08_bbox_source_omni_without_a_detector_box(make_reconciler, inv):
+    process(make_reconciler(), [[]], [obj("laptop", BOX_B)], {})
+    s = inv.last["assignments"][0]["sighting"]
+    assert all(abs(x - y) < 1e-3 for x, y in zip(s["bbox"], BOX_B, strict=True))
+    assert s["bbox_source"] == "omni"
+
+
+def test_ac_per_08_bbox_source_null_without_any_box(make_reconciler, inv):
+    process(make_reconciler(), [[]], [obj("laptop", None, frame_index=None)], {})
+    s = inv.last["assignments"][0]["sighting"]
+    assert s["bbox"] is None and s["bbox_source"] is None
+
+
 def test_ac_per_08_one_assignment_per_observed_object(make_reconciler, inv):
     process(make_reconciler(), [[("laptop-A", BOX_A), ("drill-1", BOX_B)]],
             [obj("laptop", BOX_A), obj("drill", BOX_B)], {"laptop-A": "laptop", "drill-1": "drill"})
