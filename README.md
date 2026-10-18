@@ -129,6 +129,8 @@ ONLY="data app" ./scripts/bootstrap.sh       # or individual steps
 | Duplicates, first 8 windows of the tour | 56 entities before the real-video fixes, 16 after |
 | Full tour, first pass (~75 windows, 8 modules) | 0 errors; locations followed the tour (COL1, LAB1, NOD1-3, CUP1, ZARYA, ZVEZDA); DiffusionGemma matched 41 of 44 "same or new?" questions to existing items |
 | Omni replies hitting the 700-token cap | 77% (42 of 44 salvaged instead of dropped) |
+| **Real-video location accuracy** (`make eval-real`, NASA captions as ground truth) | **0.750** live with Gemma 4 (0.391 before module resolution), 0 wrong modules, module coverage 0.889 |
+| Privacy (sleep cue / crew quarters) | 0 stored media and 0 searchable text in private windows (verified in RustFS and `/search`) |
 | Second pass (video looped) | 22 new entities right after the loop restart, then 5 in the next 11 windows: revisit dedup after a long gap is the main open issue (QUESTIONS #29) |
 
 Real time at a 4 s stride needs roughly 5× the omni decode speed (L4/A10-class or better). The POC runs with a

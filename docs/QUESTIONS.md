@@ -216,3 +216,8 @@ I need from you.
       Columbus and Kibo windows, a wrong module, which a test demonstrates. Say if you want chaining anyway.
     - **Remaining misses:** windows whose hint and summary name no module (Zarya ×2), signage-only hints ("To COL"),
       and privacy-hold windows, which never carry.
+36. **Final-tour real-video score (live, 2026-10-18 04:39 UTC).** `make eval-real` against NASA's caption timeline:
+    window_location_acc **0.750** (12 of 16 scored; it was 0.391 before module resolution), module_coverage 0.889,
+    **0 wrong modules**. The 4 remaining misses are unresolved: Zarya ×2, Columbus ×1, Zvezda ×1. Inventory now
+    spreads across real modules, not USOS. 2 of 31 windows were private, sleep cue plus hold.
+    **Open:** person tracks still over-count (21 tracks); a cross-module continuity fix is under TDD.
