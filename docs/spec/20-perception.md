@@ -484,3 +484,115 @@ Residual risks accepted:
   appearance only.
 - *Eval purity.* `person_track_recall` checks that each actor has a track; it does not detect a track that also
   absorbed the other actor's sightings. `person_tracks_per_person` ≤ 1.5 only bounds over-splitting.
+
+## Amendments: ISS module resolution (real-video eval, 2026-10-18)
+
+Measured (docs/spec/50-eval.md AC-EVAL-10, live Gemma 4 run on the NASA tour): `window_location_acc` 0.391 (9 of 23
+scored windows). No window was given the wrong module; all 14 misses stayed at segment level (`USOS`). Causes, from
+the stored raw replies (tests/fixtures/real_tour_run_2026-10-18.json):
+- official names do not resolve: `Japanese Experiment Module "Kibo"`, `Nauka Multipurpose Laboratory Module`;
+- the hint is often null while `scene_summary` names the module;
+- the handheld camera stays in a module for 30–60 s, but only the window that names it gets it.
+
+AC-PER-39 to AC-PER-42 amend AC-PER-11 and AC-PER-23. AC-PER-16 (generic words never resolve) still holds.
+
+- AC-PER-39 **Module names** (amends AC-PER-23). Exact aliases, added to the seed's ids and display names (only for
+  location ids that exist in the seed; no codes are invented: the seed has no Quest, Poisk, Rassvet or PMA):
+  | id | aliases (normalised: case, quotes, apostrophes and punctuation ignored) |
+  |---|---|
+  | JPM1 | Kibo, JEM, JPM, Japanese Experiment Module, Kibo/JEM Pressurized Module |
+  | JLP1 | JLP, Kibo/JEM Logistics Module, Experiment Logistics Module |
+  | ZARYA | Zarya, FGB, Functional Cargo Block |
+  | NAUKA | Nauka, MLM, Multipurpose Laboratory Module |
+  | ZVEZDA | Zvezda, Service Module, SM |
+  | CUP1 | Cupola |
+  | COL1 | Columbus, Columbus Laboratory, Columbus Lab, European Laboratory, European Lab |
+  | LAB1 | Destiny, US Lab, U.S. Lab, US Laboratory, U.S. Laboratory, Destiny Lab(oratory) (plus the existing "lab") |
+  | NOD1 / NOD2 / NOD3 | Unity / Harmony / Tranquility (Tranquillity), Node 1 / Node 2 / Node 3 |
+  | PMM1 | Leonardo, PMM, Permanent Multipurpose Module |
+  - *Relaxed keys* (AC-PER-23) that are only a generic word are never registered: "multipurpose", "service",
+    "experiment", "japanese experiment", "logistics", "pressurized", "european", "us", "u s". "Service Module"
+    alone is ZVEZDA (exact alias); "service" alone, "laboratory", "the laboratory module" resolve to nothing.
+  - *Mention scan* (`LocationResolver.scan_modules(text)`). When the exact and relaxed matches fail, the text is
+    scanned for module **mentions**: whole-word phrases from a curated mention table (the names above without the
+    generic ones: "lab", "the lab", "SM", "node" alone and every relaxed key are excluded), longest phrase first,
+    non-overlapping. Common English words only count when capitalised in the original text ("Unity", "Harmony",
+    "Destiny", "Tranquility"; "US" in "US Lab(oratory)"; "BEAM", "Quest", "Bishop"). Each mention is marked:
+    - *in*: preceded (skipping "the"/"a"/"an", and an adjacent mention of the same module) by "in", "inside",
+      "within" or "aboard";
+    - *directional*: preceded the same way by "to", "into", "toward(s)", "from", "onto", "leaving", "leaves",
+      "exits", "exiting" (signage such as "To FGB", "a view from Unity into Harmony");
+    - otherwise *plain*.
+    Modules the seed lacks are mentions too, of an **unseeded** module (Quest / Joint Airlock, PMA / Pressurized
+    Mating Adapter, Poisk / Mini-Research Module, Rassvet, Pirs, Prichal, BEAM, Bishop); they never resolve.
+    Decision over the distinct modules mentioned: one module → that module, unless all its mentions are
+    directional (then nothing); two or more → the single module with an *in* mention, else nothing. A decision
+    for an unseeded module yields no location but reports **elsewhere** (AC-PER-41).
+  - *Hints.* `resolve_hint(hint)` = exact, then relaxed, then the mention scan. `resolve()` (speech claims,
+    event destinations) is unchanged apart from the new exact aliases. A hint that names a private place is not
+    scanned (it keeps the AC-PER-23 result and stays private).
+- AC-PER-40 **Scene-summary fallback** (amends AC-PER-11). For a **roaming** camera (configured location not inside
+  a module: `cam-handheld` → `USOS`), when the hint gives no module (null, unresolvable, or a segment), the module
+  comes from the mention scan of `scene_summary`, with the same rules (two modules: the one the camera is *in*, else
+  none). A summary module outside a segment named by the hint is ignored. Fixed cameras do not use the summary (it
+  describes what is seen, which for a fixed camera is often another module through a hatch).
+  Privacy is unchanged and fails closed: a summary naming a private place, a sleep cue, a private hint or a
+  no_capture summary module makes the window `no_capture` (AC-PER-23/37); the summary never makes a window less
+  private. `WindowScope.source` is `hint`, `summary` or `camera`.
+- AC-PER-41 **Module carry for a roaming camera** (amends AC-PER-11). A handheld camera moves slowly between
+  modules, so a window with no module of its own inherits the module of the last window that had one:
+  - *Anchor*: the last window of this camera (reconciler) that resolved a module itself (hint or summary) and is
+    not `no_capture`. Carried windows do not move the anchor, so a carry lasts at most `module_carry_s` after the
+    last real evidence (no unbounded chain through a long unnamed stretch).
+  - *Carry*: a capturable window of a roaming camera whose location is not inside a module inherits the anchor's
+    module when 0 ≤ `t_start` − anchor `t_end` ≤ `module_carry_s` (`PERCEPTION_MODULE_CARRY_S`, default 45, 0 =
+    off, at most 600; a window overlapping the anchor counts as gap 0) and the module lies inside the window's location when
+    the hint named a segment.
+  - *Never across privacy*: a `no_capture` window (any reason, including the privacy hold) is never given a carried
+    module and clears the anchor, so nothing carries out of it either.
+  - *Elsewhere*: a window whose hint or summary decides on an unseeded module (e.g. "Poisk Research Module")
+    clears the anchor and is not carried into: the camera has left the anchored module.
+  - *Resolved wins*: a window that resolves a module itself always uses it and becomes the anchor.
+  - *Marking*: the window payload carries `window.location = {"location_id", "source": "carried", "carried_from"
+    (anchor t_end), "gap_s"}` (inventory-api ignores unknown window fields; `source` is `hint`/`summary` for
+    resolved windows), an INFO log, and every sighting's confidence is capped at `module_carry_confidence`
+    (`PERCEPTION_MODULE_CARRY_CONFIDENCE`, default 0.5, ≤ 1).
+  - Fixed cameras never carry (they have their own location rules).
+- AC-PER-42 **Real-data regression** (tests/test_ac_per_39_42_module_resolution.py). The stored raw replies of the
+  live run are fixtures; each must resolve to its caption module. The whole run (51 windows: hint, summary, privacy,
+  caption truth) replays through `window_policy` + `ModuleCarry`; the predicted modules and the resulting
+  `window_location_acc` are asserted, and no window may be given a module other than its caption module when the
+  caption names a seeded module.
+
+### Review round (AC-PER-39..42): fixes and residual risks accepted
+
+Fixes (each test-first, tests/test_ac_per_39_42_module_resolution.py `test_review_*`):
+- *Punctuation.* A mention never spans a comma, semicolon, colon, `!`, `?`, brackets, a dash or a sentence-ending
+  period; an abbreviation dot ("U.S. Lab") is not a barrier. Number words become digits only right after a
+  capitalised "Node" ("Node two"), never in "the node, one crew member" or "the node one crew member".
+- *JLP names.* A Kibo/JEM mention directly followed by a logistics-module mention ("JEM Experiment Logistics
+  Module", "Kibo's logistics module") is part of the JLP1 name; "ELM-PS" is a JLP1 mention.
+- *Fixed cameras* do not use the mention scan for hints either (exact and relaxed matches only, as AC-PER-23).
+- *Not-inside markers.* Also *dir*: "outside", "near", "behind", "beyond", "past", "across", "opposite",
+  "between", "in front of", "out of", and a mention followed by "hatch"/"hatchway". A mention after "and"/"or"
+  directly after another mention takes that mention's marker ("between Harmony and Kibo": both *dir*).
+- *Common words need module context.* "Unity", "Harmony", "Destiny", "Tranquility", "Columbus" count only when the
+  next word is module/node/lab/laboratory/PMM, or the previous word is an *in* / *dir* word, "of", "and" or "or";
+  "Leonardo" only before a module word ("Unity is important", "Columbus Day", "Leonardo da Vinci" are nothing). The
+  case rule applies to one-word phrases and "US …" only ("the quest airlock" is still Quest).
+- *Carry.* `WindowScope.mentions` lists every module the hint or summary mentions (any marker, unseeded included);
+  a window that mentions any module other than the anchor's is not carried into ("A view of Kibo from the Cupola"
+  after Columbus). The anchor is re-checked against the current resolver (a catalog refresh that removes the module
+  or makes it no_capture ends the carry). A non-finite `module_carry_s` (only possible programmatically) is off.
+- *Private terms* (AC-PER-23 curated list) gain "cq", "cqs", "quarters", "hygiene area": a hint such as "Harmony CQ"
+  now resolves to NOD2, so it must stay private.
+
+Residual risks accepted:
+- "through" is not a not-inside word ("photos through a Cupola window" is in the Cupola; "through Harmony into
+  Kibo" decides nothing because "into" marks Kibo and Harmony is plain, so two modules without *in*).
+- Non-ISS uses of distinctive names ("the service module of the car", "SM" in a spoken "in the SM bag") resolve.
+  The video is ISS footage; "SM" was requested as a Zvezda alias.
+- Gemma's signage-like hints "NOD 3" (with a space) and "To COL" are not resolved ("NoD3" matches the id). "NOD 3"
+  was seen in two Cupola-caption windows; resolving it would have scored them wrong.
+- At the live cadence (5 s windows every 30 s) a carry reaches one window (25 s gap; the next is 55 s after the
+  anchor). Zarya windows in the run carry no evidence at all (no hint, no name in the summary) and stay unresolved.

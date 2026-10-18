@@ -208,3 +208,11 @@ I need from you.
         resumes at 03:05:43 (window 6).
     - **People:** 12 non-biometric person tracks, e.g. "black shirt, grey pants" in COL1 and "blue shorts, grey
       long-sleeve shirt" in CUP1. Some over-splitting is expected as the crew changes clothes and modules.
+35. **Module resolution (AC-PER-39..42).** On the real-video eval, replaying the saved Gemma replies, predicted
+    window_location_acc went from **0.391 to 0.696**, with 0 wrong modules. The changes: aliases for every seeded
+    module, a scene-summary fallback, and a handheld-camera carry.
+    - **Decision for Chris: carry reach.** A carry lasts ≤45 s from the last window that *named* its module, and
+      carried windows don't extend it. Chaining window to window would have carried Node 3 into the next pass's
+      Columbus and Kibo windows, a wrong module, which a test demonstrates. Say if you want chaining anyway.
+    - **Remaining misses:** windows whose hint and summary name no module (Zarya ×2), signage-only hints ("To COL"),
+      and privacy-hold windows, which never carry.

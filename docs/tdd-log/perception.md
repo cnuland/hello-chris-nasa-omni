@@ -895,3 +895,92 @@ eval/tests/test_ac_eval_08_revisit.py.
 - **New env vars:** `PERCEPTION_PERSON_MATCH_FLOOR` (0.5) and `PERCEPTION_PRIVACY_HOLD_S` (30).
 - **Not done (outside this scope):** `/ingest/window` does not accept a person-entity link for events
   (`event.actor_entity` exists in the DB). Events still carry `actor_desc` only, which needs a contracts change.
+
+## ISS module resolution (real-video eval, 2026-10-18; AC-PER-39..42)
+
+Measured: `make eval-real` on the live Gemma 4 run scored `window_location_acc` 0.391 (9 of 23 scored windows).
+No window had the wrong module; all 14 misses stayed at segment level (USOS).
+
+- **Real data pulled (read-only).**
+  - Windows were listed from `observation_window` via `oc exec … psql`, and every stored raw reply (48) was fetched
+    through `/api/media/…`.
+  - Fixtures:
+    - `tests/fixtures/gemma4_tour/window_*.json`: 12 raw replies (Columbus, Kibo, Unity, Cupola, Zvezda, Nauka,
+      and the "NOD 3", "To FGB", PMA-2 and Poisk hints).
+    - `tests/fixtures/real_tour_run_2026-10-18.json`: the first 51 windows with hint, summary, `no_capture`,
+      old prediction, and caption truth from `srt_truth` with the same alignment as `score_run`.
+  - Findings from the data:
+    - Kibo and Nauka had hints in official form, which did not resolve.
+    - Gemma also writes signage as hints ("To COL", "To FGB", "NOD 3", "NoD3").
+    - The Zarya windows have neither a hint nor a module name, so no resolution rule can fix them.
+- **Spec:** AC-PER-39 (aliases and the mention scan), AC-PER-40 (summary fallback for roaming cameras), AC-PER-41
+  (module carry, anchored to real evidence) and AC-PER-42 (real-data regression).
+- **Red:** collection error (`ModuleCarry` missing), then with a stub 153 failed and 9 passed. The 9 passing were
+  guards on existing behaviour.
+- **Green:**
+  - `locations.py`:
+    - aliases (`ISS_ALIASES`), `RELAXED_STOP_KEYS`, `MODULE_MENTIONS` and `UNSEEDED_MENTIONS`;
+    - `scan_modules`, `resolve_hint` and `is_roaming`;
+    - `window_policy(camera, hint, summary)` with `source`, `elsewhere` and `mentions`;
+    - `ModuleCarry`.
+  - `reconciler.py`: the summary is passed to `window_policy`. The carry runs after every privacy decision (hint,
+    summary private place, sleep cue, privacy hold). The payload gets `window.location` = {location_id, source,
+    carried_from, gap_s}, and carried sightings are capped at `module_carry_confidence`.
+  - `config.py`: `PERCEPTION_MODULE_CARRY_S` (default 45, 0 = off, max 600) and
+    `PERCEPTION_MODULE_CARRY_CONFIDENCE` (default 0.5, ≤ 1).
+- **Design decision: anchored carry, not chained.** The gap is measured from the last window that resolved a module
+  itself, and carried windows do not extend it. `test_ac_per_42_chained_carry_would_assign_wrong_modules` shows why:
+  chaining window to window carries "NoD3" (unscored) through 9 unnamed windows into the next pass's Columbus and
+  Kibo windows, which would be wrong modules. At the live cadence (5 s every 30 s), a carry reaches one window.
+- **Adversarial review:** an independent read-only reviewer found 9 issues.
+  - **Fixed, test-first** (`test_review_*`: 44 new; 34 of the first 42 were red):
+    - **P1 punctuation.** Mentions spanned commas and sentences, and number words became node numbers ("Inside
+      the node, one crew member" gave NOD1).
+    - **P1 JLP names.** "JEM Experiment Logistics Module" and "Kibo's logistics module" gave JPM1; "ELM-PS" gave
+      nothing.
+    - **P1/P2 refresh.** After a catalog refresh, the carry could go into a module that had become private or was
+      removed.
+    - **P2 contrary evidence.** A window mentioning another module was still carried.
+    - **P2 fixed cameras.** Fixed cameras scanned hints ("Destiny visible through the hatch" moved the NOD2
+      camera).
+    - **P2 not-inside markers.** Outside, near, behind, in front of, out of, between and "… hatch" were missing,
+      and "and" now takes the previous mention's marker.
+    - **P3 common words.** "Unity is important", "Columbus Day" and "Leonardo da Vinci" resolved. These words now
+      need module context.
+    - **P3 case rule.** It applied to multi-word phrases ("the quest airlock").
+    - **P3 config.** An infinite carry set in code was not treated as off.
+    - **Privacy hardening.** "cq", "cqs", "quarters" and "hygiene area" are now private terms, because a hint such
+      as "Harmony CQ" now resolves to NOD2.
+  - **Accepted** (spec review round):
+    - "through" stays neutral;
+    - non-ISS uses of distinctive names ("service module of the car", "SM");
+    - the signage hints "NOD 3" and "To COL" are not resolved;
+    - a carry reaches one window at the live cadence.
+- **Re-score (prediction; the live run still uses the old code until redeploy).** The saved replies were replayed
+  through `window_policy` + `ModuleCarry`. Private windows stored no raw reply, so their hint is unknown and only
+  their summary was used. Each window's sightings were relocated in a `score_run --export` file:
+
+  | run | window_location_acc | correct / scored | unresolved | module_coverage |
+  |---|---|---|---|---|
+  | exported 41 windows, old code (the reported run) | 0.391 | 9 / 23 | 14 | 0.667 |
+  | same 41 windows, new resolution | **0.696** | 16 / 23 | 7 | 0.889 |
+  | 51 windows (run continued), old | 0.333 | 10 / 30 | 20 | 0.667 |
+  | 51 windows, new | 0.633 | 19 / 30 | 11 | 0.889 |
+
+  Confusion on the 41 windows, new (truth → predicted): COL1 {COL1 1, unresolved 1}; JPM1 {JPM1 2, unresolved 2};
+  NOD2 {NOD2 2}; LAB1 {LAB1 1, unresolved 1}; NOD1 {NOD1 2}; CUP1 {CUP1 4}; ZARYA {unresolved 2}; ZVEZDA
+  {ZVEZDA 2, unresolved 1}; NAUKA {NAUKA 2}. No window was assigned the wrong module.
+
+  The 7 remaining misses:
+  - 2 Zarya windows with no evidence;
+  - 2 Kibo windows in pass 2, where the summary never names Kibo;
+  - pass 2 Columbus ("To COL" signage, with no anchor before it);
+  - pass 2 Destiny (a privacy-hold window: no carry into a private window);
+  - the third Zvezda window (55 s after the anchor).
+- **Final runs:**
+  - perception: 1032 passed (824 + 208); ruff clean.
+  - `make test` suites: inventory-api 450, perception 1032, eval 401 + 1 skipped with both gates PASSED, e2e 27.
+    test-agent and test-dashboard fail on another agent's in-progress round-3 work (`nasa_agent.render` missing,
+    `ui3_*` tests), in files this change does not touch.
+  - `make eval`: gate PASSED, with every metric unchanged.
+- **New env vars:** `PERCEPTION_MODULE_CARRY_S` (45) and `PERCEPTION_MODULE_CARRY_CONFIDENCE` (0.5).

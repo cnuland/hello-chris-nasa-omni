@@ -72,7 +72,7 @@ import numpy as np
 from . import NEW, UNKNOWN
 from .config import PerceptionConfig
 from .labels import CatalogMapper, label_key, normalise_label
-from .locations import LocationResolver
+from .locations import LocationResolver, ModuleCarry
 from .media import crop as crop_image
 from .media import encode_jpeg
 from .people import (
@@ -300,6 +300,7 @@ class _WindowContext:
         self.no_capture = no_capture
         self.hint_conflict = hint_conflict
         self.truncated = False  # AC-PER-26: the omni observation was salvaged from a cut-off reply
+        self.carried = False  # AC-PER-41: the window location was carried from an earlier window
         self._frame_uris: dict[int, str | None] = {}
         self._crops: dict[int, str | None] = {}
         self.decisions: list[dict[str, Any]] = []
@@ -381,6 +382,8 @@ class Reconciler:
         self._recent_events: dict[tuple[str, str, str | None], datetime] = {}
         # AC-PER-37 review: windows starting before this stay private (overlapping windows show the same scene)
         self._private_until: datetime | None = None
+        # AC-PER-41: a roaming camera's last own module (resolver and horizon are refreshed per window)
+        self._module_carry = ModuleCarry(self.resolver, self.config.module_carry_s)
 
     def _set_catalog(self, catalog: list[dict[str, Any]], locations: list[dict[str, Any]]) -> None:
         self.catalog = catalog
@@ -468,7 +471,9 @@ class Reconciler:
         if transcript is None:
             transcript = str(obs.get("transcript") or "")
         camera_location = self.config.camera_locations.get(self.camera_id)
-        scope = self.resolver.window_policy(camera_location, obs.get("location_hint"))
+        scope = self.resolver.window_policy(
+            camera_location, obs.get("location_hint"), str(obs.get("scene_summary") or "")  # AC-PER-39/40
+        )
         location, no_capture = scope.location, scope.no_capture
         privacy: dict[str, Any] | None = {"no_capture": True, "reason": "location"} if no_capture else None
         if not no_capture and self.resolver.names_private_place(str(obs.get("scene_summary") or "")):
@@ -493,6 +498,18 @@ class Reconciler:
                         extra={"camera_id": self.camera_id, "window": window.index})
             no_capture = True
             privacy = {"no_capture": True, "reason": "privacy_hold"}
+        # AC-PER-41: after every privacy decision, so nothing carries into or out of a no_capture window
+        self._module_carry.resolver = self.resolver
+        self._module_carry.carry_s = float(self.config.module_carry_s or 0.0)
+        carry = self._module_carry.step(window.t_start, window.t_end, scope, no_capture=no_capture,
+                                        roaming=self.resolver.is_roaming(camera_location))
+        location = carry.location
+        window_location: dict[str, Any] = {"location_id": location, "source": carry.source}
+        if carry.carried:
+            window_location |= {"carried_from": _iso(carry.carried_from), "gap_s": carry.gap_s}
+            logger.info("window has no module of its own; module carried from an earlier window",
+                        extra={"camera_id": self.camera_id, "window": window.index, "location": location,
+                               "gap_s": carry.gap_s})
         if scope.hint_conflict and not no_capture:
             logger.warning(
                 "location hint names another module than the fixed camera; sightings get low confidence",
@@ -506,6 +523,7 @@ class Reconciler:
             )
         ctx = _WindowContext(self, window, location, no_capture, scope.hint_conflict)
         ctx.truncated = omni.truncated
+        ctx.carried = carry.carried
         dets = [list(detections[i]) if i < len(detections) else [] for i in range(len(window.frames))]
 
         observed = self._link(window, obs.get("objects") or [], dets)
@@ -544,6 +562,7 @@ class Reconciler:
             "audio_events": list(obs.get("audio_events") or []),
             "model": model or omni.model or "unknown",
         }
+        window_doc["location"] = window_location  # AC-PER-41 metadata (inventory-api ignores unknown window fields)
         if privacy is not None:
             window_doc["privacy"] = privacy  # AC-PER-37 metadata (inventory-api ignores unknown window fields)
         if not no_capture:
@@ -1286,6 +1305,8 @@ class Reconciler:
             confidence = min(confidence, _clamp01(self.config.hint_conflict_confidence, 0.5))
         if ctx.truncated:  # AC-PER-26 salvaged window
             confidence = min(confidence, _clamp01(self.config.omni_truncated_confidence, 0.5))
+        if ctx.carried:  # AC-PER-41 module inherited from an earlier window
+            confidence = min(confidence, _clamp01(self.config.module_carry_confidence, 0.5))
         sighting: dict[str, Any] = {
             "location_id": o.location,
             "seen_at": _iso(seen_at),

@@ -14,6 +14,8 @@ Environment variables (all optional unless noted):
   PERCEPTION_HINT_CONFLICT_CONFIDENCE (AC-PER-23, default 0.5, <= 1),
   PERCEPTION_PERSON_MATCH_FLOOR (AC-PER-35, default 0.5, <= 1),
   PERCEPTION_PRIVACY_HOLD_S (AC-PER-37, default 30, 0 = off),
+  PERCEPTION_MODULE_CARRY_S (AC-PER-41, default 45, 0 = off, max 600),
+  PERCEPTION_MODULE_CARRY_CONFIDENCE (AC-PER-41, default 0.5, <= 1),
   OMNI_MAX_TOKENS (AC-PER-25, default 700, 1..32768), OMNI_MAX_OBJECTS (AC-PER-25/27, default 12, 1..40),
   OMNI_REPETITION_PENALTY (AC-PER-25, default 1.05, > 0 and <= 2; not sent when 1.0),
   OMNI_TRUNCATED_CONFIDENCE (AC-PER-26, default 0.5, <= 1).
@@ -87,6 +89,8 @@ class PerceptionConfig:
     hint_conflict_confidence: float = 0.5  # AC-PER-23 sighting confidence cap when a fixed camera's hint conflicts
     person_match_floor: float = 0.5  # AC-PER-35 appearance-text similarity needed to attach a person sighting
     privacy_hold_s: float = 30.0  # AC-PER-37 windows of the camera starting this soon after a private one stay private
+    module_carry_s: float = 45.0  # AC-PER-41 a roaming camera's unresolved window inherits the module this long
+    module_carry_confidence: float = 0.5  # AC-PER-41 sighting confidence cap in a carried window
     min_transit_s: float = 20.0
     assign_p: float = 0.85
     ask_p: float = 0.5
@@ -170,6 +174,8 @@ _NUMBER_VARS: dict[str, tuple[str, type]] = {
     "hint_conflict_confidence": ("PERCEPTION_HINT_CONFLICT_CONFIDENCE", float),
     "person_match_floor": ("PERCEPTION_PERSON_MATCH_FLOOR", float),
     "privacy_hold_s": ("PERCEPTION_PRIVACY_HOLD_S", float),
+    "module_carry_s": ("PERCEPTION_MODULE_CARRY_S", float),
+    "module_carry_confidence": ("PERCEPTION_MODULE_CARRY_CONFIDENCE", float),
     "omni_max_tokens": ("OMNI_MAX_TOKENS", int),
     "omni_max_objects": ("OMNI_MAX_OBJECTS", int),
     "omni_repetition_penalty": ("OMNI_REPETITION_PENALTY", float),
@@ -183,6 +189,8 @@ _MAX_VALUES: dict[str, float] = {
     "consolidate_iou": 1.0,
     "hint_conflict_confidence": 1.0,
     "person_match_floor": 1.0,
+    "module_carry_confidence": 1.0,
+    "module_carry_s": 600.0,  # AC-PER-41: a carry is short-range evidence, never an unbounded default
     "omni_max_tokens": 32768,
     "omni_max_objects": 40,  # observation.schema.json objects.maxItems
     "omni_repetition_penalty": 2.0,
