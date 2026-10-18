@@ -256,3 +256,86 @@ was cut off, failed validation, was retried (another ~55 s) and then dropped. AC
   collapse to the single most confident event, keeping the order of first appearance. Events with a different actor,
   type or destination stay separate. This complements the cross-window `event_dedup_s` check. Tests:
   tests/test_ac_per_10_within_window_event_dedup.py.
+
+## Amendments: revisit dedup (cluster integration 2026-10-17)
+
+Measured on the cluster (docs/QUESTIONS.md #29): the full NASA ISS tour video ran in a loop, 101 windows of 6 frames
+every 12 s across 8 modules. New entities per 10-window bucket were 19, 22, 16 (windows 0–29), then 7, 6, 9, 5, 10
+(30–79), then **22** in windows 80–89, right after the video looped back to Columbus about 15 min later, then 2, 3.
+Cause (verified in the code): a sighting without an exemplar (AC-PER-22) attached only to a same-class entity last
+seen in the module within `no_exemplar_match_s` (600 s), so every omni-only object of a module revisited after more
+than 10 min became a new entity. Expected counts only flagged the duplicates afterwards (35 `possible_duplicate`
+reviews). The detector-linked path was verified and kept: `/ingest/candidates` searches all live exemplars of the
+class with no time or place filter; the impossible-transit gate (AC-PER-8 step 2) rejects only the *candidate* last
+seen in another module within `min_transit_s`. It never blocks the other candidates, for example the same object last
+seen in this module 15 min ago. AC-PER-29 to AC-PER-32 amend AC-PER-8, AC-PER-19 and AC-PER-22.
+
+- AC-PER-29 **Revisit dedup for sightings without an exemplar** (amends AC-PER-22).
+  - *Candidates.* Live entities of the observation's catalog class (for `UNKNOWN`: unclassified entities with the
+    same label key, AC-PER-31) whose last location is the observation's module or one of its zones, that no other
+    instance of this window has taken (and, for adoption, that were not already compared by appearance). One
+    `GET /items?location=<module>&sort=-last_seen_at` query per (class, module) per window (`catalog_id=<class>`,
+    limit 50; for `UNKNOWN` no catalog filter and no free-text `q`, limit 200), cached for the window.
+  - *Recent.* If any candidate was last seen within `no_exemplar_match_s`, AC-PER-22 applies, with one change from
+    the review round: among the recent candidates, one last seen at the observation's own location (zone) is
+    taken first, else the most recently seen. In the second window of a revisit, both same-class objects were just
+    attached and are "recent"; the zone-blind rule swapped them.
+  - *Revisit, one candidate.* Otherwise, after any gap, a single candidate is attached. There is no time limit.
+  - *Revisit, several candidates.* The decision model is asked `same_or_new` (systemone choice). Options are up to 4
+    candidates (those last seen in the observation's own zone first, then most recent first) plus `NEW`. The state
+    carries the observation (label, description, location, time, held) and, for every candidate, its label,
+    description, last location, last-seen time and `seen_ago_s`. The call is logged in `decisions`. The subject
+    holds ids, locations and times, never descriptions.
+    - A candidate chosen with probability ≥ `decision_accept` is attached.
+    - `NEW` chosen with probability ≥ `decision_accept` creates a new entity. The exception is a non-fungible class
+      whose live count has already reached `expected_count`: there a new entity would be a certain duplicate, so the
+      fallback applies.
+    - In every other case (model unavailable or erroring, `needs_review`, low probability, a choice that was not
+      offered), the **fallback** applies: attach the most recently seen candidate last seen at the observation's own
+      location (zone), else the most recently seen candidate, and add a `low_confidence` review naming the
+      candidates. No new entity is created.
+  - *Coarse places.* When the observation's location is not inside a module (a segment such as `USOS`, or none),
+    AC-PER-22 applies unchanged: the same exact location, within `no_exemplar_match_s`. A segment is too coarse to
+    identify an object after an arbitrary gap.
+  - *Privacy.* In a `no_capture` window the attachment rules are the same, but no review is created (AC-PER-11) and
+    nothing is uploaded.
+- AC-PER-30 **Revisit context for detector-linked sightings** (amends AC-PER-8 step 4). The similarity bands are
+  unchanged: p ≥ `assign_p` assigns, p < `ask_p` creates a new entity. A revisit in the ask band goes to the decision
+  model like any other ask, never straight to `NEW`, with the same context as AC-PER-29: each candidate's label, last
+  location, last-seen time, `seen_ago_s` and, when inventory has one, its description. `/ingest/candidates` returns
+  no description, so descriptions come from one `GET /items?catalog_id=<class>` query per class per window, made
+  only when an ask happens.
+- AC-PER-31 **UNKNOWN label key** (amends AC-PER-19, AC-PER-22, AC-PER-10; docs/QUESTIONS.md #27).
+  `label_key(text)` is `normalise_label(text)` with all spaces removed, so "spacesuit", "space suit" and
+  "Space-Suit" are one key. The key is used only where one UNKNOWN label is compared with another: within-window
+  consolidation, class-and-place matching, and matching an omni event's object label to an observed UNKNOWN object.
+  `normalise_label` itself (display and search) is unchanged.
+- AC-PER-32 **Eval gate** (eval/, AC-EVAL-5/6). `nasa_eval run` replays the dataset a second time, shifted by the
+  scene duration plus `REVISIT_GAP_S` = 900 s, after scoring the first pass. In the local target, the gold detector
+  misses every other catalog object on the revisit (OWLv2 is intermittent on real footage), so both the exemplar path
+  and the class-and-place path are exercised. `revisit_new_entity_rate` = entities created during the revisit / gold
+  objects of the scene, gated at ≤ 0.05 in eval/thresholds.yaml. The committed reference snapshot records a correct
+  revisit (no new entity).
+
+### Review round (AC-PER-29..32): residual risks accepted
+
+- *Wrong merge after a long gap.* A coarse sighting carries no identity. When the only same-class entity of a module
+  has left and a different one of the same class is shown, the newcomer is attached to the old entity. A detector-linked
+  sighting is protected, because appearance decides and entities that came back as candidates are excluded from
+  adoption. AC-PER-22 already accepted this risk within 10 min; AC-PER-29 accepts it for any gap. The alternative
+  measured on the cluster, a certain duplicate on every revisit, was worse.
+- *Adoption after a long gap.* A detector-linked instance that matched no exemplar may adopt a stale exemplar-less
+  entity (AC-PER-22 adoption, now without a time limit). If that adoption is wrong, the entity's first exemplar is
+  the wrong object's, and the real object later gets a fresh entity (it is excluded as an appearance candidate).
+  The history is mixed, but no duplicate is created on the revisit.
+- *Zone-blind single candidate.* One stale candidate is attached even when it was last seen in another zone of the
+  module (it may have been moved during the gap). With zones configured, a never-seen second object of the class
+  can be merged into it.
+- *UNKNOWN listing cap.* UNKNOWN candidates come from the 200 most recently seen entities of the module (no class
+  filter, and free-text `q` would not match "spacesuit" to "space suit"). A module with more live entities can miss
+  an old unknown.
+- *Detector-linked ask band with the decision model down* keeps AC-PER-8: a new provisional entity plus a
+  `possible_duplicate` review. Appearance was ambiguous there, so the "prefer attaching" rule is not applied.
+- *Fallback attaches are reviewed.* With several candidates and no confident decision, the attached entity may be
+  the wrong one of the candidates. A `low_confidence` review is opened (not in `no_capture` windows), so NASA can
+  correct it.

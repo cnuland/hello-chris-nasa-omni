@@ -246,9 +246,36 @@ def test_e2e_10_dreaming_over_the_real_schema(replay, make_agent, database_url):
 
 
 # ------------------------------------------------------------------------------------------------ eval gate
-def test_e2e_11_eval_scores_this_run_and_the_gate_passes(replay, api, make_agent, database_url, dataset, tmp_path):
+def revisit_replay(dataset, inventory_api, object_store, offset_s: float):
+    """The scene replayed again, shifted by ``offset_s`` (eval's revisit collaborators), hermetic like ``replay``."""
+    from datetime import timedelta
+
+    from nasa_eval.collaborators import build_collaborators, replay_config
+    from perception import replay as perception_replay
+    from perception.inventory_client import HttpInventoryClient
+
+    shift = timedelta(seconds=offset_s)
+    client = HttpInventoryClient(inventory_api, timeout_s=30)
+    try:
+        collab = build_collaborators(dataset, "local", catalog=client.get_catalog(), environ={},
+                                     revisit_offset_s=offset_s)
+        collab["storage"] = object_store
+        return perception_replay.run(
+            ((ts + shift, frame, chunk) for ts, frame, chunk in dataset.iter_source()),
+            camera_id=dataset.manifest.camera,
+            start_time=dataset.manifest.start_time + shift,
+            api=client,
+            config=replay_config(dataset, environ={}),
+            **collab,
+        )
+    finally:
+        client.close()
+
+
+def test_e2e_11_eval_scores_this_run_and_the_gate_passes(replay, api, make_agent, database_url, dataset, tmp_path,
+                                                          inventory_api, object_store):
     """AC-EVAL-3/5/6: the run in Postgres is scored against the gold of the scene, written as a pipeline report
-    (with a QA section from the agent) and ``nasa_eval gate`` exits 0 on it."""
+    (with a QA section from the agent and the AC-PER-32 revisit) and ``nasa_eval gate`` exits 0 on it."""
     from nasa_eval import THRESHOLDS_PATH
     from nasa_eval.dataset import QAItem
     from nasa_eval.gate import check, load_thresholds, run_gate
@@ -277,6 +304,18 @@ def test_e2e_11_eval_scores_this_run_and_the_gate_passes(replay, api, make_agent
         reports_dir=tmp_path / "qa",
     )
     assert qa["accuracy"] == pytest.approx(1.0)
+
+    # perception AC-PER-32: the same scene again after a 15 min gap must create no entity (after scoring and QA)
+    from nasa_eval.runner import REVISIT_GAP_S, scene_duration_s
+    from nasa_eval.scoring import revisit_new_entity_rate
+    from nasa_eval.snapshot import RevisitResult
+
+    revisit_replay(dataset, inventory_api, object_store, scene_duration_s(dataset) + REVISIT_GAP_S)
+    after = read_snapshot(database_url)
+    snapshot.revisit = RevisitResult(REVISIT_GAP_S, len(dataset.gold),
+                                     sorted(e for e in after.entities if e not in snapshot.entities))
+    result["metrics"]["revisit_new_entity_rate"] = revisit_new_entity_rate(snapshot.revisit)
+    assert snapshot.revisit.new_entity_ids == []
 
     now = datetime.now(UTC)
     report = build_report(dataset, result, now=now, source="replay", target="local", database=None, stats=replay,

@@ -27,7 +27,7 @@ from typing import Any
 from nasa_eval import metrics as m
 from nasa_eval.dataset import Dataset, GoldObject
 from nasa_eval.metrics import DEFAULT_EVENT_TOLERANCE_S
-from nasa_eval.snapshot import PredSighting, Snapshot
+from nasa_eval.snapshot import PredSighting, RevisitResult, Snapshot
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +51,7 @@ METRIC_KEYS = (
     "event_f1",
     "actor_accuracy",
     "unknown_recall",
+    "revisit_new_entity_rate",
 )
 UNKNOWN_CLASS = "unknown"
 DETECTION_IOU = 0.5
@@ -214,6 +215,14 @@ def _predicted_locations_at(
     return {gid: item[2] for gid, item in evidence.items()}
 
 
+def revisit_new_entity_rate(revisit: RevisitResult | None) -> float | None:
+    """Entities created when the scene was replayed after a long gap / gold objects of the scene (perception
+    AC-PER-32). None when no revisit was measured, which the gate treats as a failure."""
+    if revisit is None:
+        return None
+    return len(revisit.new_entity_ids) / revisit.objects if revisit.objects else 0.0
+
+
 def score(
     dataset: Dataset,
     snapshot: Snapshot,
@@ -319,6 +328,7 @@ def score(
         "event_f1": ev.f1,
         "actor_accuracy": ev.actor_accuracy,
         "unknown_recall": m.unknown_recall(gold_unknowns, reviewed),
+        "revisit_new_entity_rate": revisit_new_entity_rate(snapshot.revisit),
     }
     counts = {
         "gold_objects": len(dataset.gold),
@@ -337,6 +347,7 @@ def score(
         "event_fn": ev.fn,
         "unknown_reviews": len(reviewed),
         "location_scored": loc.n,
+        "revisit_new_entities": None if snapshot.revisit is None else len(snapshot.revisit.new_entity_ids),
     }
     log.info(
         "scored dataset=%s pairwise_f1=%.3f sighting_recall=%.3f duplicate_rate=%.3f location_acc=%.3f "

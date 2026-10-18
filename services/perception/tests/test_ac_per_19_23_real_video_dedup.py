@@ -482,9 +482,11 @@ def test_ac_per_22_gated_sighting_in_another_module_is_new(make_reconciler, inv)
     assert a["entity_id"] is None and a["new_entity"]["catalog_id"] == "laptop"
 
 
-def test_ac_per_22_gated_sighting_after_the_horizon_is_new(make_reconciler, inv):
-    inv.add_entity(catalog_id="laptop", last_location="LAB1", last_seen_at=T0 - timedelta(seconds=601))
-    process(make_reconciler(), [[]], [obj("laptop", BOX_A)], {})
+def test_ac_per_22_gated_sighting_after_the_horizon_in_a_segment_is_new(make_reconciler, inv):
+    """Amended by AC-PER-29: past the horizon a module with one candidate attaches (revisit); a segment-level place
+    (cam-handheld without a hint -> USOS) is too coarse and keeps the horizon."""
+    inv.add_entity(catalog_id="laptop", last_location="USOS", last_seen_at=T0 - timedelta(seconds=601))
+    process(make_reconciler("cam-handheld"), [[]], [obj("laptop", BOX_A)], {})
     assert inv.last["assignments"][0]["entity_id"] is None
 
 

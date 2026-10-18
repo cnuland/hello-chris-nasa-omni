@@ -29,6 +29,12 @@
 ``replay_config(dataset)`` adds the manifest's camera zone rectangles to perception's config, so sightings get
 zone-level locations (camera-configured zones, ARCHITECTURE decision 5).
 
+``revisit_with_collaborators(dataset, database_url, offset_s, target=...)`` replays the same dataset again, every
+timestamp shifted by ``offset_s`` (perception AC-PER-32 revisit). The local fakes map the shifted times back to the
+gold, and the gold detector misses every other catalog object (``revisit_misses``): OWLv2 is intermittent on real
+footage, so on the revisit half the objects come back omni-only (no exemplar), the case that duplicated on the
+cluster.
+
 ``bind_inventory_api(database_url)`` starts the inventory-api in-process (FastAPI TestClient) on the fresh eval
 database, so perception writes through the real API into exactly that database.
 """
@@ -96,10 +102,18 @@ def _thumb(image: Any) -> Any:
 class GoldDetector:
     """``detect(frame, labels)``: the gold (catalog) boxes of the dataset frame closest to ``frame``."""
 
-    def __init__(self, dataset: Dataset, labels: Mapping[str, str], *, score: float = DETECTION_SCORE):
+    def __init__(
+        self,
+        dataset: Dataset,
+        labels: Mapping[str, str],
+        *,
+        score: float = DETECTION_SCORE,
+        miss: set[str] | frozenset[str] = frozenset(),
+    ):
         self.dataset = dataset
         self.labels = dict(labels)
         self.score = score
+        self.miss = frozenset(miss)  # gold object ids this detector never finds (revisit)
         self._thumbs: list[Any] | None = None
         self.calls = 0
 
@@ -131,7 +145,7 @@ class GoldDetector:
         wanted = set(labels) if labels else None
         out = []
         for g, a in _appearances_at(self.dataset.gold, t):
-            if g.is_unknown or g.catalog_id is None or a.bbox is None:
+            if g.is_unknown or g.catalog_id is None or a.bbox is None or g.gold_object_id in self.miss:
                 continue
             label = self.labels.get(g.catalog_id, g.catalog_id)
             if wanted is None or label in wanted:
@@ -150,10 +164,12 @@ class GoldOmni:
         *,
         model: str = "gold-omni",
         profile: str = DEFAULT_OMNI_PROFILE,
+        time_offset_s: float = 0.0,
     ):
         if profile not in OMNI_PROFILES:
             raise ValueError(f"unknown GoldOmni profile {profile!r}; expected one of {OMNI_PROFILES}")
         self.profile = profile
+        self.time_offset_s = float(time_offset_s)  # a revisit replays the dataset shifted by this
         self.dataset = dataset
         self.labels = dict(labels)
         self.model = model
@@ -163,7 +179,7 @@ class GoldOmni:
         self.calls = 0
 
     def _rel(self, ts: datetime) -> float:
-        return (ts - self.dataset.manifest.start_time).total_seconds()
+        return (ts - self.dataset.manifest.start_time).total_seconds() - self.time_offset_s
 
     def _label(self, g: GoldObject) -> str:
         if g.is_unknown or g.catalog_id is None:
@@ -314,7 +330,7 @@ def replay_config(dataset: Dataset, environ: Mapping[str, str] | None = None) ->
 
 
 # ------------------------------------------------------------------------------------------------------- ASR
-def gold_asr(dataset: Dataset) -> Any:
+def gold_asr(dataset: Dataset, time_offset_s: float = 0.0) -> Any:
     """perception FakeASR returning the scripted transcript lines whose start falls inside the chunk (once each)."""
     from perception.fakes import FakeASR
 
@@ -323,7 +339,7 @@ def gold_asr(dataset: Dataset) -> Any:
     start = dataset.manifest.start_time
 
     def transcribe(chunk: Any) -> str:
-        t0 = (chunk.timestamp - start).total_seconds()
+        t0 = (chunk.timestamp - start).total_seconds() - time_offset_s
         t1 = t0 + chunk.duration_s
         out = []
         for j, line in enumerate(lines):
@@ -354,8 +370,11 @@ def build_collaborators(
     *,
     catalog: Sequence[Mapping[str, Any]] | None = None,
     environ: Mapping[str, str] | None = None,
+    revisit_offset_s: float = 0.0,
 ) -> dict[str, Any]:
-    """{omni, detector, embedder, decision, asr, storage} for ``perception.replay.run`` (see module docstring)."""
+    """{omni, detector, embedder, decision, asr, storage} for ``perception.replay.run`` (see module docstring).
+    ``revisit_offset_s`` > 0: the collaborators of a revisit replay shifted by that many seconds (local: the gold
+    fakes map the times back and the detector misses ``revisit_misses(dataset)``)."""
     if target not in TARGETS:
         raise ValueError(f"unknown target {target!r}; expected one of {TARGETS}")
     _import_perception()
@@ -375,12 +394,13 @@ def build_collaborators(
             if cfg.decision_url
             else fakes.FakeDecision()
         )
+        revisit = revisit_offset_s > 0
         return {
-            "omni": GoldOmni(dataset, labels, profile=profile),
-            "detector": GoldDetector(dataset, labels),
+            "omni": GoldOmni(dataset, labels, profile=profile, time_offset_s=revisit_offset_s),
+            "detector": GoldDetector(dataset, labels, miss=revisit_misses(dataset) if revisit else frozenset()),
             "embedder": ThumbnailEmbedder(),
             "decision": decision,
-            "asr": gold_asr(dataset),
+            "asr": gold_asr(dataset, time_offset_s=revisit_offset_s),
             "storage": fakes.MemoryStorage(),
         }
     missing = [var for var, value in (("OMNI_URL", cfg.omni_url), ("DECISION_URL", cfg.decision_url)) if not value]
@@ -456,18 +476,36 @@ def bind_inventory_api(database_url: str) -> tuple[Any, Callable[[], None]]:
     return HttpInventoryClient(str(client.base_url), http_client=client), close
 
 
-def replay_with_collaborators(dataset: Dataset, database_url: str, *, target: str) -> Any:
-    """Bind the API to ``database_url``, build the collaborators for ``target`` and run perception.replay."""
+def revisit_misses(dataset: Dataset) -> frozenset[str]:
+    """Catalog gold objects the local detector misses on the revisit: every other one, by sorted gold id."""
+    catalog = sorted(g.gold_object_id for g in dataset.gold if not g.is_unknown and g.catalog_id is not None)
+    return frozenset(catalog[1::2])
+
+
+def revisit_with_collaborators(dataset: Dataset, database_url: str, offset_s: float, *, target: str) -> Any:
+    """The revisit pass (perception AC-PER-32): the same dataset replayed into the same database, shifted by
+    ``offset_s`` seconds."""
+    if offset_s <= 0:
+        raise ValueError("a revisit needs a positive time offset")
+    return replay_with_collaborators(dataset, database_url, target=target, time_offset_s=offset_s)
+
+
+def replay_with_collaborators(dataset: Dataset, database_url: str, *, target: str, time_offset_s: float = 0.0) -> Any:
+    """Bind the API to ``database_url``, build the collaborators for ``target`` and run perception.replay
+    (every timestamp shifted by ``time_offset_s``)."""
     _import_perception()
+    from datetime import timedelta
+
     from perception import replay
 
+    shift = timedelta(seconds=time_offset_s)
     api, close = bind_inventory_api(database_url)
     try:
-        collab = build_collaborators(dataset, target, catalog=api.get_catalog())
+        collab = build_collaborators(dataset, target, catalog=api.get_catalog(), revisit_offset_s=time_offset_s)
         stats = replay.run(
-            dataset.iter_source(),
+            ((ts + shift, frame, chunk) for ts, frame, chunk in dataset.iter_source()),
             camera_id=dataset.manifest.camera,
-            start_time=dataset.manifest.start_time,
+            start_time=dataset.manifest.start_time + shift,
             api=api,
             config=replay_config(dataset),
             **collab,

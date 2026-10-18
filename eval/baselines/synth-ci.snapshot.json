@@ -1070,5 +1070,10 @@
    "entity_id": "ref-unknown-1",
    "status": "open"
   }
- ]
+ ],
+ "revisit": {
+  "gap_s": 900.0,
+  "objects": 6,
+  "new_entity_ids": []
+ }
 }

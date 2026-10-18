@@ -6,3 +6,6 @@ location_acc: {min: 0.8}
 unknown_recall: {min: 0.9}
 # Coverage (review round): without it an empty or sparse run could pass the entity-resolution gates.
 sighting_recall: {min: 0.8}
+# Revisit dedup (perception AC-PER-32, docs/QUESTIONS.md #29): the scene replayed after a 15 min gap must re-identify
+# its objects. new entities on the revisit / gold objects of the scene.
+revisit_new_entity_rate: {max: 0.05}

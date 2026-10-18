@@ -146,6 +146,19 @@ def cosine(a: Sequence[float], b: Sequence[float]) -> float:
 HIDDEN = {"merged", "dismissed"}
 
 
+def _within(location_id: str | None, ancestor: str, locations: Sequence[dict[str, Any]]) -> bool:
+    """True when ``location_id`` is ``ancestor`` or below it in the location tree."""
+    parent = {loc["location_id"]: loc.get("parent_id") for loc in locations}
+    seen: set[str] = set()
+    current = location_id
+    while current is not None and current not in seen:
+        if current == ancestor:
+            return True
+        seen.add(current)
+        current = parent.get(current)
+    return False
+
+
 class FakeInventory:
     """In-memory InventoryClient. Every posted payload must survive a JSON round trip (as over HTTP) and validate
     against inventory-api's IngestWindow model; it is then applied to the in-memory state."""
@@ -236,6 +249,8 @@ class FakeInventory:
             st = [st] if isinstance(st, str) else list(st)
             items = [e for e in self.entities.values() if e["status"] in st and
                      (not filters.get("catalog_id") or e["catalog_id"] == filters["catalog_id"])]
+        if filters.get("location"):  # GET /items?location=X: last_location in the subtree of X (like the API)
+            items = [e for e in items if _within(e["last_location"], str(filters["location"]), self.locations)]
         if filters.get("q"):
             q = str(filters["q"]).lower()
             items = [e for e in items if q in e["label"].lower()]

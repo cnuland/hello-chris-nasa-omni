@@ -15,15 +15,19 @@ Per observed instance:
     timestamp);
   * exemplar quality gate (AC-PER-22): only a detector-linked instance whose crop (cut from the full-resolution
     keyframe, ``Keyframe.hires``, AC-PER-21) has a short side >= ``config.min_crop_px`` is embedded and gets an
-    exemplar and a stored crop. Otherwise the sighting is recorded without exemplar and matched by class and place:
-    the most recently seen live entity of the class (UNKNOWN: unclassified, same normalised label) last seen in the
-    same module within ``config.no_exemplar_match_s``, else a new entity;
+    exemplar and a stored crop. Otherwise the sighting is recorded without exemplar and matched by class and place
+    (AC-PER-22/29): live entities of the class (UNKNOWN: unclassified, same ``label_key``, AC-PER-31) last seen in
+    the same module or its zones, one GET /items per (class, module) per window. Any seen within
+    ``config.no_exemplar_match_s`` -> the most recent; else (a revisit after any gap) one -> attach, several -> the
+    decision model ("same_or_new" with descriptions, last places and times), falling back to the same-zone / most
+    recent candidate + ``low_confidence`` review. Outside modules (a segment) the horizon still applies;
   * embed the crop, retrieve candidates (``api.candidates(embedding, catalog_id=..., location_id=...)``);
   * hard gates: class mismatch; impossible transit (different module within ``min_transit_s`` for a non-held
     object); one entity per window (best match keeps it);
   * score ``p = scorer(CandidateFeatures)``; bands: p >= assign_p assign; ask_p <= p < assign_p ask the decision
     model (question "same_or_new", options = candidate entity ids + "NEW"), assign if its top probability >=
-    decision_accept, else new provisional entity + ``possible_duplicate`` review; p < ask_p new provisional entity;
+    decision_accept, else new provisional entity + ``possible_duplicate`` review; p < ask_p new provisional entity.
+    The decision state carries each candidate's description (GET /items, AC-PER-30), last place and ``seen_ago_s``;
   * a catalog class whose live entity count (api.count_live_entities + new ones in this payload) would exceed
     ``expected_count`` -> ``possible_duplicate`` review.
 Every decision-model call is logged in ``payload["decisions"]``. Invalid omni results are never written.
@@ -67,7 +71,7 @@ import numpy as np
 
 from . import NEW, UNKNOWN
 from .config import PerceptionConfig
-from .labels import CatalogMapper, normalise_label
+from .labels import CatalogMapper, label_key, normalise_label
 from .locations import LocationResolver
 from .media import crop as crop_image
 from .media import encode_jpeg
@@ -83,6 +87,9 @@ MAX_DECISION_OPTIONS = 4  # candidates offered to the decision model (+ NEW)
 # Candidates whose match score is within this of the best one are a near tie (identical twins: the same appearance
 # against both entities); among them the candidate last seen in the observation's own location ranks first.
 NEAR_TIE_P = 0.02
+LOW_CONFIDENCE = "low_confidence"
+PLACE_ITEMS_LIMIT = 50  # AC-PER-29: same-class entities of one module (GET /items?catalog_id=&location=)
+UNKNOWN_PLACE_ITEMS_LIMIT = 200  # UNKNOWN has no class filter: every entity of the module is listed
 
 
 @dataclass(frozen=True)
@@ -180,6 +187,11 @@ def _parse_ts(value: Any) -> datetime | None:
     except ValueError:
         return None
     return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
+
+
+def _seen_ago_s(now: datetime, last_seen: Any) -> float | None:
+    ts = _parse_ts(last_seen)
+    return None if ts is None else round((now - ts).total_seconds(), 1)
 
 
 def _clamp01(value: Any, default: float = 0.5) -> float:
@@ -283,6 +295,10 @@ class _WindowContext:
         self._frame_uris: dict[int, str | None] = {}
         self._crops: dict[int, str | None] = {}
         self.decisions: list[dict[str, Any]] = []
+        # per-window inventory reads (AC-PER-29/30): one query per (class key, place) / class, live count per class
+        self.place_items: dict[tuple[tuple[str, str], str], list[dict[str, Any]] | None] = {}
+        self.class_items: dict[str, dict[str, dict[str, Any]]] = {}
+        self.live_counts: dict[str, int] = {}
 
     def frame_ts(self, idx: int) -> datetime:
         return self.window.frames[idx].timestamp
@@ -611,7 +627,7 @@ class Reconciler:
     def _consolidation_key(self, e: _Entry) -> tuple[str, str] | None:
         """Instances of the same key may be consolidated; None = never (fungible, or an empty UNKNOWN label)."""
         if e.match.catalog_id == UNKNOWN:
-            label = normalise_label(str(e.obj.get("label") or ""))
+            label = label_key(str(e.obj.get("label") or ""))  # AC-PER-31
             return ("unknown", label) if label else None
         item = self.mapper.item(e.match.catalog_id)
         if item and item.get("is_fungible"):
@@ -791,40 +807,204 @@ class Reconciler:
                 taken.add(o.entity_id)
 
     def _match_without_exemplar(self, ctx: _WindowContext, o: _Observed, taken: set[str]) -> None:
-        """AC-PER-22 class-and-place match: the most recently seen live entity of the same class (UNKNOWN: an
-        unclassified entity with the same normalised label) last seen in the same module (or the same location
-        outside modules) within ``no_exemplar_match_s`` and not taken in this window; else stays new."""
-        try:
-            if o.is_unknown:
-                label = normalise_label(str(o.obj.get("label") or ""))
-                if not label:
-                    return
-                items = self.api.list_items(q=label, sort="-last_seen_at", limit=50) or []
-                items = [
-                    i for i in items if not i.get("catalog_id") and normalise_label(str(i.get("label") or "")) == label
-                ]
-            else:
-                items = self.api.list_items(catalog_id=o.catalog_id, sort="-last_seen_at", limit=50) or []
-                items = [i for i in items if i.get("catalog_id") == o.catalog_id]
-        except Exception as exc:  # noqa: BLE001 - inventory-api is a remote dependency; fall back to a new entity
-            logger.warning("listing entities for a sighting without exemplar failed", extra={"error": str(exc)})
+        """AC-PER-22/29 class-and-place match. Candidates: live entities of the same class (UNKNOWN: unclassified, same
+        label key) last seen in the observation's module or one of its zones (outside modules: the same location),
+        not ``taken``. Any seen within ``no_exemplar_match_s`` -> one last seen in the observation's own zone, else
+        the most recent. Otherwise (a revisit, any gap,
+        modules only): one candidate -> attach; several -> the decision model, with a same-zone / most-recent
+        fallback + low_confidence review. No candidate -> stays new."""
+        key = self._place_key(o)
+        if key is None or o.location is None:
+            return
+        module = self.resolver.module_of(o.location)
+        items = self._place_items(ctx, key, module or o.location)
+        if not items:
             return
         seen_at = ctx.frame_ts(o.frame_idx)
-        best: tuple[datetime, dict[str, Any]] | None = None
+        candidates: list[tuple[datetime, dict[str, Any]]] = []
         for item in items:
             eid = str(item.get("entity_id") or "")
             last_seen = _parse_ts(item.get("last_seen_at"))
             if not eid or eid in taken or item.get("status") in ("merged", "dismissed") or last_seen is None:
                 continue
-            if abs((seen_at - last_seen).total_seconds()) > self.config.no_exemplar_match_s:
-                continue
-            if not self._same_place(item.get("last_location"), o.location):
-                continue
-            if best is None or last_seen > best[0]:
-                best = (last_seen, item)
-        if best is not None:
-            o.entity_id = str(best[1]["entity_id"])
-            o.previous_location = best[1].get("last_location")
+            if self._same_place(item.get("last_location"), o.location):
+                candidates.append((last_seen, item))
+        if not candidates:
+            return
+        horizon = self.config.no_exemplar_match_s
+        recent = [c for c in candidates if abs((seen_at - c[0]).total_seconds()) <= horizon]
+        if recent:  # review round: a candidate last seen in the observation's own zone first, then the most recent
+            self._attach_item(o, min(recent, key=lambda c: (c[1].get("last_location") != o.location, -c[0].timestamp()))[1])
+            return
+        if module is None:
+            return  # a segment-level place is too coarse to identify an object after an arbitrary gap
+        if len(candidates) == 1:
+            self._attach_item(o, candidates[0][1])
+            return
+        self._decide_revisit(ctx, o, candidates)
+
+    def _place_key(self, o: _Observed) -> tuple[str, str] | None:
+        if o.is_unknown:
+            key = label_key(str(o.obj.get("label") or ""))
+            return ("unknown", key) if key else None
+        return ("class", o.catalog_id) if o.catalog_id else None
+
+    def _place_items(
+        self, ctx: _WindowContext, key: tuple[str, str], place: str
+    ) -> list[dict[str, Any]] | None:
+        """Live entities of ``key`` last seen in ``place`` or below it; one GET /items per (key, place) per window.
+        None when inventory-api failed (the sighting then stays new)."""
+        cache_key = (key, place)
+        if cache_key in ctx.place_items:
+            return ctx.place_items[cache_key]
+        kind, value = key
+        try:
+            if kind == "unknown":
+                rows = self.api.list_items(location=place, sort="-last_seen_at", limit=UNKNOWN_PLACE_ITEMS_LIMIT) or []
+                items = [r for r in rows if not r.get("catalog_id") and label_key(str(r.get("label") or "")) == value]
+            else:
+                rows = self.api.list_items(
+                    catalog_id=value, location=place, sort="-last_seen_at", limit=PLACE_ITEMS_LIMIT
+                ) or []
+                items = [r for r in rows if r.get("catalog_id") == value]
+        except Exception as exc:  # noqa: BLE001 - inventory-api is a remote dependency; fall back to a new entity
+            logger.warning("listing entities for a sighting without exemplar failed", extra={"error": str(exc)})
+            items = None
+        ctx.place_items[cache_key] = items
+        return items
+
+    def _attach_item(self, o: _Observed, item: dict[str, Any]) -> None:
+        o.entity_id = str(item["entity_id"])
+        o.previous_location = item.get("last_location")
+
+    def _live_count(self, ctx: _WindowContext, catalog_id: str) -> int:
+        if catalog_id not in ctx.live_counts:
+            ctx.live_counts[catalog_id] = int(self.api.count_live_entities(catalog_id))
+        return ctx.live_counts[catalog_id]
+
+    def _expected_count_reached(self, ctx: _WindowContext, o: _Observed) -> bool:
+        item = self.mapper.item(o.catalog_id)
+        expected = item.get("expected_count") if item else None
+        if expected is None or item.get("is_fungible"):
+            return False
+        try:
+            return self._live_count(ctx, o.catalog_id) >= int(expected)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("counting live entities failed", extra={"catalog_id": o.catalog_id, "error": str(exc)})
+            return False
+
+    def _decide_revisit(
+        self, ctx: _WindowContext, o: _Observed, candidates: list[tuple[datetime, dict[str, Any]]]
+    ) -> None:
+        """AC-PER-29: several stale candidates for a sighting without exemplar. Same-zone candidates first, then the
+        most recent; the decision model chooses among the first MAX_DECISION_OPTIONS + NEW."""
+        cfg = self.config
+        seen_at = ctx.frame_ts(o.frame_idx)
+        ranked = sorted(
+            candidates,
+            key=lambda c: (c[1].get("last_location") != o.location, -c[0].timestamp(), str(c[1]["entity_id"])),
+        )[:MAX_DECISION_OPTIONS]
+        ids = [str(item["entity_id"]) for _, item in ranked]
+        options = {
+            str(item["entity_id"]): self._describe_entity(item, last_seen, seen_at) for last_seen, item in ranked
+        }
+        options[NEW] = f"a different {o.match.class_name or o.obj.get('label') or 'object'} not listed here"
+        observed_at = _iso(seen_at)
+        subject = {
+            "camera_id": self.camera_id,
+            "observed_at": observed_at,
+            "label": o.obj.get("label"),
+            "catalog_id": o.catalog_id,
+            "location_id": o.location,
+            "basis": "class_and_place_revisit",
+            "candidates": [
+                {"entity_id": str(item["entity_id"]), "last_location": item.get("last_location"),
+                 "last_seen_at": _iso(last_seen)}
+                for last_seen, item in ranked
+            ],
+        }
+        state = {
+            "observation": self._observation_state(o, observed_at),
+            "candidates": {
+                str(item["entity_id"]): {
+                    "label": item.get("label"),
+                    "description": str(item.get("description") or ""),
+                    "last_location": item.get("last_location"),
+                    "last_seen_at": _iso(last_seen),
+                    "seen_ago_s": round((seen_at - last_seen).total_seconds(), 1),
+                }
+                for last_seen, item in ranked
+            },
+        }
+        result = self._choose(
+            SAME_OR_NEW,
+            options,
+            state,
+            "No appearance vector is available: decide from the descriptions and places whether the observed object "
+            "is one of the listed entities (seen here before), or NEW.",
+        )
+        ctx.log_decision(SAME_OR_NEW, subject, result)
+        choice_p = float(result.probabilities.get(result.choice, 0.0)) if result.probabilities else 0.0
+        confident = not result.needs_review and choice_p >= cfg.decision_accept
+        if confident and result.choice in ids:
+            self._attach_item(o, ranked[ids.index(result.choice)][1])
+            return
+        if confident and result.choice == NEW and not self._expected_count_reached(ctx, o):
+            return  # confidently a different object
+        self._attach_item(o, ranked[0][1])  # fallback: same zone, else the most recently seen
+        o.reviews.append(
+            {
+                "kind": LOW_CONFIDENCE,
+                "candidate_ids": ids,
+                "probabilities": dict(result.probabilities),
+                "description": self._review_description(
+                    o, "attached by class and place after a revisit without a confident decision"
+                ),
+            }
+        )
+
+    def _observation_state(self, o: _Observed, observed_at: str) -> dict[str, Any]:
+        return {
+            "label": o.obj.get("label"),
+            "description": o.obj.get("description"),
+            "location": o.location,
+            "observed_at": observed_at,
+            "held": o.held,
+        }
+
+    def _choose(self, question: str, options: dict[str, str], state: dict[str, Any], instructions: str):
+        try:
+            return self.decision.choose(question, options, state=state, instructions=instructions)
+        except Exception as exc:  # noqa: BLE001 - decision model is a remote dependency
+            return DecisionResult(
+                choice=NEW,
+                probabilities={},
+                needs_review=True,
+                error=str(exc),
+                model=getattr(self.decision, "model", "") or "unknown",
+            )
+
+    def _describe_entity(self, item: dict[str, Any], last_seen: datetime | None, now: datetime) -> str:
+        desc = str(item.get("description") or "").strip()
+        ago = f" ({int((now - last_seen).total_seconds() // 60)} min ago)" if last_seen else ""
+        return (
+            f"{item.get('label') or 'entity'}{': ' + desc if desc else ''}, last seen in "
+            f"{item.get('last_location') or 'unknown location'} at {_iso(last_seen) if last_seen else 'unknown time'}"
+            f"{ago}"
+        )
+
+    def _class_items(self, ctx: _WindowContext, catalog_id: str | None) -> dict[str, dict[str, Any]]:
+        """AC-PER-30: entity rows (descriptions) of a class, one GET /items per class per window, only on an ask."""
+        if not catalog_id:
+            return {}
+        if catalog_id not in ctx.class_items:
+            try:
+                rows = self.api.list_items(catalog_id=catalog_id, sort="-last_seen_at", limit=PLACE_ITEMS_LIMIT) or []
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("listing entities for decision context failed", extra={"error": str(exc)})
+                rows = []
+            ctx.class_items[catalog_id] = {str(r.get("entity_id")): r for r in rows}
+        return ctx.class_items[catalog_id]
 
     def _same_place(self, last_location: str | None, location: str | None) -> bool:
         if last_location is None or location is None:
@@ -859,39 +1039,25 @@ class Reconciler:
                 for s in options_sc
             ],
         }
+        seen_at = ctx.frame_ts(o.frame_idx)
+        details = self._class_items(ctx, o.catalog_id)  # AC-PER-30: descriptions (candidates carry none)
         state = {
-            "observation": {
-                "label": o.obj.get("label"),
-                "description": o.obj.get("description"),
-                "location": o.location,
-                "observed_at": subject["observed_at"],
-                "held": o.held,
-            },
+            "observation": self._observation_state(o, subject["observed_at"]),
             "candidates": {
                 s.entity_id: {
                     "label": s.candidate.get("label"),
+                    "description": str(
+                        s.candidate.get("description") or (details.get(s.entity_id) or {}).get("description") or ""
+                    ),
                     "last_location": s.candidate.get("last_location"),
                     "last_seen_at": str(s.candidate.get("last_seen_at")),
+                    "seen_ago_s": _seen_ago_s(seen_at, s.candidate.get("last_seen_at")),
                     "score": round(s.p, 4),
                 }
                 for s in options_sc
             },
         }
-        try:
-            result = self.decision.choose(
-                SAME_OR_NEW,
-                options,
-                state=state,
-                instructions="Is the observed object one of the listed entities, or NEW?",
-            )
-        except Exception as exc:  # noqa: BLE001 - decision model is a remote dependency
-            result = DecisionResult(
-                choice=NEW,
-                probabilities={},
-                needs_review=True,
-                error=str(exc),
-                model=getattr(self.decision, "model", "") or "unknown",
-            )
+        result = self._choose(SAME_OR_NEW, options, state, "Is the observed object one of the listed entities, or NEW?")
         ctx.log_decision(SAME_OR_NEW, subject, result)
         candidate_ids = [s.entity_id for s in options_sc]
         choice_p = float(result.probabilities.get(result.choice, 0.0)) if result.probabilities else 0.0
@@ -1009,7 +1175,7 @@ class Reconciler:
             if expected is None:
                 continue
             if o.catalog_id not in live_counts:
-                live_counts[o.catalog_id] = int(self.api.count_live_entities(o.catalog_id))
+                live_counts[o.catalog_id] = self._live_count(ctx, o.catalog_id)
             new_in_window[o.catalog_id] += 1
             total = live_counts[o.catalog_id] + new_in_window[o.catalog_id]
             if total > int(expected) and not any(r["kind"] == "possible_duplicate" for r in o.reviews):
@@ -1076,7 +1242,7 @@ class Reconciler:
                 if (
                     o.match.catalog_id == match.catalog_id
                     if match.catalog_id != UNKNOWN
-                    else o.is_unknown and normalise_label(o.obj.get("label") or "") == normalise_label(label)
+                    else o.is_unknown and label_key(o.obj.get("label") or "") == label_key(label)  # AC-PER-31
                 )
             ]
             if not pool:

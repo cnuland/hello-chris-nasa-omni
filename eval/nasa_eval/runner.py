@@ -9,7 +9,8 @@ Configuration (environment only, never hard-coded):
   ``nasa_eval.collaborators``.
 Each run validates the dataset (schema + catalog / location / camera ids of the seed), creates ``<prefix><hex>``
 from ``contracts/db/*.sql``, binds an in-process inventory-api to it, replays the dataset through perception with
-the target's collaborators, scores the result, optionally asks the dataset's QA questions to an agent bound to the
+the target's collaborators, scores the result, replays the dataset a second time after ``REVISIT_GAP_S`` (perception
+AC-PER-32: ``revisit_new_entity_rate``), optionally asks the dataset's QA questions to an agent bound to the
 same database, writes the report and only then drops the database (unless ``keep_db``). The runner refuses to drop
 ``inventory``, ``postgres`` or any database without its prefix.
 """
@@ -39,8 +40,8 @@ from nasa_eval.dataset import (
     seed_ids,
     validate_dataset,
 )
-from nasa_eval.scoring import score
-from nasa_eval.snapshot import Snapshot, read_snapshot
+from nasa_eval.scoring import revisit_new_entity_rate, score
+from nasa_eval.snapshot import RevisitResult, Snapshot, read_snapshot
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +52,9 @@ RESERVED_DATABASES = ("inventory", "postgres", "template0", "template1")
 _IDENT = re.compile(r"^[a-z_][a-z0-9_]*$")
 
 ReplayFn = Callable[[Dataset, str], Any]  # (dataset, database_url) -> stats
+RevisitFn = Callable[[Dataset, str, float], Any]  # (dataset, database_url, time offset s) -> stats
+# Perception AC-PER-32: the looped ISS tour came back to Columbus about 15 min later and duplicated its objects.
+REVISIT_GAP_S = 900.0
 AgentFactory = Callable[[str], Any]  # database_url -> agent with ask(question, session_id=...) -> /chat response
 
 
@@ -203,6 +207,18 @@ def default_replay(dataset: Dataset, database_url: str, *, target: str = "local"
     return replay_with_collaborators(dataset, database_url, target=target)
 
 
+def default_revisit(dataset: Dataset, database_url: str, offset_s: float, *, target: str = "local") -> Any:
+    """The revisit pass through perception (see ``nasa_eval.collaborators.revisit_with_collaborators``)."""
+    from nasa_eval.collaborators import revisit_with_collaborators
+
+    return revisit_with_collaborators(dataset, database_url, offset_s, target=target)
+
+
+def scene_duration_s(dataset: Dataset) -> float:
+    """Frames / fps (the time one pass over the dataset takes)."""
+    return len(dataset.frame_paths()) / dataset.fps
+
+
 def _jsonable(stats: Any) -> Any:
     if stats is None:
         return None
@@ -299,10 +315,13 @@ def run(
     clock: Callable[[], datetime] | None = None,
     keep_db: bool = False,
     agent_factory: AgentFactory | None = None,
+    revisit: RevisitFn | None = None,
 ) -> RunResult:
     """Validate the dataset, replay it into a fresh database, score the result, optionally run the QA questions
-    against ``agent_factory(database_url)``, write the reports, then drop the database (also on failure) unless
-    ``keep_db``. A replay failure propagates and no report is written."""
+    against ``agent_factory(database_url)``, replay the revisit (``revisit(dataset, url, duration + REVISIT_GAP_S)``,
+    default: through perception when ``replay`` is the default too; an injected ``replay`` without ``revisit``
+    measures none, so ``revisit_new_entity_rate`` is None), write the reports, then drop the database (also on
+    failure) unless ``keep_db``. A replay failure propagates and no report is written."""
     if target not in TARGETS:
         raise ValueError(f"unknown target {target!r}; expected one of {TARGETS}")
     data = load_dataset(resolve_dataset(dataset))  # DatasetValidationError before any DB work
@@ -312,6 +331,9 @@ def run(
     url_admin = _admin_url_for(target, admin_url)
     _check_prefix(db_prefix)
     replay_fn = replay or (lambda d, u: default_replay(d, u, target=target))
+    revisit_fn = revisit if revisit is not None or replay is not None else (
+        lambda d, u, off: default_revisit(d, u, off, target=target)
+    )
     now = (clock or (lambda: datetime.now(UTC)))()
     if reports_dir is None:
         from nasa_eval import REPORTS_ROOT
@@ -327,6 +349,20 @@ def run(
         extra: dict[str, Any] = {}
         if agent_factory is not None and data.qa:
             extra["qa"] = qa_section(data, snapshot, result["entity_to_gold"], agent_factory(url))
+        if revisit_fn is not None:  # after scoring and QA: the first-pass metrics never see the revisit
+            offset_s = scene_duration_s(data) + REVISIT_GAP_S
+            extra["revisit_stats"] = _jsonable(revisit_fn(data, url, offset_s))
+            before = set(snapshot.entities)
+            after = read_snapshot(url)
+            snapshot.revisit = RevisitResult(
+                gap_s=REVISIT_GAP_S,
+                objects=len(data.gold),
+                new_entity_ids=sorted(e for e, pe in after.entities.items() if e not in before and pe.kind == "object"),
+            )
+            result["metrics"]["revisit_new_entity_rate"] = revisit_new_entity_rate(snapshot.revisit)
+            result["counts"]["revisit_new_entities"] = len(snapshot.revisit.new_entity_ids)
+            log.info("revisit dataset=%s new_entities=%d rate=%s", data.name, len(snapshot.revisit.new_entity_ids),
+                     result["metrics"]["revisit_new_entity_rate"])
         report = build_report(
             data,
             result,

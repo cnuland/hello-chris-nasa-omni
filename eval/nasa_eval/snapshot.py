@@ -44,6 +44,16 @@ class PredReview:
     status: str = "open"
 
 
+@dataclass(frozen=True)
+class RevisitResult:
+    """The scene replayed a second time after ``gap_s`` (perception AC-PER-32): ``new_entity_ids`` = entities the
+    revisit created, ``objects`` = gold objects of the scene (the denominator of ``revisit_new_entity_rate``)."""
+
+    gap_s: float
+    objects: int
+    new_entity_ids: list[str] = field(default_factory=list)
+
+
 @dataclass
 class Snapshot:
     entities: dict[str, PredEntity] = field(default_factory=dict)  # non-merged entities only
@@ -51,6 +61,7 @@ class Snapshot:
     events: list[PredEvent] = field(default_factory=list)  # entity_id resolved through merged_into
     reviews: list[PredReview] = field(default_factory=list)
     locations: dict[str, tuple[str | None, str]] = field(default_factory=dict)  # id -> (parent_id, kind)
+    revisit: RevisitResult | None = None  # recorded by the runner (or the reference snapshot); not in the DB
 
 
 def _resolver(merged_into: dict[str, str | None]):
@@ -166,6 +177,17 @@ def snapshot_to_dict(snap: Snapshot, **meta: object) -> dict:
             for e in snap.events
         ],
         "reviews": [{"kind": r.kind, "entity_id": r.entity_id, "status": r.status} for r in snap.reviews],
+        **(
+            {}
+            if snap.revisit is None
+            else {
+                "revisit": {
+                    "gap_s": snap.revisit.gap_s,
+                    "objects": snap.revisit.objects,
+                    "new_entity_ids": list(snap.revisit.new_entity_ids),
+                }
+            }
+        ),
     }
 
 
@@ -197,6 +219,11 @@ def snapshot_from_dict(d: dict) -> Snapshot:
         )
     for r in d.get("reviews", []):
         snap.reviews.append(PredReview(r["kind"], r.get("entity_id"), r.get("status", "open")))
+    rv = d.get("revisit")
+    if isinstance(rv, dict):
+        snap.revisit = RevisitResult(
+            float(rv["gap_s"]), int(rv["objects"]), [str(e) for e in rv.get("new_entity_ids") or []]
+        )
     return snap
 
 

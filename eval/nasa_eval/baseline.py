@@ -9,7 +9,8 @@ scorer are exercised on per-window data rather than on a copy of the gold:
 - one window in which the mover is missed;
 - one spurious entity (a false detection seen once);
 - the ``moved`` event reported 2 s late; the ``removed`` event without an actor (no speech attribution);
-- an ``unknown_object`` review for the unknown object.
+- an ``unknown_object`` review for the unknown object;
+- a correct revisit (perception AC-PER-32): the scene replayed after ``REVISIT_GAP_S`` creates no new entity.
 
 Replace the committed file with a recorded run once perception is integrated (the snapshot's ``source`` says which).
 """
@@ -19,7 +20,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from nasa_eval.dataset import Dataset
-from nasa_eval.snapshot import PredEntity, PredEvent, PredReview, PredSighting, Snapshot
+from nasa_eval.snapshot import PredEntity, PredEvent, PredReview, PredSighting, RevisitResult, Snapshot
 
 STRIDE_S = 4.0
 WINDOW_FRAMES = 6
@@ -85,6 +86,9 @@ def reference_snapshot(data: Dataset, *, stride_s: float = STRIDE_S, window_fram
     snap.sightings.append(
         PredSighting("ref-s9999", "ref-ghost", start + timedelta(seconds=t_ghost), "LAB1O3", (0.40, 0.02, 0.45, 0.07))
     )
+    from nasa_eval.runner import REVISIT_GAP_S
+
+    snap.revisit = RevisitResult(gap_s=REVISIT_GAP_S, objects=len(data.gold), new_entity_ids=[])
     snap.sightings.sort(key=lambda s: (s.seen_at, s.sighting_id))
     snap.events.sort(key=lambda e: (e.occurred_at, e.entity_id))
     return snap

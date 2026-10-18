@@ -690,3 +690,90 @@ None of the existing tests was changed or weakened.
 - **Red:** 2 failed (the collapse cases) and 2 guards passed (different actors and different types stay separate).
 - **Green:** `_collapse_window_repeats` post-processes `_visual_events`. The suite is 717 passed; ruff is clean.
 - **Test changes:** none.
+
+## Revisit dedup (cluster integration 2026-10-17)
+
+Spec: docs/spec/20-perception.md AC-PER-29 to AC-PER-32. Tests: tests/test_ac_per_29_32_revisit_dedup.py and
+eval/tests/test_ac_eval_08_revisit.py.
+
+- **Measured (docs/QUESTIONS.md #29).** The full NASA ISS tour video ran in a loop on the cluster: 101 windows of 6
+  frames, a 12 s stride, 8 modules. New entities per 10-window bucket:
+  - windows 0–29: 19, 22, 16;
+  - windows 30–79: 7, 6, 9, 5, 10;
+  - windows 80–89: **22**, right after the video looped back to Columbus about 15 min later;
+  - windows 90–100: 2, 3.
+
+  The expected-count rule opened 35 `possible_duplicate` reviews, but it only flags duplicates afterwards.
+- **Cause, verified in the code.**
+  - *Omni-only sightings.* These have no exemplar (AC-PER-22). `_match_without_exemplar` dropped every entity last
+    seen more than `no_exemplar_match_s` (600 s) ago, so a revisit created new entities.
+  - *Detector-linked path.* Verified correct. `/ingest/candidates` (inventory-api) searches every live exemplar of
+    the class, with no time or place filter. The impossible-transit gate in `_features` rejects only the candidate
+    last seen in another module within `min_transit_s`. It never blocks the Columbus entity last seen 15 min ago
+    (guard test). Two gaps remained:
+    - the ask-band decision state had no `seen_ago_s` and no descriptions, because candidates carry none;
+    - UNKNOWN labels compared `normalise_label` exactly ("spacesuit" ≠ "space suit"), and the lookup used free-text
+      `q`.
+- **Red.** 27 new perception tests: 20 failed for the expected reasons and 7 guards passed.
+  - Failures: new entities on the revisit, `KeyError: 'seen_ago_s'`, missing `label_key`, and 3 `/items` queries
+    for 3 laptops where 1 was expected.
+  - Guards: the transit gate, another module, a coarse place, a recent candidate winning, a confident NEW, two
+    distinct laptops by appearance, and two different unknown labels.
+  - Suite at red: 20 failed, 724 passed.
+  - Eval: 11 new tests, first red at collection (`RevisitResult` missing).
+- **Green.**
+  - `reconciler._match_without_exemplar` now uses one cached `GET /items?location=<module>` per (class key, module)
+    per window. A recent candidate is handled as in AC-PER-22. A single stale candidate is attached. Several stale
+    candidates go to `_decide_revisit`, which calls the decision model with descriptions, last places, times and
+    `seen_ago_s`. Its fallback is the same-zone candidate, else the most recent, plus a `low_confidence` review;
+    with `expected_count` reached, a confident NEW also takes the fallback.
+  - `labels.label_key` is used for UNKNOWN consolidation, place matching and event targeting.
+  - `_decide` context now includes `seen_ago_s` and descriptions (one `GET /items?catalog_id=` per class, only on an
+    ask).
+  - Suite: 744 passed.
+- **Eval gate.**
+  - `nasa_eval run` now replays the scene a second time, shifted by its duration plus `REVISIT_GAP_S` = 900 s,
+    after scoring and QA. The first-pass metrics are untouched.
+  - In the local target the gold detector misses every other catalog object on the revisit, so both perception paths
+    are exercised.
+  - `revisit_new_entity_rate` (new entities on the revisit / gold objects) is gated at ≤ 0.05.
+  - The committed reference snapshot records a correct revisit (`revisit` block, 0 new). A report without a measured
+    revisit has `None`, which the gate treats as a failure.
+  - `make eval` with the pre-fix reconciler/labels: **revisit_new_entity_rate = 0.5** (3 of 6 objects duplicated: 2
+    omni-only catalog objects and the unknown). Gate FAILED, and the eval integration test failed on the same
+    metric.
+  - After the fix: **0.0**, gate PASSED.
+- **Adversarial review.**
+  - *Wrong merge, fixed test-first.* The AC-PER-22 "recent" rule took the most recent candidate regardless of zone.
+    In window 2 of a revisit both same-class objects had just been attached, so the twins swapped zones. Among recent
+    candidates, the one in the observation's own zone now comes first. Red: 2 failed. Green: 749 passed.
+  - *Wrong merge, accepted and documented in the spec.*
+    - A single stale candidate is attached even from another zone of the module.
+    - Adoption by a detector-linked instance now has no time limit.
+    - A detector-linked ask band with the decision model down keeps AC-PER-8 (new entity plus `possible_duplicate`).
+  - *Privacy, guards passing.* In a `no_capture` window (Node 2 crew quarters hint) the revisit attaches without a
+    review or any upload. The decision subject holds ids, locations and times, never descriptions. In a capture
+    window whose candidates were last seen in crew quarters, the review carries the Node 2 frame and the
+    observation's own words only. Private zones are never sighting locations (`_object_location`).
+  - *Robustness, guards passing.* With inventory-api down, the sighting stays new and the window is posted. A
+    raising decision model leads to the fallback.
+  - *Performance.*
+    - One `/items` query per (class, module) per window, against one per omni-only instance before.
+    - Live counts are cached per window.
+    - Decision calls happen only when every candidate is stale (the first revisit window), so later windows match
+      by recency.
+    - `/ingest/candidates` is unchanged (one per detector-linked instance).
+    - Accepted: UNKNOWN candidates are capped at the 200 most recent entities of a module.
+- **Test changes.**
+  - `test_ac_per_22_gated_sighting_after_the_horizon_is_new` now covers the case that keeps the horizon (a segment,
+    `USOS`). Past the horizon a module now attaches its single candidate (AC-PER-29).
+  - `FakeInventory.list_items` supports the `location` subtree filter, as inventory-api does.
+  - eval `test_ac_eval_03_synth_perfect_per_frame_passes_repo_gate`: a perfect snapshot now includes a perfect
+    revisit.
+  - tests/e2e `test_e2e_11`: runs the revisit pass before gating, and asserts that it creates no entity.
+- **Final runs.**
+  - `make eval`: gate PASSED, with `revisit_new_entity_rate` 0.0 and every other gated metric at 1.0 / 0.0.
+  - `make test`: all suites passed: inventory-api 336, perception 749, agent 340, eval 351 + 1 skipped + gates,
+    dashboard 190, e2e 19.
+- **Env vars.** None new. `PERCEPTION_NO_EXEMPLAR_MATCH_S` now bounds only the "recent" rule: past it, a module
+  attaches its single candidate or asks the decision model, while a segment keeps the horizon.

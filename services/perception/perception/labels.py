@@ -26,6 +26,12 @@ def normalise_label(text: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", str(text).lower())).strip()
 
 
+def label_key(text: str) -> str:
+    """AC-PER-31 grouping key for UNKNOWN-vs-UNKNOWN comparisons only: ``normalise_label`` without spaces, so
+    "spacesuit", "space suit" and "Space-Suit" are one key. Display and search keep ``normalise_label``."""
+    return normalise_label(text).replace(" ", "")
+
+
 def _bigrams(text: str) -> Counter[str]:
     padded = f" {text} "
     return Counter(padded[i : i + 2] for i in range(len(padded) - 1))

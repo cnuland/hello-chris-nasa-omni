@@ -274,7 +274,11 @@ def test_ac_eval_03_synth_one_sighting_per_object_fails_repo_gate(synth7):
 
 
 def test_ac_eval_03_synth_perfect_per_frame_passes_repo_gate(synth7):
-    mt = score(synth7, _synth_snapshot(synth7))["metrics"]
+    from nasa_eval.snapshot import RevisitResult
+
+    snap = _synth_snapshot(synth7)
+    snap.revisit = RevisitResult(gap_s=900.0, objects=len(synth7.gold), new_entity_ids=[])  # AC-PER-32: perfect revisit
+    mt = score(synth7, snap)["metrics"]
     assert mt["pairwise_f1"] == pytest.approx(1.0) and mt["sighting_recall"] == pytest.approx(1.0)
     assert _gate(mt).passed, _gate(mt).failures
 
