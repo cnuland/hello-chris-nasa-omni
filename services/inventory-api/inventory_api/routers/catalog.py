@@ -13,8 +13,9 @@ from fastapi.responses import JSONResponse
 
 from ..catalog_ops import CATALOG_COLUMNS, insert_catalog_item
 from ..deps import Ctx, operator_actor
-from ..repo import EVENT_COLUMNS, LOCATION_SUBTREE_SQL, serialize_event, write_audit
-from ..schemas import CatalogItemIn
+from ..errors import Unprocessable
+from ..repo import EVENT_SELECT, LOCATION_SUBTREE_SQL, serialize_event, write_audit
+from ..schemas import CatalogItemIn, EventType
 from ..storage import uri_to_url
 
 logger = logging.getLogger(__name__)
@@ -69,11 +70,24 @@ def list_locations(ctx: Ctx) -> list[dict[str, Any]]:
         ).fetchall()
 
 
+_EVENT_TYPES = frozenset(EventType.__args__)
+
+
+def _parse_types(types: str) -> list[str]:
+    """``types=moved, used`` -> ['moved', 'used']; any unknown value is a 422 (never interpolated into SQL)."""
+    wanted = list(dict.fromkeys(t.strip() for t in types.split(",") if t.strip()))
+    unknown = [t for t in wanted if t not in _EVENT_TYPES]
+    if unknown:
+        raise Unprocessable(f"unknown event type(s) in types: {', '.join(unknown)[:200]}")
+    return wanted
+
+
 @router.get("/events")
 def list_events(
     ctx: Ctx,
     entity_id: UUID | None = None,
     type: str | None = Query(None, max_length=64),
+    types: str | None = Query(None, max_length=500),
     after: datetime | None = None,
     before: datetime | None = None,
     limit: int = Query(100, ge=1, le=1000),
@@ -81,21 +95,26 @@ def list_events(
     where: list[str] = []
     params: list[Any] = []
     if entity_id is not None:
-        where.append("entity_id = %s")
+        where.append("ev.entity_id = %s")
         params.append(entity_id)
     if type:
-        where.append("event_type = %s")
+        where.append("ev.event_type = %s")
         params.append(type)
+    if types is not None:
+        wanted = _parse_types(types)
+        if wanted:
+            where.append("ev.event_type = ANY(%s)")
+            params.append(wanted)
     if after is not None:
-        where.append("occurred_at >= %s")
+        where.append("ev.occurred_at >= %s")
         params.append(after)
     if before is not None:
-        where.append("occurred_at <= %s")
+        where.append("ev.occurred_at <= %s")
         params.append(before)
-    sql = f"SELECT {EVENT_COLUMNS} FROM event"
+    sql = EVENT_SELECT
     if where:
         sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY occurred_at DESC, created_at DESC LIMIT %s"
+    sql += " ORDER BY ev.occurred_at DESC, ev.created_at DESC LIMIT %s"
     params.append(limit)
     with ctx.db.connection() as conn:
         rows = conn.execute(sql, params).fetchall()

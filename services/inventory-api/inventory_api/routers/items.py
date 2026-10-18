@@ -20,6 +20,7 @@ from ..images import sniff_image
 from ..merging import merge_entities
 from ..repo import (
     EVENT_COLUMNS,
+    EVENT_SELECT,
     FUZZY_LABEL_THRESHOLD,
     HIDDEN_STATUSES,
     catalog_exists,
@@ -218,9 +219,10 @@ def _create_operator_item(
             with conn.transaction():
                 conn.execute(
                     """INSERT INTO entity (entity_id, catalog_id, kind, status, label, description, last_location,
-                           last_seen_at, first_seen_at, confidence, snapshot_uri, created_by)
-                       VALUES (%s, %s, %s, 'confirmed', %s, %s, %s, now(), now(), 1.0, %s, 'operator')""",
-                    (entity_id, catalog_id, kind, label, description, location_id, snapshot_uri),
+                           last_seen_at, first_seen_at, confidence, snapshot_uri, created_by, location_set_at,
+                           location_set_by)
+                       VALUES (%s, %s, %s, 'confirmed', %s, %s, %s, now(), now(), 1.0, %s, 'operator', now(), %s)""",
+                    (entity_id, catalog_id, kind, label, description, location_id, snapshot_uri, actor),
                 )
                 conn.execute(
                     """INSERT INTO event (event_type, entity_id, actor_desc, to_location, occurred_at, confidence,
@@ -263,8 +265,7 @@ def get_item(entity_id: UUID, ctx: Ctx) -> dict[str, Any]:
             (entity_id, DETAIL_LIMIT),
         ).fetchall()
         events = conn.execute(
-            f"SELECT {EVENT_COLUMNS} FROM event WHERE entity_id = %s ORDER BY occurred_at DESC, created_at DESC "
-            "LIMIT %s",
+            EVENT_SELECT + " WHERE ev.entity_id = %s ORDER BY ev.occurred_at DESC, ev.created_at DESC LIMIT %s",
             (entity_id, DETAIL_LIMIT),
         ).fetchall()
         exemplar_count = conn.execute(
@@ -322,12 +323,12 @@ def patch_item(entity_id: UUID, body: ItemPatch, ctx: Ctx) -> dict[str, Any]:
             old_location = current["last_location"]
             new_location = new_values.get("last_location")
             if new_location is not None and new_location != old_location:
-                # The operator's correction is the newest knowledge: advance last_seen_at so a pipeline window that
-                # arrives late (with an older seen_at) cannot silently move the item back.
+                # AC-API-31: the operator's correction is the newest knowledge about the location. Record that in
+                # location_set_at (a late pipeline window with an older seen_at cannot move the item back) and leave
+                # last_seen_at alone: it means "last camera sighting", which an edit is not.
                 conn.execute(
-                    "UPDATE entity SET last_seen_at = GREATEST(COALESCE(last_seen_at, now()), now()) "
-                    "WHERE entity_id = %s",
-                    (entity_id,),
+                    "UPDATE entity SET location_set_at = now(), location_set_by = %s WHERE entity_id = %s",
+                    (actor, entity_id),
                 )
                 conn.execute(
                     """INSERT INTO event (event_type, entity_id, actor_desc, from_location, to_location, occurred_at,
@@ -363,8 +364,78 @@ def merge_item(entity_id: UUID, body: MergeRequest, ctx: Ctx) -> dict[str, Any]:
 
 
 # ------------------------------------------------------------------ GET /items/{id}/history
+def _fmt_value(value: Any) -> str:
+    text = "null" if value is None else str(value)
+    return text if len(text) <= 60 else text[:57] + "..."
+
+
+def _audit_summary(a: dict[str, Any]) -> str:
+    detail = a["detail"] or {}
+    summary = f"{a['op']} by {a['actor']}"
+    before, after = detail.get("before"), detail.get("after")
+    if isinstance(before, dict) and isinstance(after, dict):
+        changes = [
+            f"{field}: {_fmt_value(before.get(field))} -> {_fmt_value(after[field])}"
+            for field in after
+            if before.get(field) != after[field]
+        ]
+        if changes:
+            summary += " (" + "; ".join(changes) + ")"
+    note = detail.get("note")
+    return summary + (f": {note}" if note else "")
+
+
+def _is_routine(a: dict[str, Any], entity_id: str, own_events: set[str], own_reviews: set[str]) -> bool:
+    """A pipeline ingest audit that, for this entity, only refreshed the sighting fields (last_seen_at/confidence/
+    snapshot): it did not create the entity and carried none of the entity's events or reviews."""
+    if a["op"] != "update" or a["actor"] != "pipeline":
+        return False
+    detail = a["detail"] or {}
+    if entity_id in {str(x) for x in detail.get("created_entity_ids") or []}:
+        return False
+    if own_events & {str(x) for x in detail.get("event_ids") or []}:
+        return False
+    return not own_reviews & {str(x) for x in detail.get("review_ids") or []}
+
+
+def _collapse(timeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """AC-API-32: fold each run of >=2 consecutive routine pipeline audits into one entry with a count."""
+    out: list[dict[str, Any]] = []
+    run: list[dict[str, Any]] = []
+
+    def flush() -> None:
+        if len(run) == 1:
+            out.append(run[0])
+        elif run:
+            newest, oldest = run[0], run[-1]
+            out.append(
+                {
+                    **newest,
+                    "summary": f"{len(run)} pipeline updates (sighting refresh: last_seen_at/confidence)",
+                    "count": len(run),
+                    "first_at": oldest["at"],
+                    "audit_ids": [r["id"] for r in run],
+                }
+            )
+        run.clear()
+
+    for entry in timeline:
+        if entry.pop("_routine", False):
+            run.append(entry)
+        else:
+            flush()
+            out.append(entry)
+    flush()
+    return out
+
+
 @router.get("/items/{entity_id}/history")
-def item_history(entity_id: UUID, ctx: Ctx, limit: int = Query(500, ge=1, le=2000)) -> list[dict[str, Any]]:
+def item_history(
+    entity_id: UUID,
+    ctx: Ctx,
+    limit: int = Query(500, ge=1, le=2000),
+    collapse: bool = True,
+) -> list[dict[str, Any]]:
     bucket = ctx.bucket
     with ctx.db.connection() as conn:
         if conn.execute("SELECT 1 FROM entity WHERE entity_id = %s", (entity_id,)).fetchone() is None:
@@ -383,6 +454,17 @@ def item_history(entity_id: UUID, ctx: Ctx, limit: int = Query(500, ge=1, le=200
             "LIMIT %s",
             (entity_id, limit),
         ).fetchall()
+        own_events: set[str] = set()
+        own_reviews: set[str] = set()
+        if collapse and any(a["actor"] == "pipeline" for a in audits):
+            own_events = {
+                str(r["event_id"])
+                for r in conn.execute("SELECT event_id FROM event WHERE entity_id = %s", (entity_id,))
+            }
+            own_reviews = {
+                str(r["review_id"])
+                for r in conn.execute("SELECT review_id FROM review_item WHERE entity_id = %s", (entity_id,))
+            }
     timeline: list[dict[str, Any]] = []
     for s in sightings:
         summary = f"Seen at {s['location_id'] or 'unknown location'} (confidence {real(s['confidence']):.2f})"
@@ -416,20 +498,22 @@ def item_history(entity_id: UUID, ctx: Ctx, limit: int = Query(500, ge=1, le=200
                 "source": e["source"],
             }
         )
+    key = str(entity_id)
     for a in audits:
-        note = (a["detail"] or {}).get("note")
-        summary = f"{a['op']} by {a['actor']}" + (f": {note}" if note else "")
         timeline.append(
             {
                 "at": a["at"],
                 "kind": "audit",
                 "id": str(a["audit_id"]),
                 "location_id": None,
-                "summary": summary,
+                "summary": _audit_summary(a),
                 "image_url": None,
                 "op": a["op"],
                 "actor": a["actor"],
+                "count": 1,
+                "_routine": collapse and _is_routine(a, key, own_events, own_reviews),
             }
         )
     timeline.sort(key=lambda t: t["at"], reverse=True)
+    timeline = _collapse(timeline)
     return timeline[:limit]

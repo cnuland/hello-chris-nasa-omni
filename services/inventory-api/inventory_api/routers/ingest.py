@@ -357,8 +357,9 @@ def _record_window(conn: psycopg.Connection, body: IngestWindow) -> dict[str, An
             kind = ne.kind
             conn.execute(
                 """INSERT INTO entity (entity_id, catalog_id, kind, status, label, description, attributes,
-                       last_location, last_seen_at, first_seen_at, confidence, snapshot_uri, created_by)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pipeline')""",
+                       last_location, last_seen_at, first_seen_at, confidence, snapshot_uri, created_by,
+                       location_set_at, location_set_by)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pipeline', %s, %s)""",
                 (
                     entity_id,
                     ne.catalog_id,
@@ -372,6 +373,8 @@ def _record_window(conn: psycopg.Connection, body: IngestWindow) -> dict[str, An
                     s.seen_at,
                     s.confidence,
                     snapshot,
+                    s.seen_at if s.location_id is not None else None,
+                    PIPELINE_ACTOR if s.location_id is not None else None,
                 ),
             )
             write_audit(
@@ -393,12 +396,31 @@ def _record_window(conn: psycopg.Connection, body: IngestWindow) -> dict[str, An
             assert a.entity_id is not None
             survivor = survivors[a.entity_id]
             entity_id, kind = survivor.entity_id, survivor.kind
-            # Only a newer sighting moves the entity; first_seen_at can move earlier.
+            # AC-API-31: a sighting newer than last_seen_at refreshes last_seen_at/confidence/snapshot. It moves the
+            # entity only when it is also newer than location_set_at (an operator's move is not undone by a late
+            # window). Both conditions are evaluated on the row before this UPDATE. first_seen_at can move earlier.
             conn.execute(
-                """UPDATE entity SET last_location = COALESCE(%(loc)s, last_location), last_seen_at = %(seen)s,
-                       confidence = %(conf)s, snapshot_uri = COALESCE(%(snap)s, snapshot_uri), updated_at = now()
+                """UPDATE entity SET
+                       last_location = CASE WHEN %(loc)s::text IS NOT NULL
+                                             AND %(seen)s > COALESCE(location_set_at, '-infinity')
+                                            THEN %(loc)s ELSE last_location END,
+                       location_set_at = CASE WHEN %(loc)s::text IS NOT NULL
+                                               AND %(seen)s > COALESCE(location_set_at, '-infinity')
+                                              THEN %(seen)s ELSE location_set_at END,
+                       location_set_by = CASE WHEN %(loc)s::text IS NOT NULL
+                                               AND %(seen)s > COALESCE(location_set_at, '-infinity')
+                                              THEN %(by)s ELSE location_set_by END,
+                       last_seen_at = %(seen)s, confidence = %(conf)s,
+                       snapshot_uri = COALESCE(%(snap)s, snapshot_uri), updated_at = now()
                     WHERE entity_id = %(id)s AND (last_seen_at IS NULL OR last_seen_at < %(seen)s)""",
-                {"loc": s.location_id, "seen": s.seen_at, "conf": s.confidence, "snap": snapshot, "id": entity_id},
+                {
+                    "loc": s.location_id,
+                    "seen": s.seen_at,
+                    "conf": s.confidence,
+                    "snap": snapshot,
+                    "id": entity_id,
+                    "by": PIPELINE_ACTOR,
+                },
             )
             conn.execute(
                 "UPDATE entity SET first_seen_at = LEAST(COALESCE(first_seen_at, %(seen)s), %(seen)s) "

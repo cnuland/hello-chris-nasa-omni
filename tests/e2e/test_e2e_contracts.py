@@ -57,9 +57,13 @@ def test_e2e_contract_item_detail_and_history_match_openapi(replay, api):
 
 
 def test_e2e_contract_review_candidates_expand_to_items(replay, api):
-    """AC-API-12: ``candidates`` are full Items (the dashboard renders them as cards)."""
+    """AC-API-12/24/25: ``candidates`` are full Items (the dashboard renders them as cards): the stored
+    ``candidate_ids`` expanded, or up to 8 server suggestions for a duplicate review with none stored."""
     for review in api.get("/review").json():
-        assert len(review.get("candidates", [])) == len(review.get("candidate_ids", []))
+        if review["candidates_source"] == "suggested":
+            assert review["candidate_ids"] == [] and 0 < len(review["candidates"]) <= 8
+        else:
+            assert len(review.get("candidates", [])) == len(review.get("candidate_ids", []))
 
 
 def test_e2e_contract_agent_stream_matches_dashboard_parser(replay, make_agent):

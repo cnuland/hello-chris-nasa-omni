@@ -34,7 +34,7 @@ def merge_entities(
         raise Conflict("cannot merge an entity into itself")
     rows = conn.execute(
         "SELECT entity_id, kind, status, merged_into, last_seen_at, last_location, first_seen_at, needs_review, "
-        "review_reason FROM entity WHERE entity_id = ANY(%s::uuid[]) ORDER BY entity_id FOR UPDATE",
+        "review_reason, location_set_at, location_set_by FROM entity WHERE entity_id = ANY(%s::uuid[]) ORDER BY entity_id FOR UPDATE",
         ([str(source_id), str(target_id)],),
     ).fetchall()
     by_id = {r["entity_id"]: r for r in rows}
@@ -138,9 +138,22 @@ def merge_entities(
     )
     if source_newer:
         conn.execute(
-            "UPDATE entity SET last_seen_at = %s, last_location = COALESCE(%s, last_location), updated_at = now() "
+            "UPDATE entity SET last_seen_at = %s, updated_at = now() WHERE entity_id = %s",
+            (source["last_seen_at"], str(target_id)),
+        )
+    # AC-API-31: the location follows whichever entity's location was set most recently (an operator move on the
+    # target is not undone by an older sighting of the source). Legacy rows without provenance use last_seen_at.
+    source_loc_at = source["location_set_at"] or source["last_seen_at"]
+    target_loc_at = target["location_set_at"] or target["last_seen_at"]
+    if (
+        source["last_location"] is not None
+        and source_loc_at is not None
+        and (target_loc_at is None or source_loc_at > target_loc_at)
+    ):
+        conn.execute(
+            "UPDATE entity SET last_location = %s, location_set_at = %s, location_set_by = %s, updated_at = now() "
             "WHERE entity_id = %s",
-            (source["last_seen_at"], source["last_location"], str(target_id)),
+            (source["last_location"], source_loc_at, source["location_set_by"] or "pipeline", str(target_id)),
         )
     conn.execute(
         "UPDATE entity SET first_seen_at = LEAST(first_seen_at, %s), updated_at = now() WHERE entity_id = %s",
@@ -162,6 +175,8 @@ def merge_entities(
         "target_previous": {
             "last_seen_at": target["last_seen_at"].isoformat() if target["last_seen_at"] else None,
             "last_location": target["last_location"],
+            "location_set_at": target["location_set_at"].isoformat() if target["location_set_at"] else None,
+            "location_set_by": target["location_set_by"],
             "first_seen_at": target["first_seen_at"].isoformat() if target["first_seen_at"] else None,
             "needs_review": target["needs_review"],
             "review_reason": target["review_reason"],

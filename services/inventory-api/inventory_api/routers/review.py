@@ -3,16 +3,26 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+import math
+from typing import Any, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Response
 
 from ..catalog_ops import insert_catalog_item
 from ..deps import Ctx, operator_actor
 from ..errors import Conflict, NotFound, Unprocessable
 from ..merging import merge_entities
-from ..repo import fetch_items, jsonb, write_audit
+from ..repo import (
+    HIDDEN_STATUSES,
+    fetch_items,
+    jsonb,
+    like_pattern,
+    location_subtree_sql,
+    no_capture_locations,
+    real,
+    write_audit,
+)
 from ..schemas import ResolveRequest, ReviewKind, ReviewStatus
 from ..storage import uri_to_url
 
@@ -22,16 +32,213 @@ router = APIRouter(tags=["review"])
 REVIEW_COLUMNS = """review_id, kind, entity_id, candidate_ids, image_uri, description, observed_at, location_id,
                     model_guess, probabilities, status, resolution, resolved_by, resolved_at, created_at"""
 
+MAX_SUGGESTED = 8
 
-def _serialize_review(row: dict[str, Any], candidates: list[dict[str, Any]], bucket: str) -> dict[str, Any]:
+# Normalised label key (AC-API-25): lower case with spaces and hyphens removed.
+_KEY_SQL = "regexp_replace(lower({col}), '[[:space:]-]+', '', 'g')"
+
+# Module of every location (the nearest ancestor of kind 'module', self included).
+_MODULE_OF_CTE = """
+    anc(start_id, location_id, parent_id, kind, depth) AS (
+        SELECT location_id, location_id, parent_id, kind, 0 FROM location
+        UNION ALL
+        SELECT a.start_id, l.location_id, l.parent_id, l.kind, a.depth + 1
+          FROM anc a JOIN location l ON l.location_id = a.parent_id
+         WHERE a.kind <> 'module' AND a.depth < 32
+    ),
+    module_of AS (SELECT start_id AS location_id, location_id AS module_id FROM anc WHERE kind = 'module')
+"""
+
+# The subject's best exemplar: highest quality, then newest (the same order as the exemplar cap).
+_BEST_EXEMPLAR_SQL = """(SELECT bx.embedding FROM entity_exemplar bx WHERE bx.entity_id = s.entity_id
+                          ORDER BY bx.quality DESC, bx.created_at DESC, bx.exemplar_id DESC LIMIT 1)"""
+
+# AC-API-25: up to 8 suggested duplicates per subject, for many subjects in ONE statement (no per-review queries).
+_SUGGEST_SQL = f"""
+WITH RECURSIVE {_MODULE_OF_CTE},
+subj AS (
+    SELECT s.entity_id, s.kind, s.catalog_id, {_KEY_SQL.format(col="s.label")} AS key, mo.module_id,
+           {_BEST_EXEMPLAR_SQL} AS best
+      FROM entity s LEFT JOIN module_of mo ON mo.location_id = s.last_location
+     WHERE s.entity_id = ANY(%(subjects)s::uuid[])
+)
+SELECT subj.entity_id AS subject_id, c.entity_id, c.similarity
+  FROM subj
+  CROSS JOIN LATERAL (
+        SELECT e.entity_id, sim.similarity,
+               (subj.module_id IS NOT NULL AND em.module_id = subj.module_id) AS same_module, e.last_seen_at
+          FROM entity e
+          LEFT JOIN catalog_item ci ON ci.catalog_id = e.catalog_id
+          LEFT JOIN module_of em ON em.location_id = e.last_location
+          LEFT JOIN LATERAL (
+                SELECT max(1 - (x.embedding <=> subj.best)) AS similarity
+                  FROM entity_exemplar x WHERE x.entity_id = e.entity_id AND subj.best IS NOT NULL
+          ) sim ON TRUE
+         WHERE e.entity_id <> subj.entity_id
+           AND e.status <> ALL(%(hidden)s)
+           AND e.kind = subj.kind
+           AND CASE WHEN subj.catalog_id IS NOT NULL THEN e.catalog_id = subj.catalog_id
+                    ELSE subj.key <> '' AND ({_KEY_SQL.format(col="e.label")} = subj.key
+                                             OR {_KEY_SQL.format(col="ci.class_name")} = subj.key) END
+         ORDER BY sim.similarity DESC NULLS LAST, same_module DESC, e.last_seen_at DESC NULLS LAST, e.entity_id
+         LIMIT %(cap)s
+  ) c
+ ORDER BY subj.entity_id
+"""
+
+# Similarity of stored candidates to their review subject's best exemplar, for all pairs in one statement.
+_PAIR_SIMILARITY_SQL = f"""
+WITH pairs AS (
+    SELECT p.subject_id, p.candidate_id FROM unnest(%(subjects)s::uuid[], %(candidates)s::uuid[])
+        AS p(subject_id, candidate_id)
+), subj AS (
+    SELECT s.entity_id, {_BEST_EXEMPLAR_SQL} AS best
+      FROM entity s WHERE s.entity_id IN (SELECT subject_id FROM pairs)
+)
+SELECT pairs.subject_id, pairs.candidate_id, max(1 - (x.embedding <=> subj.best)) AS similarity
+  FROM pairs JOIN subj ON subj.entity_id = pairs.subject_id
+  JOIN entity_exemplar x ON x.entity_id = pairs.candidate_id
+ WHERE subj.best IS NOT NULL
+ GROUP BY pairs.subject_id, pairs.candidate_id
+"""
+
+# AC-API-26: bbox of the sighting (of the review's entity) whose frame is the review image, nearest observed_at.
+_IMAGE_BBOX_SQL = """
+SELECT r.review_id, sg.bbox
+  FROM unnest(%(reviews)s::uuid[], %(entities)s::uuid[], %(uris)s::text[], %(observed)s::timestamptz[])
+       AS r(review_id, entity_id, image_uri, observed_at)
+  CROSS JOIN LATERAL (
+        SELECT s.bbox FROM sighting s
+         WHERE s.entity_id = r.entity_id AND s.frame_uri = r.image_uri AND s.bbox IS NOT NULL
+         ORDER BY abs(extract(epoch FROM s.seen_at - r.observed_at)), s.sighting_id DESC
+         LIMIT 1
+  ) sg
+"""
+
+
+def _normalised_bbox(raw: Any) -> list[float] | None:
+    if raw is None or len(raw) != 4:
+        return None
+    box = [real(v) for v in raw]
+    if any(v is None or not math.isfinite(v) or v < 0.0 or v > 1.0 for v in box):
+        return None
+    x1, y1, x2, y2 = box
+    return box if x2 > x1 and y2 > y1 else None
+
+
+def _review_entity(item: dict[str, Any], counts: dict[str, int], private: set[str]) -> dict[str, Any]:
+    """Item + thumbnail_url + sighting_count (AC-API-24); no image from no_capture locations (AC-API-27)."""
+    out = dict(item)
+    if out.get("last_location") in private:
+        out["snapshot_url"] = None
+    out["thumbnail_url"] = out["snapshot_url"]
+    out["sighting_count"] = counts.get(str(out["entity_id"]), 0)
+    return out
+
+
+def _expand(conn, rows: list[dict[str, Any]], bucket: str) -> list[dict[str, Any]]:
+    """Serialize review rows with subject, candidates (stored or suggested) and image_bbox, in a fixed number of
+    queries whatever the number of reviews."""
+    private = no_capture_locations(conn)
+    stored: dict[str, list[str]] = {}
+    to_suggest: list[str] = []
+    for r in rows:
+        rid = str(r["review_id"])
+        stored[rid] = [str(c) for c in r["candidate_ids"] or []]
+        if not stored[rid] and r["kind"] == "possible_duplicate" and r["entity_id"] is not None:
+            to_suggest.append(str(r["entity_id"]))
+
+    suggestions: dict[str, list[tuple[str, float | None]]] = {}
+    if to_suggest:
+        for s in conn.execute(
+            _SUGGEST_SQL,
+            {"subjects": list(dict.fromkeys(to_suggest)), "hidden": list(HIDDEN_STATUSES), "cap": MAX_SUGGESTED},
+        ):
+            suggestions.setdefault(str(s["subject_id"]), []).append((str(s["entity_id"]), real(s["similarity"])))
+
+    pair_subjects: list[str] = []
+    pair_candidates: list[str] = []
+    for r in rows:
+        if r["entity_id"] is not None:
+            for c in stored[str(r["review_id"])]:
+                pair_subjects.append(str(r["entity_id"]))
+                pair_candidates.append(c)
+    pair_similarity: dict[tuple[str, str], float | None] = {}
+    if pair_subjects:
+        for p in conn.execute(_PAIR_SIMILARITY_SQL, {"subjects": pair_subjects, "candidates": pair_candidates}):
+            pair_similarity[(str(p["subject_id"]), str(p["candidate_id"]))] = real(p["similarity"])
+
+    with_entity = [r for r in rows if r["entity_id"] is not None and r["image_uri"]]
+    bboxes: dict[str, list[float] | None] = {}
+    if with_entity:
+        for b in conn.execute(
+            _IMAGE_BBOX_SQL,
+            {
+                "reviews": [str(r["review_id"]) for r in with_entity],
+                "entities": [str(r["entity_id"]) for r in with_entity],
+                "uris": [r["image_uri"] for r in with_entity],
+                "observed": [r["observed_at"] for r in with_entity],
+            },
+        ):
+            bboxes[str(b["review_id"])] = _normalised_bbox(b["bbox"])
+
+    ids = {str(r["entity_id"]) for r in rows if r["entity_id"] is not None}
+    ids |= {c for cs in stored.values() for c in cs}
+    ids |= {c for cs in suggestions.values() for c, _ in cs}
+    ordered_ids = sorted(ids)
+    items = {str(i["entity_id"]): i for i in fetch_items(conn, ordered_ids, bucket, uri_to_url)}
+    counts: dict[str, int] = {}
+    if ordered_ids:
+        counts = {
+            str(c["entity_id"]): c["n"]
+            for c in conn.execute(
+                "SELECT entity_id, count(*) AS n FROM sighting WHERE entity_id = ANY(%s::uuid[]) GROUP BY entity_id",
+                (ordered_ids,),
+            )
+        }
+
+    out = []
+    for r in rows:
+        rid = str(r["review_id"])
+        subject_id = str(r["entity_id"]) if r["entity_id"] is not None else None
+        if stored[rid]:
+            source = "stored"
+            picked = [(c, pair_similarity.get((subject_id, c)) if subject_id else None) for c in stored[rid]]
+        elif subject_id is not None and suggestions.get(subject_id) and r["kind"] == "possible_duplicate":
+            source = "suggested"
+            picked = suggestions[subject_id]
+        else:
+            source, picked = "none", []
+        candidates = [
+            {**_review_entity(items[c], counts, private), "similarity": sim} for c, sim in picked if c in items
+        ]
+        subject = _review_entity(items[subject_id], counts, private) if subject_id and subject_id in items else None
+        out.append(_serialize_review(r, candidates, source, subject, bboxes.get(rid), private, bucket))
+    return out
+
+
+def _serialize_review(
+    row: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    candidates_source: str,
+    subject: dict[str, Any] | None,
+    image_bbox: list[float] | None,
+    private: set[str],
+    bucket: str,
+) -> dict[str, Any]:
+    # Defence in depth (AC-API-27): ingest refuses reviews in no_capture zones, but never serve one if it exists.
+    hidden_image = row["location_id"] in private
     return {
         "review_id": row["review_id"],
         "kind": row["kind"],
         "entity_id": row["entity_id"],
         "candidate_ids": [str(c) for c in row["candidate_ids"] or []],
         "candidates": candidates,
+        "candidates_source": candidates_source,
+        "subject": subject,
         # Only URLs /media can serve; arbitrary stored strings never reach the dashboard.
-        "image_url": uri_to_url(row["image_uri"], bucket),
+        "image_url": None if hidden_image else uri_to_url(row["image_uri"], bucket),
+        "image_bbox": None if hidden_image else image_bbox,
         "description": row["description"],
         "observed_at": row["observed_at"],
         "location_id": row["location_id"],
@@ -45,32 +252,59 @@ def _serialize_review(row: dict[str, Any], candidates: list[dict[str, Any]], buc
     }
 
 
-def _expand(conn, rows: list[dict[str, Any]], bucket: str) -> list[dict[str, Any]]:
-    all_ids = list(dict.fromkeys(str(c) for r in rows for c in (r["candidate_ids"] or [])))
-    items = {str(i["entity_id"]): i for i in fetch_items(conn, all_ids, bucket, uri_to_url)}
-    return [
-        _serialize_review(r, [items[str(c)] for c in (r["candidate_ids"] or []) if str(c) in items], bucket)
-        for r in rows
-    ]
+_REVIEW_SORT = {
+    "created_at": "r.created_at {o}, r.observed_at {o}",
+    "observed_at": "r.observed_at {o}, r.created_at {o}",
+}
 
 
 @router.get("/review")
 def list_reviews(
     ctx: Ctx,
+    response: Response,
     status: ReviewStatus = "open",
     kind: ReviewKind | None = None,
+    location: str | None = Query(None, max_length=64),
+    q: str | None = Query(None, max_length=200),
+    sort: Literal["created_at", "observed_at"] = "created_at",
+    order: Literal["desc", "asc"] = "desc",
     limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ) -> list[dict[str, Any]]:
-    sql = f"SELECT {REVIEW_COLUMNS} FROM review_item WHERE status = %s"
-    params: list[Any] = [status]
+    where = ["r.status = %(status)s"]
+    params: dict[str, Any] = {"status": status}
     if kind:
-        sql += " AND kind = %s"
-        params.append(kind)
-    sql += " ORDER BY created_at DESC, observed_at DESC, review_id LIMIT %s"
-    params.append(limit)
+        where.append("r.kind = %(kind)s")
+        params["kind"] = kind
+    if location:
+        where.append(f"r.location_id IN ({location_subtree_sql('location')})")
+        params["location"] = location
+    q_clean = q.strip() if q else ""
+    if q_clean:
+        where.append("(r.description ILIKE %(pat)s OR e.label ILIKE %(pat)s)")
+        params["pat"] = like_pattern(q_clean)
+    from_sql = "FROM review_item r LEFT JOIN entity e ON e.entity_id = r.entity_id WHERE " + " AND ".join(where)
+    # sort/order are Literal-validated and only select from fixed SQL fragments (never interpolated from input).
+    order_sql = _REVIEW_SORT[sort].format(o="ASC" if order == "asc" else "DESC") + ", r.review_id"
     with ctx.db.connection() as conn:
-        rows = conn.execute(sql, params).fetchall()
-        return _expand(conn, rows, ctx.bucket)
+        total = conn.execute(f"SELECT count(*) AS n {from_sql}", params).fetchone()["n"]
+        rows = conn.execute(
+            f"SELECT {', '.join('r.' + c.strip() for c in REVIEW_COLUMNS.split(','))} {from_sql} "
+            f"ORDER BY {order_sql} LIMIT %(limit)s OFFSET %(offset)s",
+            dict(params, limit=limit, offset=offset),
+        ).fetchall()
+        result = _expand(conn, rows, ctx.bucket)
+    response.headers["X-Total-Count"] = str(total)
+    return result
+
+
+@router.get("/review/{review_id}")
+def get_review(review_id: UUID, ctx: Ctx) -> dict[str, Any]:
+    with ctx.db.connection() as conn:
+        row = conn.execute(f"SELECT {REVIEW_COLUMNS} FROM review_item WHERE review_id = %s", (review_id,)).fetchone()
+        if row is None:
+            raise NotFound(f"review {review_id} not found")
+        return _expand(conn, [row], ctx.bucket)[0]
 
 
 @router.post("/review/{review_id}/resolve")

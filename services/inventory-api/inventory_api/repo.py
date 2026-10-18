@@ -38,8 +38,9 @@ ITEM_SELECT = """
     SELECT e.entity_id, e.catalog_id, c.display_name AS catalog_name, e.kind, e.status, e.merged_into, e.label,
            e.description, e.attributes, e.last_location, l.display_name AS last_location_name, e.last_seen_at,
            e.first_seen_at, e.confidence, e.snapshot_uri, e.needs_review, e.review_reason, e.parent_entity,
-           e.ims_barcode, e.created_by, e.created_at, e.updated_at,
-           mv.actor_desc AS last_moved_by, mv.occurred_at AS last_moved_at
+           e.ims_barcode, e.created_by, e.created_at, e.updated_at, e.location_set_at, e.location_set_by,
+           mv.actor_desc AS last_moved_by, mv.occurred_at AS last_moved_at,
+           lh.event_type AS lh_event_type, lh.actor_desc AS lh_actor_desc, lh.occurred_at AS lh_occurred_at
       FROM entity e
       LEFT JOIN catalog_item c ON c.catalog_id = e.catalog_id
       LEFT JOIN location l ON l.location_id = e.last_location
@@ -48,10 +49,32 @@ ITEM_SELECT = """
              WHERE ev.entity_id = e.entity_id AND ev.event_type = 'moved'
              ORDER BY ev.occurred_at DESC, ev.created_at DESC LIMIT 1
       ) mv ON TRUE
+      LEFT JOIN LATERAL (
+            SELECT ev.event_type, ev.actor_desc, ev.occurred_at FROM event ev
+             WHERE ev.entity_id = e.entity_id AND ev.event_type = ANY('{%(handled)s}'::text[])
+               AND NOT (ev.event_type = 'added' AND ev.source = 'operator')
+             ORDER BY ev.occurred_at DESC, ev.created_at DESC LIMIT 1
+      ) lh ON TRUE
 """
+
+# AC-API-30: event types that count as "handling" an item (operator 'added' = item creation is excluded in the query).
+HANDLED_EVENT_TYPES = ("moved", "used", "handed_over", "added", "removed", "stowed", "unstowed", "consumed")
+ITEM_SELECT = ITEM_SELECT.replace("%(handled)s", ",".join(HANDLED_EVENT_TYPES))
 
 EVENT_COLUMNS = """event_id, event_type, entity_id, actor_entity, actor_desc, from_location, to_location, occurred_at,
                    confidence, evidence_uri, source, created_at"""
+
+# AC-API-29: events with the entity's label/catalog and the location display names.
+EVENT_SELECT = """
+    SELECT ev.event_id, ev.event_type, ev.entity_id, ev.actor_entity, ev.actor_desc, ev.from_location,
+           ev.to_location, ev.occurred_at, ev.confidence, ev.evidence_uri, ev.source, ev.created_at,
+           en.label AS entity_label, en.catalog_id AS entity_catalog_id,
+           lf.display_name AS from_location_name, lt.display_name AS to_location_name
+      FROM event ev
+      LEFT JOIN entity en ON en.entity_id = ev.entity_id
+      LEFT JOIN location lf ON lf.location_id = ev.from_location
+      LEFT JOIN location lt ON lt.location_id = ev.to_location
+"""
 
 
 def jsonb(value: Any) -> Jsonb:
@@ -89,11 +112,22 @@ def serialize_item(row: dict[str, Any], bucket: str, url_for) -> dict[str, Any]:
         "updated_at": row["updated_at"],
         "last_moved_by": row["last_moved_by"],
         "last_moved_at": row["last_moved_at"],
+        "last_handled": (
+            {
+                "event_type": row["lh_event_type"],
+                "actor_desc": row["lh_actor_desc"],
+                "occurred_at": row["lh_occurred_at"],
+            }
+            if row["lh_event_type"] is not None
+            else None
+        ),
+        "location_set_at": row["location_set_at"],
+        "location_set_by": row["location_set_by"],
     }
 
 
 def serialize_event(row: dict[str, Any], bucket: str, url_for) -> dict[str, Any]:
-    return {
+    out = {
         "event_id": row["event_id"],
         "event_type": row["event_type"],
         "entity_id": row["entity_id"],
@@ -107,6 +141,10 @@ def serialize_event(row: dict[str, Any], bucket: str, url_for) -> dict[str, Any]
         "source": row["source"],
         "created_at": row["created_at"],
     }
+    for key in ("entity_label", "entity_catalog_id", "from_location_name", "to_location_name"):
+        if key in row:
+            out[key] = row[key]
+    return out
 
 
 def fetch_items(conn: psycopg.Connection, ids: Sequence[UUID | str], bucket: str, url_for) -> list[dict[str, Any]]:
@@ -150,6 +188,19 @@ def location_no_capture(conn: psycopg.Connection, location_id: str) -> bool:
         (location_id,),
     ).fetchone()
     return bool(row["private"])
+
+
+def no_capture_locations(conn: psycopg.Connection) -> set[str]:
+    """Every location that is no_capture itself or below a no_capture ancestor (privacy is inherited)."""
+    rows = conn.execute(
+        """WITH RECURSIVE priv(location_id, depth) AS (
+               SELECT location_id, 0 FROM location WHERE no_capture
+               UNION
+               SELECT l.location_id, p.depth + 1 FROM location l JOIN priv p ON l.parent_id = p.location_id
+                WHERE p.depth < 32
+           ) SELECT DISTINCT location_id FROM priv"""
+    ).fetchall()
+    return {r["location_id"] for r in rows}
 
 
 def catalog_exists(conn: psycopg.Connection, catalog_id: str) -> bool:

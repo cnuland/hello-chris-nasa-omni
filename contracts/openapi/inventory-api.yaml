@@ -88,8 +88,11 @@ paths:
 
   /items/{entity_id}/history:
     get:
-      summary: Timeline of sightings + events for an item
-      parameters: [{name: entity_id, in: path, required: true, schema: {type: string, format: uuid}}]
+      summary: Timeline of sightings + events + audit for an item (AC-API-11, AC-API-32)
+      parameters:
+        - {name: entity_id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 2000, default: 500}}
+        - {name: collapse, in: query, schema: {type: boolean, default: true}, description: 'true (default) folds runs of >=2 consecutive routine pipeline update audits into one entry with count; false returns the raw audit rows'}
       responses: {'200': {description: timeline, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/TimelineEntry'}}}}}}
 
   /review:
@@ -98,8 +101,25 @@ paths:
       parameters:
         - {name: status, in: query, schema: {enum: [open, resolved, dismissed], default: open}}
         - {name: kind, in: query, schema: {enum: [unknown_object, possible_duplicate, low_confidence, conflict]}}
-        - {name: limit, in: query, schema: {type: integer, default: 50}}
-      responses: {'200': {description: queue, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/ReviewItem'}}}}}}
+        - {name: location, in: query, schema: {type: string}, description: review location_id; matches the location and its descendants}
+        - {name: q, in: query, schema: {type: string, maxLength: 200}, description: case-insensitive substring over description and entity label}
+        - {name: sort, in: query, schema: {enum: [created_at, observed_at], default: created_at}}
+        - {name: order, in: query, schema: {enum: [desc, asc], default: desc}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 500, default: 50}}
+        - {name: offset, in: query, schema: {type: integer, minimum: 0, default: 0}}
+      responses:
+        '200':
+          description: queue (always a JSON array)
+          headers: {X-Total-Count: {description: number of matching reviews before limit/offset, schema: {type: integer}}}
+          content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/ReviewItem'}}}}
+        '422': {description: invalid filter value}
+  /review/{review_id}:
+    get:
+      summary: One review item (same shape as the queue entries)
+      parameters: [{name: review_id, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses:
+        '200': {description: review, content: {application/json: {schema: {$ref: '#/components/schemas/ReviewItem'}}}}
+        '404': {description: not found}
   /review/{review_id}/resolve:
     post:
       summary: NASA classifies a review item (R6)
@@ -135,6 +155,7 @@ paths:
       parameters:
         - {name: entity_id, in: query, schema: {type: string, format: uuid}}
         - {name: type, in: query, schema: {type: string}}
+        - {name: types, in: query, schema: {type: string}, description: 'comma-separated event types (e.g. moved,used,handed_over); ANDed with type; unknown type -> 422'}
         - {name: after, in: query, schema: {type: string, format: date-time}}
         - {name: before, in: query, schema: {type: string, format: date-time}}
         - {name: limit, in: query, schema: {type: integer, default: 100}}
@@ -199,6 +220,36 @@ components:
         review_reason: {type: [string, 'null']}
         last_moved_by: {type: [string, 'null'], description: actor_desc of the latest 'moved' event}
         last_moved_at: {type: [string, 'null'], format: date-time}
+        last_handled:
+          description: latest moved/used/handed_over/added/removed/stowed/unstowed/consumed event, excluding operator 'added' (item creation)
+          oneOf:
+            - {type: 'null'}
+            - {$ref: '#/components/schemas/LastHandled'}
+        location_set_at: {type: [string, 'null'], format: date-time, description: when the current last_location was set (sighting time for the pipeline, edit time for an operator)}
+        location_set_by: {type: [string, 'null'], description: "'pipeline' or the operator name"}
+    LastHandled:
+      type: object
+      required: [event_type, occurred_at]
+      properties:
+        event_type: {type: string}
+        actor_desc: {type: [string, 'null']}
+        occurred_at: {type: string, format: date-time}
+    ReviewEntity:
+      description: Item extended for review cards (AC-API-24); thumbnail_url/snapshot_url are null in no_capture locations
+      allOf:
+        - $ref: '#/components/schemas/Item'
+        - type: object
+          required: [entity_id, label, status, confidence, thumbnail_url, sighting_count]
+          properties:
+            thumbnail_url: {type: [string, 'null']}
+            sighting_count: {type: integer}
+    ReviewCandidate:
+      allOf:
+        - $ref: '#/components/schemas/ReviewEntity'
+        - type: object
+          required: [similarity]
+          properties:
+            similarity: {type: [number, 'null'], description: max cosine similarity to the review entity's best exemplar; null when either has no exemplar}
     ItemPage:
       type: object
       required: [items, total]
@@ -214,7 +265,15 @@ components:
     TimelineEntry:
       type: object
       required: [at, kind]
-      properties: {at: {type: string, format: date-time}, kind: {enum: [sighting, event, audit]}, location_id: {type: [string, 'null']}, summary: {type: string}, image_url: {type: [string, 'null']}}
+      properties:
+        at: {type: string, format: date-time}
+        kind: {enum: [sighting, event, audit]}
+        location_id: {type: [string, 'null']}
+        summary: {type: string}
+        image_url: {type: [string, 'null']}
+        count: {type: integer, description: audit entries only; >1 for a collapsed run of routine pipeline updates}
+        first_at: {type: string, format: date-time, description: collapsed entries only; time of the oldest folded audit}
+        audit_ids: {type: array, items: {type: string}, description: collapsed entries only; the folded audit ids}
     Event:
       type: object
       properties:
@@ -228,6 +287,10 @@ components:
         confidence: {type: number}
         evidence_url: {type: [string, 'null']}
         source: {type: string}
+        entity_label: {type: [string, 'null']}
+        entity_catalog_id: {type: [string, 'null']}
+        from_location_name: {type: [string, 'null']}
+        to_location_name: {type: [string, 'null']}
     ReviewItem:
       type: object
       required: [review_id, kind, image_url, description, observed_at, status]
@@ -236,8 +299,19 @@ components:
         kind: {type: string}
         entity_id: {type: [string, 'null'], format: uuid}
         candidate_ids: {type: array, items: {type: string, format: uuid}}
-        candidates: {type: array, items: {$ref: '#/components/schemas/Item'}}
-        image_url: {type: string}
+        candidates: {type: array, items: {$ref: '#/components/schemas/ReviewCandidate'}, description: stored candidate_ids expanded, or (possible_duplicate with none stored) up to 8 server suggestions}
+        candidates_source: {enum: [stored, suggested, none]}
+        subject:
+          description: the review's own entity
+          oneOf:
+            - {type: 'null'}
+            - {$ref: '#/components/schemas/ReviewEntity'}
+        image_url: {type: [string, 'null'], description: always set, except null for a legacy review stored in a no_capture location}
+        image_bbox:
+          description: '[x1,y1,x2,y2] normalised 0..1 of the object in image_url, from the sighting that produced the review; null if unknown (e.g. the image is already a crop)'
+          oneOf:
+            - {type: 'null'}
+            - {type: array, items: {type: number, minimum: 0, maximum: 1}, minItems: 4, maxItems: 4}
         description: {type: string}
         observed_at: {type: string, format: date-time}
         location_id: {type: [string, 'null']}

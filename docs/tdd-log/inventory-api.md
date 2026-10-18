@@ -323,3 +323,141 @@ failure was for the reported reason. For example, the race test found the sighti
   the bucket (#11). POST /items returns 422 for no_capture locations (#9).
 - Spec AC-API-19 wording: person exemplars from no_capture zones are not stored; object embeddings are kept without
   crops (#2).
+
+## UI-review contract additions (2026-10-17, developer)
+
+Source: Playwright UI review `docs/ui-review/REPORT.md` and `findings.json`. The findings addressed here are:
+
+- UI-03: duplicate cards cannot be decided (23 of 37 had no candidates)
+- UI-04: actor shown only for moves
+- UI-08: whole frames without a box
+- UI-09: an edit resets "Last seen"
+- UI-11: no review filters
+- UI-12: history flooded with pipeline audits
+- UI-13: events show only ids
+
+Spec: AC-API-24 to AC-API-32 in `docs/spec/10-inventory-api.md`. Contracts: `contracts/openapi/inventory-api.yaml` (new
+`LastHandled`, `ReviewEntity` and `ReviewCandidate` schemas, plus new parameters and fields) and the new
+`contracts/db/003_location_provenance.sql`.
+
+### Result
+
+- **inventory-api:** 396 passed, 0 failed (336 before + 60 new in `tests/test_ac_api_24_32_ui_review.py`).
+  `ruff check .` and `ruff format --check inventory_api` are clean.
+- **e2e:** 25 passed (6 new in `tests/e2e/test_e2e_ui_review_contract.py`; one existing test changed, see below).
+- **`make test`:** all suites pass.
+
+### Process
+
+1. Wrote the ACs first, then the OpenAPI changes.
+2. Wrote 55 red tests. 54 failed for the intended reason:
+   - `/review/{id}`: 404 (route missing)
+   - `location_set_at`: `UndefinedColumn`
+   - `X-Total-Count`, `last_handled`, `image_bbox`, `entity_label`, `count`: `KeyError`
+   - filters: ignored, so the result sets were wrong
+   - `sort=label`, `order=up`, `offset=-1`, `types=bogus`, `collapse=maybe`: 200 instead of 422
+3. The one that passed is a guard (`limit=0` was already 422).
+4. Went to green, then did the adversarial review below.
+5. Added 5 guard tests from the review. They passed on first run because the green code already handled those
+   cases; they stay as regression guards.
+
+### Decisions (the dashboard relies on these)
+
+- **Field names.** No field in the requested contract was renamed or left out.
+  - A review candidate is the full Item (old fields such as `kind` and `snapshot_url` are kept) plus `thumbnail_url`,
+    `sighting_count` and `similarity`.
+  - `subject` has the same shape without `similarity`.
+  - Additions beyond the contract:
+    - `candidates_source` (`stored` | `suggested` | `none`), so the UI can label server suggestions
+    - `location_set_at` and `location_set_by` on Items
+    - `count`, `first_at` and `audit_ids` on timeline entries
+- **`thumbnail_url`** is the entity's snapshot (a crop when one exists, otherwise its frame). Both it and
+  `snapshot_url` are null when `last_location` is no_capture (ancestors included).
+- **`image_url` can now be null,** but only for a legacy review stored with a no_capture `location_id`. Ingest has
+  rejected such reviews since review round 1, so live data should never show this. The OpenAPI type is
+  `[string, null]`.
+- **Suggested candidates (AC-API-25):**
+  - **Pool:** same `kind` (a merge across kinds is a 409 anyway) and same `catalog_id`, which is what perception's
+    expected-count rule counts per class. Without a catalog_id: same normalised key of the label **or of the
+    candidate's catalog class_name**. This is a small widening, so an unclassified "camera" also finds catalogued
+    cameras.
+  - **Order:** similarity to the subject's best exemplar (`quality DESC, created_at DESC`, the cap order), then same
+    module, then most recent.
+  - **Cost:** one SQL statement per page (LATERAL over the subjects). This is an exact scan of the pool's
+    exemplars, fine at POC scale.
+- **`similarity` for stored candidates** is computed the same way (null when either side has no exemplar).
+- **`image_bbox`** comes from the review entity's sighting whose `frame_uri` equals the review `image_uri`, nearest
+  `observed_at`. Perception sets the review image to `crop_uri or frame_uri`, so crop images get `null`: the crop is
+  the object. A stored bbox outside 0..1, or with x2<=x1 or y2<=y1, gives `null`.
+- **`GET /review`:**
+  - Default order: `created_at DESC, observed_at DESC, review_id`, as before.
+  - `limit` stays 1..500, and `offset` is new.
+  - `q` matches the review description or the entity label, with LIKE wildcards escaped.
+  - `X-Total-Count` counts the matches before pagination. The dashboard reaches the API through its same-origin
+    `/api` proxy, so no CORS `Expose-Headers` is needed.
+- **`GET /events`:**
+  - `types` is validated against the event-type enum (422 on an unknown type) and ANDed with `type`; an empty
+    `types=` is ignored.
+  - The label and location-name joins also apply to `GET /items/{id}` `events`.
+- **`last_handled`** is a second LATERAL in `ITEM_SELECT`, so every endpoint that returns Items has it in the same
+  query (no N+1). It excludes operator-sourced `added` events.
+- **Location provenance (AC-API-31)** replaces the GREATEST rule from review round 1, finding #6.
+  - **PATCH:** a move sets `location_set_at = now()` and `location_set_by = <operator actor>`; it no longer touches
+    `last_seen_at`.
+  - **Ingest:** a sighting newer than `last_seen_at` still refreshes `last_seen_at`, confidence and snapshot. It
+    moves the item only if `seen_at > COALESCE(location_set_at, -infinity)`, and then sets (`seen_at`, `pipeline`).
+    Both conditions are read from the pre-UPDATE row.
+  - **New entities:** a pipeline entity gets (`seen_at`, `pipeline`); an operator item gets (`now()`, operator).
+  - **Merge:** the location follows the newer `COALESCE(location_set_at, last_seen_at)`. `last_seen_at` is still the
+    max. `target_previous` records `location_set_at` and `location_set_by` for undo.
+- **Migration 003:** `ADD COLUMN IF NOT EXISTS` (nullable, no default, so it is metadata-only and fast), then two
+  backfills guarded by `location_set_at IS NULL`, so a re-run changes nothing.
+  - **Backfill 1 (data repair):** finds items moved under the old rule. That PATCH wrote `last_seen_at = now()` and
+    an operator `moved` event with `occurred_at = now()` in one transaction, so the two are exactly equal. For these
+    items it records the move as provenance (by = the event's actor) and restores `last_seen_at` to the real last
+    sighting. For operator-created items, `first_seen_at` also counts as seen.
+  - **Live example:** `af8031d3` will show 22:57:14 UTC again, not 00:06:31Z.
+  - **Backfill 2:** sets `location_set_at = last_seen_at` and `location_set_by = 'pipeline'`, or `'operator'` for
+    operator-created rows.
+  - **Test:** checked with the real runner against a 001+002 database holding data, upgraded twice.
+- **History (AC-API-32):** I chose **collapse by default**, so the dashboard gets the fix with no change.
+  `?collapse=false` returns the raw audit list.
+  - A routine entry is `op='update'` by `pipeline` that did not create the entity and whose `event_ids`/`review_ids`
+    contain none of the entity's events or reviews.
+  - Each run of 2 or more consecutive routine entries in timeline order becomes one entry: newest `at` and `id`,
+    `count`, `first_at`, `audit_ids`, and the summary "N pipeline updates (sighting refresh: last_seen_at/confidence)".
+  - Every other audit entry has `count: 1`.
+  - Operator update summaries now list the changes: `update by amy (last_location: LAB1S2 -> NOD1D1)`.
+
+### Test changes
+
+- **inventory-api unit tests:** none edited.
+  - The GREATEST-rule tests from review round 1 still pass unchanged, because they assert only the protection
+    (`test_ac_api_08_operator_move_not_overwritten_by_older_late_window`: the location stays) and
+    `test_ac_api_08_patch_without_location_change_keeps_last_seen`. No test asserted that `last_seen_at` advanced.
+  - The new AC-API-31 tests encode the replacement behaviour.
+- **`tests/e2e/test_e2e_contracts.py::test_e2e_contract_review_candidates_expand_to_items`:** changed.
+  - Before: `len(candidates) == len(candidate_ids)` for every review.
+  - After: the equality is kept for `candidates_source != "suggested"`. For suggested candidates the test asserts
+    `candidate_ids == []` and 1..8 candidates.
+  - Reason: AC-API-25 intentionally returns server suggestions when nothing is stored.
+- **`tests/e2e/test_e2e_pipeline.py`:** not touched (the perception agent's revisit change is kept).
+
+### Adversarial self-review
+
+| # | Concern | Finding / resolution |
+|---|---------|----------------------|
+| 1 | SQL injection in the new filters | All values are bound parameters. `q` uses `like_pattern` (wildcards escaped); `location` uses the subtree CTE; `types` values are checked against the enum, then bound as an array. `sort`/`order` are `Literal`-validated and only choose between fixed SQL fragments. NUL bytes return 422 through the global DataError handler. Guards: `test_ac_api_28_filters_are_not_injectable[q/location]`, `*_nul_bytes_*`, `test_ac_api_29_types_filter` (an injection string in `types` returns 422). |
+| 2 | Privacy leaks via candidates or thumbnails | Suggestions can include entities whose `last_location` is in crew quarters or the WHC. Their `thumbnail_url` **and** `snapshot_url` are nulled, so the old Item field cannot leak what the new field hides. The subject gets the same treatment, and a legacy review in a private zone gets no image or bbox. `image_bbox` is coordinates only. Guards: `test_ac_api_27_*` (5 zones, stored and suggested, list and detail). **Not changed (out of scope):** `GET /items` still returns `snapshot_url` for an item an operator moved into a private zone. That snapshot was necessarily taken in a public zone, because ingest drops private frames. |
+| 3 | N+1 queries | `_expand` runs a fixed 6 statements whatever the page size: private locations, suggestions, stored-pair similarity, image bbox, items with `last_handled`, sighting counts. Guard: `test_ac_api_25_review_queue_query_count_does_not_grow_with_reviews` counts `Connection.execute` calls for 1 and for 6 subjects (2 and 12 reviews). History adds 2 lookups only when there are pipeline audits. |
+| 4 | Migration safety on the live DB | It is idempotent: `IF NOT EXISTS`, and the backfills only touch NULL rows. It runs in one transaction under the runner's advisory lock. The ALTER is metadata-only (nullable, no default), so it holds an ACCESS EXCLUSIVE lock only briefly. The repair matches only exact `occurred_at = last_seen_at` with an operator `moved` event, a fingerprint that only the old GREATEST PATCH produces. Pipeline moves are excluded (tested). **Deploy order:** the new API code reads the new columns, so 003 must run before the new pods. The image bundles `contracts/db`, but the `inventory-migrations` ConfigMap must be re-created (`scripts/bootstrap.sh`) so the migrate Job sees 003. An old pod still running after 003 would PATCH without setting provenance; this is harmless, because COALESCE falls back to `last_seen_at`. |
+| 5 | Similarity semantics | The subject's "best" exemplar is chosen by quality, not by closeness. A test proves that a candidate identical to a low-quality subject exemplar does not rank first. |
+
+### Notes for other components
+
+- **Dashboard:** `TimelineEntry` gains optional `count`, `first_at` and `audit_ids`. `ReviewItem.image_url` is
+  typed nullable.
+- **Timestamp formats:** `POST /items` returns timestamps as `+00:00` while the other endpoints use `Z`. This was
+  already the case and is unchanged; parse the values, do not compare strings. Seen in the new e2e test.
+- **Agent:** nothing breaks. It can now use `GET /events?types=moved,used,handed_over` plus `entity_label` to answer
+  "who used the drill" (UI-02).
