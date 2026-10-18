@@ -43,9 +43,10 @@ async def test_ui2_five_questions_one_conversation(make_harness, fake_inventory,
         messages.append({"role": "assistant", "content": r["reply"]})
 
     q1, q2, q3, q4, q5 = results
-    # Q1 (UI2-03, UI2-12): trimmed at a line, numbered 1..3, announced
-    assert q1["reply"].endswith("(showing the first 3 of 5; ask for more)")
-    assert "**Conf" not in q1["reply"] and "\n2. " in q1["reply"] and "\n3. " in q1["reply"]
+    # Q1 (UI2-03, UI2-12; superseded by AC-AGT-34/35): a where-question with a multi-item where_is result is the
+    # deterministic list with the tool total, so the cut draft is never used (the cut itself: test_ac_agt_21_*)
+    assert q1["reply"].startswith('5 items match "laptop" (most recently seen first):')
+    assert "**Conf" not in q1["reply"] and "\n2. " in q1["reply"] and "\n5. " in q1["reply"]
     assert "T22:51" not in q1["reply"] and "2026-10-17 22:51 UTC" in q1["reply"]
     # Q2: usual stowage from the catalog
     assert "LAB1" in q2["reply"] and NO_RECORD_REPLY not in q2["reply"]

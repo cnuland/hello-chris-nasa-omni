@@ -59,14 +59,17 @@ async def test_review_large_recent_changes_payload_drops_whole_changes(make_harn
     # a second, non-rendered tool in the step keeps the model in the loop (AC-AGT-29), so the payload is sent
     llm = FakeLLM([assistant_tools(tool_call("recent_changes", {}), tool_call("lookup_catalog", {"q": "wrench"})),
                    assistant_text("Many uses of the drill.")])
+    # (AC-AGT-35: a bare "What changed in the last hour?" is routed without the model; this one is not)
     res = await make_harness(llm, settings=replace(plain_settings, tool_result_token_budget=800)).run(
-        user("What changed in the last hour?"))
+        user("What changed in the last hour, and do we have a wrench?"))
     msg = json.loads(next(m for m in llm.requests[1]["messages"] if m["role"] == "tool")["content"])
     assert msg["truncated"] is True and isinstance(msg["data"], dict), "never a cut JSON string"
     sent = msg["data"]["changes"]
     assert 0 < len(sent) < 30 and msg["data"]["since"]
     sent_keys = {(c["entity_id"], c["at"]) for c in sent}
-    assert {(c["entity_id"], c["at"]) for c in res["citations"]} == sent_keys, "cite only what the model saw"
+    # AC-AGT-33: one citation per entity, and only of what the model saw
+    assert res["citations"] and all((c["entity_id"], c["at"]) in sent_keys for c in res["citations"])
+    assert len({c["entity_id"] for c in res["citations"]}) == len(res["citations"])
 
 
 # ---------------------------------------------------------------- 3. actor free text grounds actors, not places

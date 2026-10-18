@@ -34,6 +34,8 @@ from tests.live_round3 import (
 )
 
 PEOPLE_Q = "How many people have been seen today, and where?"
+#: AC-AGT-35 renders a multi-item where_is result for a where-question; this question keeps the model's wording.
+MODEL_WRITTEN_Q = "Which laptops do we have?"
 PERSON_IDS = {p[0] for p in LIVE_PEOPLE}
 
 
@@ -211,7 +213,7 @@ async def test_ac_agt_28_live_people_question_uses_the_track_total(make_harness,
 async def test_ac_agt_28_model_calling_people_seen_gets_the_rendered_answer(make_harness, people):
     llm = FakeLLM([assistant_tools(tool_call("people_seen", {"since": "2026-10-18T00:00:00Z"}))])
     r = await make_harness(llm).run(user(PEOPLE_Q))
-    assert llm.calls == 1, "no extra LLM call after a deterministic counting tool"
+    assert llm.calls == 0, "AC-AGT-35: a bare people-count question is routed without any LLM call"
     assert r["reply"].startswith("17 person tracks were seen between 2026-10-18 00:00 and 2026-10-18 03:32 UTC")
 
 
@@ -254,7 +256,7 @@ async def test_ac_agt_28_count_claim_backed_by_api_total_is_kept(make_harness, t
     load_live(fake_inventory, toolbox)
     text = "There are 5 laptops: two in USOS, two in NOD1 and one in NOD3."
     llm = FakeLLM([assistant_tools(tool_call("where_is", {"name": "laptop"})), assistant_text(text)])
-    r = await make_harness(llm).run(user("Where are the laptops?"))
+    r = await make_harness(llm).run(user(MODEL_WRITTEN_Q))
     assert r["reply"] == text
 
 
@@ -266,7 +268,7 @@ async def test_ac_agt_28_count_claim_from_a_capped_list_is_rejected(make_harness
                                           last_location="LAB1", last_seen_at="2026-10-17T20:00:00Z"))
     text = "There are 5 laptops in the inventory."
     llm = FakeLLM([assistant_tools(tool_call("where_is", {"name": "laptop"})), assistant_text(text)])
-    r = await make_harness(llm).run(user("Where are the laptops?"))
+    r = await make_harness(llm).run(user(MODEL_WRITTEN_Q))
     assert "5 laptops" not in r["reply"] and r["reply"] != NO_RECORD_REPLY
     rec = next(x for x in caplog.records if x.getMessage() == "chat turn")
     assert rec.fallback == "count_unverified"
@@ -298,7 +300,7 @@ async def test_ac_agt_29_recent_changes_render_deterministically(make_harness, p
     for _ in range(2):
         llm = FakeLLM([assistant_tools(tool_call("recent_changes", {}))])
         r = await make_harness(llm).run(user("What changed in the last hour?"))
-        assert llm.calls == 1, "rendered without a second LLM call"
+        assert llm.calls == 0, "rendered with no LLM call (AC-AGT-35 routing)"
         replies.append(r["reply"])
     assert replies[0] == replies[1], "the same format in every run"
     reply = replies[0]
@@ -331,7 +333,7 @@ async def test_ac_agt_29_long_lists_end_with_a_paging_hint_and_show_more_pages(m
     call = second["tool_calls"][0]
     assert call["name"] == "recent_changes" and call["arguments"]["offset"] == 10
     assert call["arguments"]["since"] == "2026-10-18T02:32:00Z"
-    assert second["citations"] and len(second["citations"]) == 10
+    assert [c["entity_id"] for c in second["citations"]] == [CTB], "AC-AGT-33: one citation per entity"
     third = await make_harness(FakeLLM([])).run(
         [*history, {"role": "assistant", "content": second["reply"]}, *user("Show more changes please")])
     assert "(showing 21-28 of 28)" in third["reply"] and "more;" not in third["reply"]
@@ -515,7 +517,7 @@ async def test_review3_sub_counts_of_a_complete_list_are_allowed(make_harness, t
     load_live(fake_inventory, toolbox)
     text = "2 laptops were last seen in USOS and 2 laptops in NOD1."
     llm = FakeLLM([assistant_tools(tool_call("where_is", {"name": "laptop"})), assistant_text(text)])
-    r = await make_harness(llm).run(user("Where are the laptops?"))
+    r = await make_harness(llm).run(user(MODEL_WRITTEN_Q))
     assert r["reply"] == text, "where_is returned all 5 (API total 5): counts within it are verifiable"
 
 

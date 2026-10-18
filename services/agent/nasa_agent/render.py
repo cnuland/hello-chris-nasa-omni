@@ -35,6 +35,8 @@ _LEADING_ROLE_RE = re.compile(
     r"dressed\s+in|in|with)\b[\s,:-]*)+", re.IGNORECASE)
 _DANGLING_RE = re.compile(r"(?:\s+(?:in|at|on|to|from|into|near|by|the|of|and|who|put|it))+\s*$", re.IGNORECASE)
 MAX_APPEARANCE_WORDS = 12
+#: AC-AGT-33: said instead of leaving a line without a place.
+NO_PLACE = "place not recorded"
 
 
 # ---------------------------------------------------------------- primitives
@@ -174,6 +176,8 @@ def change_line(c: dict[str, Any], names: dict[str, str | None]) -> str:
         actor = actor_phrase(c.get("actor", c.get("actor_desc")), operator=_is_operator(c))
         if actor:
             text += f" by {actor}"
+    if not (frm or to or at):
+        text += f", {NO_PLACE}"  # AC-AGT-33: every rendered line has a place, or says it has none
     return f"{when}: {text}" if when else text
 
 
@@ -186,8 +190,10 @@ def item_line(item: dict[str, Any], names: dict[str, str | None]) -> str:
         who = subject_label(item.get("label"), item.get("entity_id"), own)
     where = place(item.get("last_location"), names, item.get("last_location_name"))
     when = stamp(item.get("last_seen_at"))
+    if not (where or when):
+        return f"{who}: no sighting on record"
     tail = (f" in {where}" if where else "") + (f" at {when}" if when else "")
-    return f"{who}: last seen{tail}" if tail else f"{who}: no sighting on record"
+    return f"{who}: last seen{tail}" + ("" if where else f", {NO_PLACE}")
 
 
 def _numbered(lines: list[str], start: int) -> list[str]:
@@ -236,8 +242,11 @@ def people_reply(data: dict[str, Any], citations: list[dict[str, Any]],
     else:
         if total == 0:
             return f"No person tracks were seen{where} {window}.", []
+        modules = [m for m in data.get("by_module") or [] if isinstance(m, dict)]
+        if scope and len(modules) == 1 and modules[0].get("location") == data.get("location"):
+            modules = []  # "2 person tracks were seen in Cupola (CUP1)", not "...: Cupola (CUP1) 2."
         counts = ", ".join(f"{place(m.get('location'), names, m.get('location_name')) or 'unknown location'} "
-                           f"{int(m.get('count') or 0)}" for m in data.get("by_module") or [] if isinstance(m, dict))
+                           f"{int(m.get('count') or 0)}" for m in modules)
         noun = "person track was" if total == 1 else "person tracks were"
         lead = f"{total} {noun} seen{where} {window}" + (f": {counts}." if counts else ".")
         if data.get("complete") is False:
@@ -324,6 +333,12 @@ def parse_page_marker(reply: str, question: str = "") -> dict[str, Any] | None:
             "offset": end}
 
 
+def previous_range_end(reply: Any) -> int:
+    """AC-AGT-33: the end of the last "(showing a-b of n)" range of an earlier reply (0 when there is none)."""
+    ranges = _RANGE_RE.findall(reply) if isinstance(reply, str) else []
+    return int(ranges[-1][1]) if ranges else 0
+
+
 # ---------------------------------------------------------------- count claims (AC-AGT-28)
 COUNT_Q_RE = re.compile(r"\b(?:how\s+many|count(?:s|ed|ing)?|number\s+of|tally)\b", re.IGNORECASE)
 PEOPLE_Q_RE = re.compile(
@@ -408,3 +423,167 @@ def is_sighting_count_question(question: str) -> bool:
     """A counting question about what is on record (not the catalog's expected count)."""
     q = question or ""
     return bool(COUNT_Q_RE.search(q) and not EXPECTED_Q_RE.search(q))
+
+
+# ---------------------------------------------------------------- AC-AGT-35: question types answered without the model
+_TIME_WORDS = frozenset({
+    "in", "on", "at", "during", "over", "within", "since", "the", "a", "an", "last", "past", "previous", "recent",
+    "recently", "hour", "hours", "minute", "minutes", "min", "mins", "day", "days", "week", "weeks", "today",
+    "yesterday", "half", "so", "far", "utc", "am", "pm", "now", "right", "currently", "and", "please", "ok", "okay",
+    "one", "two", "three", "four", "five", "six", "seven", "ten", "twelve", "fifteen", "twenty", "thirty", "forty",
+    "fifty", "sixty", "ninety", "inside", "aboard", "station", "iss",
+})
+_PEOPLE_SUBJECTS = frozenset({
+    "who", "whos", "people", "persons", "person", "crew", "crewmembers", "crewmember", "members", "member",
+    "astronauts", "astronaut", "anyone", "anybody", "someone", "somebody", "tracks", "track",
+})
+_PRESENCE_WORDS = frozenset({"was", "were", "is", "are", "been", "seen", "present"})
+_PEOPLE_WORDS = _TIME_WORDS | _PEOPLE_SUBJECTS | _PRESENCE_WORDS | frozenset({
+    "has", "have", "which", "where", "how", "many", "number", "of", "count", "tell", "me", "show", "list", "s",
+})
+_CHANGE_TRIGGERS = frozenset({"changed", "change", "changes", "happened"})
+_CHANGE_WORDS = _TIME_WORDS | _CHANGE_TRIGGERS | frozenset({
+    "what", "whats", "has", "have", "had", "any", "anything", "been", "were", "was", "there", "show", "me", "list",
+    "tell", "s", "all",
+})
+_TOKEN_RE = re.compile(r"[a-z]+|\d+")
+#: words that set a time window; when the AC-AGT-22 parser cannot read the window, the model handles the question
+_WINDOW_WORDS = frozenset({
+    "since", "last", "past", "previous", "hour", "hours", "minute", "minutes", "min", "mins", "day", "days", "week",
+    "weeks", "today", "yesterday", "half", "am", "pm", "utc", "one", "two", "three", "four", "five", "six", "seven",
+    "ten", "twelve", "fifteen", "twenty", "thirty", "forty", "fifty", "sixty", "ninety",
+})
+
+
+def has_window_words(text: str) -> bool:
+    """AC-AGT-35: the message carries a time phrase (so it must be parsed before it can be routed)."""
+    return any(w in _WINDOW_WORDS or w.isdigit() for w in _words(text))
+
+
+def _words(text: str) -> list[str]:
+    return _TOKEN_RE.findall((text or "").lower().replace("'", ""))
+
+
+def may_route(question: str) -> bool:
+    """AC-AGT-35: cheap pre-check (no place lookup) for a question that direct routing might answer."""
+    return bool(set(_words(question)) & (_PEOPLE_SUBJECTS | _CHANGE_TRIGGERS))
+
+
+def is_people_presence_question(rest: str) -> bool:
+    """AC-AGT-35: the message (named places already removed) is only a people presence / count question: "Who was in
+    the Cupola?", "Was anyone seen today?", "How many people have been seen today, and where?"."""
+    words = _words(rest)
+    if not words or len(words) > 16 or "there" in words:
+        return False
+    ws = set(words) - {w for w in words if w.isdigit()}
+    if not ws <= _PEOPLE_WORDS or not ws & _PEOPLE_SUBJECTS:
+        return False
+    return bool(ws & _PRESENCE_WORDS) or ("how" in ws and "many" in ws)
+
+
+def is_changes_question(rest: str) -> bool:
+    """AC-AGT-35: the message (named places already removed) is only a what-changed question: "What changed in the last
+    hour?", "Any changes since 10am?". A message with "there" (an earlier place) or any other word is not."""
+    words = _words(rest)
+    if not words or len(words) > 16:
+        return False
+    ws = set(words) - {w for w in words if w.isdigit()}
+    if "there" in ws and not ({"any", "anything"} & ws and ws & {"been", "were", "was", "have", "has"}):
+        return False  # "What changed there?" refers to an earlier place; "Have there been any changes?" does not
+    return ws <= _CHANGE_WORDS and bool(ws & _CHANGE_TRIGGERS)
+
+
+_WHERE_RE = re.compile(r"\bwhere\b", re.IGNORECASE)
+_NOT_WHERE_RE = re.compile(r"\b(?:who|whom|whose|when|why|how)\b", re.IGNORECASE)
+
+
+def is_where_question(question: str) -> bool:
+    """AC-AGT-35: "Where is the laptop right now?" (not "Where was the laptop moved to?" or "Who has it, and where?")."""
+    q = question or ""
+    return bool(_WHERE_RE.search(q) and not _NOT_WHERE_RE.search(q) and not HANDLING_Q_RE.search(q))
+
+
+# ---------------------------------------------------------------- AC-AGT-34: item lists with their total
+DUPLICATE_CAVEAT = "Some of these may be the same physical item; possible duplicates are pending operator review."
+MAX_ITEM_LINES = 5
+
+
+def safe_query_text(value: Any) -> str | None:
+    """A model-chosen search text fit to repeat to the operator (plain words, no place/time claims), else None."""
+    q = clean_text(value, 40)
+    if not q or not _FREE_TEXT_RE.fullmatch(q) or unsupported_claims(q, "{}") or LOCATION_ID_RE.search(q):
+        return None
+    return q
+
+
+def top_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The item lines a rendered list shows: at most 5, most recently seen first."""
+    rows = [i for i in items if isinstance(i, dict)]
+    rows.sort(key=lambda i: parse_iso(i.get("last_seen_at")) or datetime.min.replace(tzinfo=UTC), reverse=True)
+    return rows[:MAX_ITEM_LINES]
+
+
+def items_reply(items: list[dict[str, Any]], total: int | None, query: Any, names: dict[str, str | None],
+                duplicates: bool) -> str:
+    """A where_is / search_items list: the tool total, then at most 5 item lines, most recently seen first."""
+    rows = [i for i in items if isinstance(i, dict)]
+    shown = top_items(rows)
+    n = max(int(total or 0), len(rows))
+    q = safe_query_text(query)
+    lead = (f'{n} items match "{q}"' if q else f"{n} matching items") + (
+        f" ({len(shown)} of {n} shown, most recently seen first):" if len(shown) < n
+        else " (most recently seen first):")
+    text = "\n".join([lead, *_numbered([item_line(i, names) for i in shown], 1)])
+    if duplicates:
+        text += f"\n\n{DUPLICATE_CAVEAT}"
+    return text
+
+
+def shown_note(listed: int, total: int) -> str:
+    return f"({listed} of {total} items shown.)"
+
+
+def list_item_count(text: str) -> int:
+    return sum(1 for line in (text or "").split("\n") if re.match(r"^\s*(?:\d{1,3}[.)]|[-*+])\s+\S", line))
+
+
+# ---------------------------------------------------------------- AC-AGT-35: facts status
+def facts_text(name: str, data: Any, args: Any, scope_total: Any, names: dict[str, str | None],
+               rendering: bool) -> str | None:
+    """A status line from a tool's structured totals ("Found 9 items matching "laptop"; checking the answer…"); None
+    when the tool has nothing countable. Only totals, resolved place labels and a vetted search text are used."""
+    tail = "; writing the answer…" if rendering else "; checking the answer…"
+    d = data if isinstance(data, dict) else {}
+    args = args if isinstance(args, dict) else {}
+
+    def where(lid: Any, given: Any = None) -> str:
+        label = place(lid, names, given) if lid else None
+        return f" in {label}" if label else ""
+
+    def plural(n: int, one: str, many: str) -> str:
+        return f"{n} {one if n == 1 else many}"
+
+    if name == "people_seen" and d:
+        n = int(d.get("total_tracks") or 0)
+        return f"Found {plural(n, 'person track', 'person tracks')}{where(d.get('location'), d.get('location_name'))}" + tail
+    if name == "recent_changes" and d:
+        n = int(d.get("total") or 0)
+        return f"Found {plural(n, 'change', 'changes')}{where(d.get('location'))}" + tail
+    if name == "count_items" and d:
+        n = int(d.get("total") or 0)
+        return f"Counted {plural(n, 'matching item', 'matching items')}" + tail
+    if name in ("where_is", "search_items", "list_unknowns") and isinstance(data, list):
+        n = scope_total if isinstance(scope_total, int) and scope_total >= len(data) else len(data)
+        if name == "list_unknowns":
+            return f"Found {plural(n, 'unknown object', 'unknown objects')}{where(args.get('location'))}" + tail
+        q = safe_query_text(args.get("name") if name == "where_is" else args.get("q"))
+        what = plural(n, "item", "items") + (f' matching "{q}"' if q else "")
+        return f"Found {what if q else plural(n, 'matching item', 'matching items')}" + tail
+    if name == "who_moved" and isinstance(data, list):
+        n = sum(len(e.get("moves") or []) for e in data if isinstance(e, dict))
+        return f"Found {plural(n, 'handling event', 'handling events')}" + tail
+    if name == "lookup_catalog" and isinstance(data, list):
+        return f"Found {plural(len(data), 'catalog entry', 'catalog entries')}" + tail
+    if name == "search_observations" and isinstance(data, list):
+        return f"Found {plural(len(data), 'video observation', 'video observations')}" + tail
+    return None

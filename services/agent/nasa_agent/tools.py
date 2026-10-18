@@ -128,6 +128,15 @@ _GENERIC_PLACE_WORDS = frozenset({
 Status = Literal["confirmed", "provisional", "unknown", "merged", "dismissed"]
 
 
+@dataclass(frozen=True)
+class PlaceScope:
+    """AC-AGT-32: what the current message says about places."""
+
+    location: str | None  # the single place named (None: none, or several distinct places)
+    places: frozenset[str]  # every place named (after dropping containing places)
+    rest: str  # the message with the named places removed
+
+
 # ---------------------------------------------------------------- argument models
 class _Args(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -878,6 +887,70 @@ class Toolbox:
                    for a in self._aliases(loc, words=True))
         }
 
+    async def question_places(self, text: str) -> PlaceScope | None:
+        """AC-AGT-32: the single place the current message names (or None), and the message with every named place
+        removed. A named place that contains another named place is dropped; one alias naming several modules
+        ("Kibo") resolves to the module with the most child locations, then the lowest id. None when GET /locations
+        is unavailable."""
+        try:
+            locs = await self.locations()
+        except InventoryError:
+            return None
+        spans: dict[str, list[tuple[int, int]]] = {}
+        for loc in locs.values():
+            for alias in self._aliases(loc, words=True):
+                for m in re.finditer(rf"(?<![\w-]){re.escape(alias)}(?![\w-])", text, flags=re.IGNORECASE):
+                    spans.setdefault(loc.location_id, []).append(m.span())
+        named = set(spans)
+        for lid in list(named):
+            if any(other != lid and lid in self._ancestors(other, locs) for other in named):
+                named.discard(lid)  # "Lab starboard rack 2" names LAB1S2; the word "Lab" does not add LAB1
+        rest = text
+        for start, end in sorted({sp for v in spans.values() for sp in v}, key=lambda sp: sp[1] - sp[0],
+                                 reverse=True):
+            rest = rest[:start] + " " * (end - start) + rest[end:]
+        rest = " ".join(rest.split())
+        location = None
+        if len(named) == 1:
+            location = next(iter(named))
+        elif named:
+            # one shared alias (the same text span) naming several modules: the module with the most children
+            # (the longest match wins: "Kibo JEM Logistics Module" is JLP1 even though "Kibo" also names JPM1)
+            best = {lid: max(spans[lid], key=lambda sp: sp[1] - sp[0]) for lid in named}
+            if set.intersection(*(set(range(*sp)) for sp in best.values())):
+                longest = max(e - b for b, e in best.values())
+                top = [lid for lid in named if best[lid][1] - best[lid][0] == longest]
+                children = {lid: sum(1 for x in locs.values() if x.parent_id == lid) for lid in top}
+                location = min(top, key=lambda lid: (-children[lid], lid))
+        return PlaceScope(location=location, places=frozenset(named), rest=rest)
+
+    @staticmethod
+    def _ancestors(location_id: str, locs: dict[str, _Location]) -> set[str]:
+        out: set[str] = set()
+        cur = locs.get(location_id)
+        while cur is not None and cur.parent_id and cur.parent_id not in out:
+            out.add(cur.parent_id)
+            cur = locs.get(cur.parent_id)
+        return out
+
+    async def duplicate_flagged(self, entity_ids: list[str]) -> set[str]:
+        """AC-AGT-34: the given entities that are named (as the entity or a candidate) by an open possible_duplicate
+        review. Empty when the review list is unavailable."""
+        wanted = {str(e) for e in entity_ids if e}
+        if not wanted:
+            return set()
+        try:
+            rows = await self.inventory.list_review({"status": "open", "kind": "possible_duplicate", "limit": 200})
+        except InventoryError:
+            return set()
+        hit: set[str] = set()
+        for r in rows or []:
+            if not isinstance(r, dict):
+                continue
+            ids = {str(r.get("entity_id"))} | {str(c) for c in r.get("candidate_ids") or []}
+            hit |= wanted & ids
+        return hit
+
     async def mentions_place(self, text: str) -> bool:
         """True when ``text`` names a known location, or has a "Node N" / location-id pattern (the only check when
         GET /locations is unavailable). AC-AGT-20."""
@@ -1115,6 +1188,8 @@ class Toolbox:
                     "last_location_name",
                     "last_seen_at",
                     "confidence",
+                    "needs_review",
+                    "review_reason",
                     "last_moved_by",
                     "last_moved_at",
                 )

@@ -170,6 +170,10 @@ def build_context(
     return [{"role": "system", "content": system_prompt}, *preamble, *kept]
 
 
+#: AC-AGT-35: replies older than the latest are cut to reply_tokens // this (prompt size on long chats).
+OLDER_REPLY_DIVISOR = 3
+
+
 def prepare_history(
     history: list[dict[str, Any]], *, canned_replies: frozenset[str], placeholder: str, reply_tokens: int
 ) -> list[dict[str, Any]]:
@@ -177,7 +181,7 @@ def prepare_history(
 
     - consecutive messages of the same role are merged (strict user/assistant alternation for strict chat templates);
     - earlier assistant replies are context, never evidence: the harness's own canned replies become ``placeholder``
-      (a refusal must not become a pattern), other replies are cut to ``reply_tokens``;
+      (a refusal must not become a pattern), the latest reply is cut to ``reply_tokens``, older ones to a third;
     - when there is an earlier turn, the latest user message gets ``FOLLOW_UP_MARKER``.
     """
     merged: list[dict[str, Any]] = []
@@ -188,12 +192,15 @@ def prepare_history(
         else:
             merged.append({"role": m["role"], "content": content})
     out = []
-    for m in merged:
+    latest_reply = max((i for i, m in enumerate(merged) if m["role"] == "assistant"), default=None)
+    for i, m in enumerate(merged):
         if m["role"] == "assistant":
             text = m["content"].strip()
             if not text or text in canned_replies or any(text.startswith(c) for c in canned_replies):
                 text = placeholder
-            m = {"role": "assistant", "content": truncate_to_tokens(text, reply_tokens)}
+            # AC-AGT-35: only the latest reply keeps `reply_tokens` (follow-ups refer to it); older ones a third
+            budget = reply_tokens if i == latest_reply else max(1, reply_tokens // OLDER_REPLY_DIVISOR)
+            m = {"role": "assistant", "content": truncate_to_tokens(text, budget)}
         out.append(m)
     last_user = max((i for i, m in enumerate(out) if m["role"] == "user"), default=None)
     if last_user is not None and last_user > 0:

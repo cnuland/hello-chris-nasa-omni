@@ -329,3 +329,60 @@
   - Token pacing targets `AGENT_STREAM_TARGET_S` (default 1.5 s) for the whole reply: per-chunk delay =
     target / chunks, at least `AGENT_STREAM_TOKEN_DELAY_S` (default 0.03 s) and at most 0.12 s. 0 disables the target.
   - Tested with a real uvicorn server and a streaming HTTP client that measures token frame arrival times.
+
+## UI review round 4 chatbot fixes (docs/ui-review/round4/REPORT.md UI4-03, UI4-04, UI4-08, UI4-09)
+
+- AC-AGT-32 **The place comes from the current question** (UI4-03, P2: "Who was in the Cupola?", asked as Q6 of a long
+  chat, answered with 23 station-wide tracks because people_seen was called without `location`).
+  - `Toolbox.question_places(text)` finds the places that the current user message names, using the AC-AGT-20 resolver:
+    ids, display names, module aliases such as "Node 1", "Destiny", "Cupola" or "Kibo", and distinctive module-name
+    words.
+    - A named place that contains another named place is dropped: "Lab starboard rack 2" means LAB1S2, not LAB1 too.
+    - One alias that names several modules ("Kibo" names JPM1 and JLP1) resolves to the module with the most child
+      locations, then to the lowest id.
+    - Two or more distinct places give no single place.
+  - When the message names exactly one place, the harness sets it as `location` on `people_seen`, `list_unknowns`,
+    `recent_changes` and `count_items`, and as `filters.location` on `search_items`. This replaces whatever the model
+    sent, or adds it when the model sent none.
+  - Otherwise AC-AGT-20 is unchanged: a model-chosen location is kept only if the message names it or refers back to
+    it. `tool_calls` records the arguments that actually ran.
+  - Tested in a 6-turn conversation (the round-4 standard questions), for each of these tools.
+- AC-AGT-33 **The harness owns paging** (UI4-04, P2: "showing 2-11 of 76" because the model passed offset=1).
+  - `recent_changes` and `people_seen` always run with `offset` 0, unless the current message is a "show more"
+    follow-up (AC-AGT-29). In that case the offset is the end of the last "(showing a-b of n)" range in the previous
+    reply. The model's own offset is never used.
+  - A reply's citations are de-duplicated per entity: one chip per entity_id, keeping the first. Window and catalog
+    citations keep the old key.
+  - Every rendered line names a place. An event or sighting without one ends with ", place not recorded", e.g.
+    "2026-10-18 03:14 UTC: Camera moved, place not recorded" or "Laptop: last seen at 2026-10-18 03:14 UTC, place not
+    recorded".
+- AC-AGT-34 **Capped lists state the tool total** (UI4-08: 5 laptops listed with no total, although 9 exist).
+  - A rendered item list (AC-AGT-35) opens with the tool total, e.g. "9 items match "laptop" (5 of 9 shown, most
+    recently seen first):".
+  - A model-written list whose item data were capped (tool total larger than the number of list items in the reply)
+    gets "(k of n items shown.)", where n is the tool's `total`.
+  - The answer adds one line, "Some of these may be the same physical item; possible duplicates are pending operator
+    review.", when any listed item has `needs_review` or is named by an open `possible_duplicate` review (as the
+    entity or as a candidate).
+- AC-AGT-35 **Faster first meaningful text** (UI4-09: no text for 8-23 s). The grounding-first design does not change.
+  - **Facts status.** As soon as a tool returns data, `/chat/stream` sends `status {step, phase: "facts", tool, text}`,
+    built only from the structured tool totals, e.g. "Found 9 items matching "laptop"; checking the answer…" or "Found
+    2 person tracks in Cupola (CUP1); writing the answer…". No model text is shown before the check.
+  - **Fewer LLM steps.** A where-question is a message with "where", without who/when/how/why and without a handling
+    verb. If its tool step is only `where_is`/`search_items` and returns 2 or more items, the turn ends with the
+    deterministic list: there is no second LLM call, and `stop` is `"rendered"`. People and count answers already work
+    this way (AC-AGT-29).
+  - **Direct routing.** Some messages skip the model entirely: a message that is only a people-presence or people-count
+    question ("Who was in the Cupola?", "How many people were seen today?"), or only a what-changed question ("What
+    changed in the last hour?", "What happened in Node 1 today?"). This is judged with a closed word list after the
+    named places are removed. The harness runs `people_seen` or `recent_changes` itself (window from AC-AGT-22, place
+    from AC-AGT-32) and renders the answer with no LLM call (`stop: "routed"`). Any other message goes to the model.
+  - A message with a time phrase that AC-AGT-22 cannot parse ("since 10") is never routed. A routing tool failure
+    falls back to the model.
+  - **Smaller prompts on long chats.** Only the latest earlier reply keeps `AGENT_HISTORY_REPLY_TOKENS` (150). Older
+    replies are cut to a third of that: they are context only (AC-AGT-12), and follow-ups such as "show more" or "that
+    module" refer to the latest reply.
+  - Measured with a scripted-latency LLM on the round-4 standard conversation. The delay of each call comes from the
+    request's token estimate and the answer length. Results are in the tdd-log.
+  - This supersedes the AC-AGT-17 note that "the citation dedup key is unchanged": a reply now has one citation per
+    entity (AC-AGT-33).

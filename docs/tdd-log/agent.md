@@ -695,3 +695,134 @@ draft). The fake inventory gained `offset` paging and a `max_page` server cap.
 - **UI3-02 (not in this change):** `search_observations` in services/agent/nasa_agent/tools.py should filter private
   windows once inventory-api exposes a `private` flag on `/search` hits; tell me the field name and I will add the
   filter and test.
+
+## UI review round 4 fixes (2026-10-18; docs/ui-review/round4 UI4-03, UI4-04, UI4-08, UI4-09)
+
+### Spec
+AC-AGT-32..35 in docs/spec/30-agent.md: the place comes from the current question; the harness owns paging, one
+citation per entity, and "place not recorded"; capped lists state the tool total and a duplicate caveat; faster first
+meaningful text (facts status, no second LLM step for where-lists, direct routing of people and what-changed questions,
+smaller history on long chats).
+
+### Root causes
+- **UI4-03 (Cupola, Q6).** AC-AGT-20 only removed a location the message did not name. It never added one. Late in a
+  long chat, Gemma called `people_seen({})`, and nothing in code made up for it. A fresh chat worked only because the
+  model happened to pass `location`. (`_people_args` already extracted the place, but only for counting questions.)
+- **UI4-04 (rows 2-11).** The `offset` came from the model (offset=1), and the pager carried on from the header it was
+  given. The drill was cited twice because the dedup key is (entity, window, catalog, `at`) and its two events have
+  different times. "Camera moved" had no place because `change_line` left the place out when an event had none.
+- **UI4-08 (5 laptops, no total).** `where_is` returns at most 5 items but does have the API `total` (9). Only the model
+  wrote this answer, and nothing added the total or mentioned the duplicates.
+- **UI4-09 (8-23 s before any text).** Every question cost one LLM "planning" step (5-8 s of prefill on about 3.4-4k
+  prompt tokens, about 49% of it the tool specs) before anything happened. Where-lists cost a second step that wrote
+  about 150 tokens at T4 decode speed. No status carried facts, so the screen read "Reading the question" until the
+  finished answer was replayed. History grows by up to 150 tokens per earlier reply.
+
+### Red
+- tests/test_ac_agt_32_35_round4.py (71 tests) and tests/test_ac_agt_35_latency_scenario.py, over a new live-shaped
+  fixture tests/live_round4.py. The fixture holds the 5 earlier turns of the standard conversation, 2 Cupola tracks,
+  9 laptops with a possible_duplicate review, events with no place, two drill events in one hour, and unknowns in
+  Node 1. Collection failed (missing `question_places`, `is_changes_question`, ...). The latency scenario ran against
+  the old code and failed its bounds; its numbers are the "before" column below.
+
+### Green
+- `Toolbox.question_places(text)` returns `PlaceScope(location, places, rest)`, using the AC-AGT-20 aliases.
+  - A place that contains another named place is dropped.
+  - A shared alias goes to the longest match, then the module with the most children ("Kibo" goes to JPM1), then the
+    lowest id.
+  - It is looked up lazily: only when a scoped tool runs or routing might apply. A turn where the model just answers
+    makes no inventory call.
+- `_adjust_call`:
+  - Sets the single place as `location` on people_seen, list_unknowns, recent_changes and count_items, and as
+    `filters.location` on search_items.
+  - Always sets `offset` itself: 0, or the end of the previous reply's last "(showing a-b of n)" range for "show
+    more".
+- `render.py`:
+  - `NO_PLACE` (", place not recorded") in `change_line` and `item_line`.
+  - `items_reply`, giving '9 items match "laptop" (5 of 9 shown, most recently seen first):' plus up to 5 lines and
+    `DUPLICATE_CAVEAT`.
+  - `facts_text`, built from totals, resolved place labels and a vetted search text only.
+  - `is_people_presence_question` and `is_changes_question` (closed word lists after the places are removed),
+    `is_where_question`, `may_route`, `has_window_words`, `previous_range_end`.
+- Harness:
+  - Emits `status {phase: "facts"}` as soon as a tool returns data.
+  - A where-question whose step is only where_is/search_items with 2+ items is rendered (`stop: "rendered"`).
+  - `_route` answers people and what-changed questions with no LLM call (`stop: "routed"`).
+  - `_capped_note` adds "(k of n items shown.)" plus the caveat to a model-written list from capped data.
+  - `_dedup` keeps one citation per entity.
+  - `Toolbox.duplicate_flagged` (one `GET /review?status=open&kind=possible_duplicate`) is used when no listed item
+    has `needs_review`.
+- `prepare_history`: the latest earlier reply keeps 150 tokens; older replies get 50.
+- Polish found on the live check: a scoped people answer no longer repeats "...: Cupola (CUP1) 2.".
+
+### Latency (scripted-latency harness, standard conversation, same script for both versions)
+Model: prefill 800 tok/s, decode 18 tok/s, 0.3 s per call, 0.1 s per inventory-api request. This is calibrated on the
+deployed T4, where the first step showed "Reading the question" for 5-8 s. First text = first facts status, or the
+finished answer when there is none.
+
+| Question | LLM calls before → after | First text before → after (s) | Done before → after (s) |
+|---|---|---|---|
+| Where is the laptop right now? | 2 → 1 | 15.4 → 6.4 | 15.4 → 6.4 |
+| Where is the multimeter? | 2 → 2 | 12.4 → 6.6 | 12.4 → 12.5 |
+| Who used the drill? | 2 → 2 | 12.8 → 6.5 | 12.8 → 12.7 |
+| What changed in the last hour? | 1 → 0 | 7.1 → 0.5 | 7.1 → 0.5 |
+| show more changes | 0 → 0 | 0.3 → 0.3 | 0.3 → 0.3 |
+| Unknown objects in Node 1? | 2 → 2 | 14.2 → 6.9 | 14.2 → 13.9 |
+| Who was in the Cupola? | 1 → 0 | 6.7 → 0.1 (and now correct) | 6.7 → 0.1 |
+| How many people today? | 1 → 0 | 6.9 → 0.1 | 6.9 → 0.1 |
+| **Total** | **11 → 7** | worst **15.4 → 6.9** | sum **75.8 → 46.5** |
+
+Prompt sizes per step: before 3375-4077 tokens, after 3375-3956. The Q6 first step went from 3854 to 3733 because of
+the older-reply cut. Tool specs (1964 tokens) and the system prompt (571) are unchanged. Cutting them would change
+model behaviour, and AC-AGT-15 already bounds them. A single-item where_is, who_moved and list_unknowns still take two
+model calls, because the model's sentence is the answer there. Their first text now arrives after one step.
+
+### Test changes (superseded behaviour, not weakened checks)
+- Bare "What changed…?" and people questions are now routed: `llm.calls` 1 → 0 (test_13 what_changed, test_27_31
+  people/render tests, test_20 Zarya and applied filter, which now record the resolved `NOD1`).
+- Tests that exercised the model's wording or the cut on "Where is the laptop right now?" now ask "Which laptops have
+  been seen recently?" / "Which laptops do we have?". That keeps the AC-AGT-21/24/28 checks on model text (test_21 ×3,
+  test_23_25 normalisation, test_27_31 ×3). The UI2 five-question test asserts the new rendered list for Q1.
+- Questions that had to reach the model but are now routable were reworded: the test_12 data message, the test_12_18
+  payload budget, and the test_15 504 timeout.
+- AC-AGT-20: a model location for a different place is now replaced by the named place, not stripped (test_19_25
+  review 5, test_20 Zarya).
+- Citation assertions now expect one citation per entity (test_12_18 payload, test_27_31 paging). The stream contract
+  includes the `facts` phase.
+
+### Adversarial review (self, round 4)
+| # | Sev | Finding | Outcome |
+|---|---|---|---|
+| 1 | med | "What changed since 10?" was routed with the default last hour: AC-AGT-22 does not parse a bare hour, so the answer would cover the wrong window. | **Fixed.** A message with time words but no parsed window is never routed. Test added. |
+| 2 | med | A where-question step with both where_is and search_items rendered two lists. | **Fixed.** One item list per answer. Test added. |
+| 3 | low | The capped note was added to prose answers ("Yes, a laptop is in the Cupola. (9 matching items…)"). | **Fixed.** Only list answers get "(k of n items shown.)". Test added. |
+| 4 | low | Looking up places on every turn added a `GET /locations` before the first LLM call, including turns the model answers directly and turns cancelled at once. | **Fixed.** The lookup is lazy: only when routing might apply or a scoped tool runs. |
+| 5 | low | "Kibo" names two modules (JPM1, JLP1). | **Decided.** Longest match, then the module with most child locations (JPM1 live), then the lowest id. |
+| 6 | low | Scoped people answers repeated the scope as a per-module count. | **Fixed** (live check). |
+
+**Not changed (documented):**
+- The place rule is lexical. "Unknown objects anywhere except Node 1" is scoped to NOD1, and a place word inside an
+  item name ("Cupola camera") becomes a search_items location filter.
+- Routing uses closed word lists, so it prefers falling back to the model: "Who's around?" or "Any news?" still go to
+  the model.
+- Rendered where-lists show at most 5 items, with no "show more" for items.
+- `list_unknowns` answers are still written by the model. They get a facts status but not a rendered list.
+
+### Live check (read-only API, 2026-10-18 ~05:13 UTC, new code run locally against the deployed API)
+- `question_places`: Cupola → CUP1, Kibo → JPM1, "Node 1 today" → NOD1, "the lab" → LAB1.
+- "Where is the laptop right now?" → '9 items match "laptop" (5 of 9 shown, most recently seen first):' with 5 lines
+  and the duplicate caveat (1c9371ba needs review). Facts status 'Found 9 items matching "laptop"; writing the
+  answer…'.
+- "What changed in the last hour?" → "(showing 1-10 of 90)" starting at row 1. "show more changes" → 11-20, including
+  "Tablet used by person (…), place not recorded", 7 citations for 7 distinct entities.
+- "Who was in the Cupola?" (Q4 of that chat) → "2 person tracks were seen in Cupola (CUP1) …" with exactly the 2
+  Cupola tracks. "How many people have been seen today?" → 27 tracks (= API).
+
+### Final
+**632 passed** (was 560), ruff clean.
+
+### For other teams
+- **Deploy:** redeploy the agent. There are no config changes.
+- **Dashboard:** new SSE `status` events with `phase: "facts"` carry `text` such as 'Found 9 items matching "laptop";
+  writing the answer…'. `lib/sse.ts` already shows `text` (160-character cap), so no change is needed. Showing them
+  more prominently than the spinner text is optional. UI4-09's timer reset (ChatPage) is yours.

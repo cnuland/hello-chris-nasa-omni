@@ -11,6 +11,9 @@ from nasa_agent.context import SYSTEM_PROMPT
 from nasa_agent.harness import INVALID_TOOL_REPLY, NO_RECORD_REPLY, parse_time_window
 from nasa_agent.llm import LLMError, OpenAICompatLLM
 from tests.conftest import user
+
+#: AC-AGT-35 renders a multi-item where_is result for a where-question; this question keeps the model's wording.
+MODEL_WRITTEN_Q = "Which laptops have been seen recently?"
 from tests.fakes import LLM_URL, FakeLLM, assistant_text, assistant_tools, tool_call
 from tests.live_round2 import DRILL_USED, LIVE_LAPTOP_CUT, NOW, load_live
 
@@ -38,7 +41,7 @@ async def test_ac_agt_21_llm_client_passes_finish_reason():
 async def test_ac_agt_21_cut_list_is_trimmed_and_announced(make_harness, fake_inventory, toolbox):
     load_live(fake_inventory, toolbox)
     llm = FakeLLM([assistant_tools(tool_call("where_is", {"name": "laptop"})), _length(LIVE_LAPTOP_CUT)])
-    r = await make_harness(llm).run(user("Where is the laptop right now?"))
+    r = await make_harness(llm).run(user(MODEL_WRITTEN_Q))
     reply = r["reply"]
     assert "**Conf" not in reply and not reply.rstrip().endswith("**")
     assert reply.endswith("(showing the first 3 of 5; ask for more)")
@@ -50,7 +53,7 @@ async def test_ac_agt_21_cut_prose_ends_at_a_sentence(make_harness, fake_invento
     load_live(fake_inventory, toolbox)
     text = "The laptop was last seen in USOS at 22:51 UTC. Another laptop was seen in NOD1 at 23:00 UTC. A third lap"
     llm = FakeLLM([assistant_tools(tool_call("where_is", {"name": "laptop"})), _length(text)])
-    r = await make_harness(llm).run(user("Where is the laptop right now?"))
+    r = await make_harness(llm).run(user(MODEL_WRITTEN_Q))
     assert r["reply"].endswith("at 23:00 UTC. (answer shortened; ask for more)")
 
 
@@ -58,7 +61,7 @@ async def test_ac_agt_21_complete_answer_is_untouched(make_harness, fake_invento
     load_live(fake_inventory, toolbox)
     text = "The laptop was last seen in USOS at 22:51 UTC."
     llm = FakeLLM([assistant_tools(tool_call("where_is", {"name": "laptop"})), assistant_text(text)])
-    r = await make_harness(llm).run(user("Where is the laptop right now?"))
+    r = await make_harness(llm).run(user(MODEL_WRITTEN_Q))
     assert r["reply"] == text
 
 

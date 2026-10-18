@@ -152,6 +152,6 @@ async def test_ac_agt_12_roles_strictly_alternate_for_strict_chat_templates(make
 async def test_ac_agt_12_data_message_carries_current_utc_time(make_harness, toolbox):
     toolbox.now = lambda: datetime(2026, 10, 18, 0, 30, tzinfo=UTC)
     llm = FakeLLM([assistant_text("hello")])
-    await make_harness(llm).run(user("what changed in the last hour?"))
+    await make_harness(llm).run(user("what changed with the drill in the last hour?"))  # not routed (AC-AGT-35)
     data = next(m["content"] for m in llm.requests[0]["messages"] if is_context_message(m) and m["role"] == "user")
     assert "Current time (UTC): 2026-10-18T00:30:00Z" in data

@@ -45,10 +45,11 @@ async def test_ac_agt_20_module_alias_and_id_count_as_naming_a_place(make_harnes
         llm = FakeLLM([assistant_tools(tool_call("recent_changes", {"location": "NOD1"})), assistant_text("ok")])
         r = await make_harness(llm).run(_conversation(text))
         assert r["tool_calls"][0]["arguments"].get("location") == "NOD1", text
-    # review 5: naming a different place does not keep the model's location
+    # review 5: naming a different place does not keep the model's location (AC-AGT-32: the named place is used;
+    # AC-AGT-35: this bare what-changed question is routed without the model)
     llm = FakeLLM([assistant_tools(tool_call("recent_changes", {"location": "NOD1"})), assistant_text("ok")])
     r = await make_harness(llm).run(_conversation("What changed in Zarya today?"))
-    assert "location" not in r["tool_calls"][0]["arguments"]
+    assert r["tool_calls"][0]["arguments"]["location"] == "ZARYA" and llm.calls == 0
 
 
 async def test_ac_agt_20_reference_to_earlier_place_keeps_location(make_harness, fake_inventory, toolbox):
@@ -87,9 +88,10 @@ async def test_ac_agt_20_applied_filter_is_stated_in_reply(make_harness, fake_in
     llm = FakeLLM([assistant_tools(tool_call("recent_changes", {"location": "Node 1"})),
                    assistant_text("One drill was moved at 01:00 UTC.")])
     r = await make_harness(llm).run(_conversation("What changed in Node 1 in the last hour?"))
-    # AC-AGT-29: recent_changes answers are rendered; the header names the applied filter
+    # AC-AGT-29: recent_changes answers are rendered; the header names the applied filter. AC-AGT-32/35: routed with
+    # the resolved place of the message (no model call)
     assert r["reply"].startswith("Changes in Node 1 Unity (NOD1) between ")
-    assert r["tool_calls"][0]["arguments"] == {"location": "Node 1", "since": "2026-10-18T00:20:00Z"}
+    assert r["tool_calls"][0]["arguments"] == {"since": "2026-10-18T00:20:00Z", "location": "NOD1"}
 
 
 async def test_ac_agt_20_reply_already_naming_scope_is_unchanged(make_harness, fake_inventory, toolbox):

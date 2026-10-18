@@ -62,17 +62,29 @@ from nasa_agent.grounding import (
 )
 from nasa_agent.llm import LLMError, LLMTimeout
 from nasa_agent.render import (
+    DUPLICATE_CAVEAT,
     change_line,
     changes_reply,
     count_claims,
     count_reply,
+    facts_text,
+    has_window_words,
+    is_changes_question,
     is_count_question,
     is_people_count_question,
+    is_people_presence_question,
     is_show_more,
     is_sighting_count_question,
+    is_where_question,
     item_line,
+    items_reply,
+    list_item_count,
+    may_route,
     parse_page_marker,
     people_reply,
+    previous_range_end,
+    shown_note,
+    top_items,
 )
 from nasa_agent.tools import (
     GROUNDING_TOOLS,
@@ -113,6 +125,12 @@ NO_ANSWER_PLACEHOLDER = "(no answer was given)"
 SCOPED_TOOLS = frozenset({"recent_changes", "list_unknowns", "people_seen", "count_items"})
 #: AC-AGT-29: a tool step made only of these ends the turn with their deterministic rendering (no further LLM call).
 RENDER_TOOLS = frozenset({"recent_changes", "people_seen", "count_items"})
+#: AC-AGT-35: item tools whose multi-item result answers a where-question deterministically.
+ITEM_LIST_TOOLS = frozenset({"where_is", "search_items"})
+#: AC-AGT-34: item tools whose `total` is stated when a model-written list is capped.
+CAPPED_LIST_TOOLS = frozenset({"where_is", "search_items", "list_unknowns"})
+#: AC-AGT-33: tools whose `offset` the harness owns.
+PAGED_TOOLS = frozenset({"recent_changes", "people_seen"})
 #: AC-AGT-20/22: tools whose since/until the harness sets from a relative window in the current message.
 WINDOWED_TOOLS = frozenset({"recent_changes", "people_seen"})
 RECENT_MAX_DAYS = timedelta(days=7)
@@ -348,20 +366,43 @@ class AgentHarness:
         except Exception:  # noqa: BLE001 - be conservative: strip unless the text shows a place
             return pattern
 
-    async def _adjust_call(self, call: dict[str, Any], window, place_is_named, notes: list[str]) -> dict[str, Any]:
-        """AC-AGT-20/22: the arguments actually run. A `location` of recent_changes/list_unknowns is dropped unless the
-        current message names a place; a relative window parsed from the message replaces the model's since/until."""
+    async def _adjust_call(self, call: dict[str, Any], window, place_is_named, notes: list[str],
+                           question_place: str | None = None, page_offset: int = 0) -> dict[str, Any]:
+        """AC-AGT-20/22/32/33: the arguments actually run. The single place the current message names replaces the
+        model's location (search_items: ``filters.location``); otherwise a model location is dropped unless the
+        message names it. A relative window parsed from the message replaces the model's since/until. The harness
+        sets the paging offset."""
         name = call["function"]["name"]
-        if name not in SCOPED_TOOLS and name != "who_moved":
+        if name not in SCOPED_TOOLS and name not in ("who_moved", "search_items"):
             return call
         args = _parse_arguments(call["function"]["arguments"])
         if not isinstance(args, dict):
             return call  # validation reports it
         changed = False
+        if name == "search_items":
+            filters = args.get("filters")
+            if question_place is None or not (filters is None or isinstance(filters, dict)):
+                return call
+            if (filters or {}).get("location") == question_place:
+                return call
+            args["filters"] = {**(filters or {}), "location": question_place}  # AC-AGT-32
+            return {**call, "function": {**call["function"], "arguments": json.dumps(args)}}
         loc = args.get("location")
-        if name in SCOPED_TOOLS and loc is not None and not (isinstance(loc, str) and await place_is_named(loc)):
+        if name in SCOPED_TOOLS and question_place is not None:
+            if loc != question_place:
+                args["location"] = question_place  # AC-AGT-32: the current question's place, whatever the model sent
+                changed = True
+        elif name in SCOPED_TOOLS and loc is not None and not (isinstance(loc, str) and await place_is_named(loc)):
             args.pop("location")
             changed = True
+        if name in PAGED_TOOLS:
+            # AC-AGT-33: the harness owns paging; the model's offset is never used
+            if page_offset and args.get("offset") != page_offset:
+                args["offset"] = page_offset
+                changed = True
+            elif not page_offset and "offset" in args:
+                args.pop("offset")
+                changed = True
         if window is not None and name in WINDOWED_TOOLS:
             since, until = window
             floor = self._now() - RECENT_MAX_DAYS + timedelta(minutes=2)
@@ -450,15 +491,34 @@ class AgentHarness:
         )
         follow_up = len(history) > 1
         page_calls: list[dict[str, Any]] = []  # a failed paging attempt stays visible in tool_calls
+        page_offset = 0  # AC-AGT-33: the harness owns paging
         if follow_up and is_show_more(question):
             # AC-AGT-29: "show more" after a paged, rendered list is answered in code (no LLM call)
             previous = next((m["content"] for m in reversed(raw_history[:-1])
                              if m["role"] == "assistant" and isinstance(m.get("content"), str)), "")
+            page_offset = previous_range_end(previous)
             marker = parse_page_marker(previous, question)
             if marker is not None:
                 paged = await self._next_page(marker, request_id, session_id, emit, started, page_calls)
                 if paged is not None:
                     return paged
+
+        scope_box: list[Any] = []
+
+        async def question_place() -> str | None:
+            """AC-AGT-32: the single place of the current message (looked up once, only when a tool needs it)."""
+            if not scope_box:
+                scope_box.append(await self._question_scope(question, request_id))
+            return scope_box[0].location if scope_box[0] is not None else None
+
+        window = parse_time_window(question, self._now())  # AC-AGT-22
+        notes: list[str] = []  # harness notes appended to the reply (AC-AGT-22 clamp)
+        if may_route(question):
+            await question_place()
+            routed = await self._route(question, scope_box[0], window, notes, request_id, session_id, emit, started,
+                                       page_calls)
+            if routed is not None:
+                return routed  # AC-AGT-35: answered without the model
 
         block = await self._render_block(question, request_id)
         clock = f"Current time (UTC): {self._now().astimezone(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')}"
@@ -490,12 +550,20 @@ class AgentHarness:
         records: list[tuple[str, Any]] = []  # (tool, data) of grounding results with data, for the AC-AGT-19 summary
         empty_unknowns: list[str | None] = []  # resolved locations of empty list_unknowns results (AC-AGT-23)
         applied_locations: list[str] = []  # location filters actually applied (AC-AGT-20)
-        window = parse_time_window(question, self._now())  # AC-AGT-22
-        notes: list[str] = []  # harness notes appended to the reply (AC-AGT-22 clamp)
         allowed_counts: set[int] = set()  # tool totals of this turn (AC-AGT-28)
         turn_results: list[tuple[str, Any]] = []  # (tool, ToolResult) with data, in order
-        rendered: list[tuple[str, Any]] = []  # AC-AGT-29: results answered by the deterministic renderer
-        non_render_data = False  # a grounding result of a tool outside RENDER_TOOLS
+        rendered: list[tuple[str, Any, Any]] = []  # AC-AGT-29: results answered by the deterministic renderer
+        non_render_data = False  # a grounding result that the deterministic renderer cannot answer
+        where_q = is_where_question(question)
+        item_args: list[tuple[str, Any, Any]] = []  # (tool, result, args) of item tools with data (AC-AGT-34)
+
+        def renderable(name: str, result: Any) -> bool:
+            if not result.ok:
+                return False
+            if name in RENDER_TOOLS:
+                return True
+            # AC-AGT-35: a multi-item where_is/search_items result answers a where-question as a list
+            return where_q and name in ITEM_LIST_TOOLS and isinstance(result.data, list) and len(result.data) >= 2
 
         async def place_is_named(location: str) -> bool:
             return await self._place_matches(question, location)
@@ -563,7 +631,10 @@ class AgentHarness:
                 if text_calls:
                     stop_reason = "text_tool_call"
                 break
-            requested = [await self._adjust_call(c, window, place_is_named, notes) for c in requested]
+            place = (await question_place() if any(c["function"]["name"] in SCOPED_TOOLS | {"search_items"}
+                                                   for c in requested) else None)
+            requested = [await self._adjust_call(c, window, place_is_named, notes, place, page_offset)
+                         for c in requested]
             pre = [self.toolbox.validate(c["function"]["name"], c["function"]["arguments"]) for c in requested]
             if any(p is not None for p in pre) and invalid_step_seen:
                 for call, err in zip(requested, pre, strict=True):
@@ -573,7 +644,7 @@ class AgentHarness:
                 break
             invalid_step_seen = invalid_step_seen or any(p is not None for p in pre)
             turn.append({"role": "assistant", "content": content, "tool_calls": requested})
-            step_results: list[tuple[str, Any]] = []
+            step_results: list[tuple[str, Any, Any]] = []
             for call, err in zip(requested, pre, strict=True):
                 name = call["function"]["name"]
                 raw_args = call["function"]["arguments"]
@@ -591,12 +662,16 @@ class AgentHarness:
                     request_id, tool_calls, name, raw_args, result, round((time.perf_counter() - t0) * 1000, 2)
                 )
                 content_json = fit_payload(result.to_message_payload(), payload_budget)
-                step_results.append((name, result))
+                parsed_args = _parse_arguments(raw_args)
+                step_results.append((name, result, parsed_args))
                 if result.has_data:
                     allowed_counts |= tool_totals(name, result, content_json)
                     turn_results.append((name, result))
-                    if name in GROUNDING_TOOLS and name not in RENDER_TOOLS:
+                    if name in GROUNDING_TOOLS and not renderable(name, result):
                         non_render_data = True
+                    if name in CAPPED_LIST_TOOLS and isinstance(result.data, list):
+                        item_args.append((name, result, parsed_args))
+                    await self._emit_facts(emit, step, name, result, parsed_args, renderable(name, result))
                 if result.has_data and name == "lookup_catalog":
                     # Only the entries that survived the token budget reach the model: only they ground and are cited.
                     sent = _sent_catalog_entries(content_json)
@@ -655,7 +730,7 @@ class AgentHarness:
             if grounded and grounded_at is None:
                 grounded_at = step
             if (step_results and not proposals and not non_render_data
-                    and all(n in RENDER_TOOLS and r.ok for n, r in step_results)):
+                    and all(renderable(n, r) for n, r, _ in step_results)):
                 rendered = step_results  # AC-AGT-29: deterministic answer, no further LLM call
                 stop_reason = "rendered"
                 break
@@ -748,7 +823,7 @@ class AgentHarness:
         forced: str | None = None
         if not proposals and is_people_count_question(question):
             if people_r is None:
-                people_r = await self._forced_call("people_seen", await self._people_args(question, window, notes),
+                people_r = await self._forced_call("people_seen", self._people_args(await question_place(), window, notes),
                                                    request_id, tool_calls, emit)
                 forced = "people_count" if people_r is not None else None
             if people_r is not None:
@@ -777,6 +852,7 @@ class AgentHarness:
             reply = await self._state_scope(reply, applied_locations)  # AC-AGT-20
         if model_reply:
             reply = normalize_markdown(reply)  # AC-AGT-24
+            reply = await self._capped_note(reply, item_args)  # AC-AGT-34
         if notes and grounded and reply not in CANNED_REPLIES:
             reply = f"{reply} {' '.join(notes)}"
         cited = grounded and (not rejected or fallback is not None)
@@ -793,14 +869,28 @@ class AgentHarness:
                        prompt_tokens, nudged, started, fallback=fallback, finish_reason=finish_reason)
         return result
 
-    async def _render(self, results: list[tuple[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
-        """AC-AGT-29: the deterministic operator-English answer for RENDER_TOOLS results, with its citations."""
+    async def _render(self, results: list[tuple[Any, ...]]) -> tuple[str, list[dict[str, Any]]]:
+        """AC-AGT-29/35: the deterministic operator-English answer for (tool, result[, args]) results, with its
+        citations: RENDER_TOOLS, and where_is/search_items item lists (AC-AGT-34: with the tool total)."""
         names = await self._location_names()
         texts: list[str] = []
         cites: list[dict[str, Any]] = []
-        for name, result in results:
+        listed_items = False
+        for name, result, *rest in results:
             data = result.data if isinstance(result.data, dict) else {}
-            if name == "recent_changes":
+            args = rest[0] if rest and isinstance(rest[0], dict) else {}
+            if name in ITEM_LIST_TOOLS:
+                if listed_items:
+                    continue  # where_is and search_items for the same question: one list
+                listed_items = True
+                items = [i for i in result.data or [] if isinstance(i, dict)]
+                shown = top_items(items)
+                total = (result.scope or {}).get("total")
+                query = args.get("name") if name == "where_is" else args.get("q")
+                text = items_reply(items, total, query, names, await self._has_duplicates(shown))
+                keep = {i.get("entity_id") for i in shown}
+                cited = [c for c in result.citations if c.get("entity_id") in keep]
+            elif name == "recent_changes":
                 if data.get("changes"):
                     text, cited = changes_reply(data, result.citations, names)
                 elif data.get("offset"):
@@ -815,6 +905,86 @@ class AgentHarness:
             cites += cited
         return "\n\n".join(texts), _dedup(cites)
 
+    async def _has_duplicates(self, items: list[dict[str, Any]]) -> bool:
+        """AC-AGT-34: some listed item needs review, or an open possible_duplicate review names one of them."""
+        if any(i.get("needs_review") is True for i in items):
+            return True
+        flagged = getattr(self.toolbox, "duplicate_flagged", None)
+        if flagged is None:
+            return False
+        try:
+            return bool(await flagged([str(i.get("entity_id")) for i in items if i.get("entity_id")]))
+        except Exception:  # noqa: BLE001 - a caveat must never break a turn
+            return False
+
+    async def _capped_note(self, reply: str, item_args: list[tuple[str, Any, Any]]) -> str:
+        """AC-AGT-34: a model-written answer from a capped item list states the tool total ("(3 of 9 items shown.)")
+        and, when a listed item may be a duplicate, the duplicate caveat."""
+        for _name, result, _args in reversed(item_args):
+            total = (result.scope or {}).get("total")
+            items = [i for i in result.data or [] if isinstance(i, dict)]
+            if not isinstance(total, int) or total <= len(items):
+                continue
+            listed = list_item_count(reply)
+            if not listed or listed >= total:
+                return reply  # not a list answer, or every item is listed
+            reply = f"{reply.rstrip()}\n\n{shown_note(listed, total)}"
+            if await self._has_duplicates(items):
+                reply = f"{reply}\n\n{DUPLICATE_CAVEAT}"
+            return reply
+        return reply
+
+    async def _emit_facts(self, emit, step: int, name: str, result: Any, args: Any, rendering: bool) -> None:
+        """AC-AGT-35: a status line with the facts a tool just returned (structured totals only)."""
+        try:
+            text = facts_text(name, result.data, args, (result.scope or {}).get("total"),
+                              await self._location_names(), rendering)
+        except Exception:  # noqa: BLE001 - progress reporting must never break a turn
+            text = None
+        if text:
+            await emit({"step": step, "phase": "facts", "tool": name, "text": text})
+
+    async def _question_scope(self, question: str, request_id: str):
+        """AC-AGT-32: Toolbox.question_places for the current message; None when unavailable."""
+        places = getattr(self.toolbox, "question_places", None)
+        if places is None:
+            return None
+        try:
+            return await places(question)
+        except Exception as exc:  # noqa: BLE001 - no forced place then (AC-AGT-20 still applies)
+            log.warning("question places unavailable", extra={"request_id": request_id, "error": type(exc).__name__})
+            return None
+
+    async def _route(self, question: str, scope, window, notes: list[str], request_id: str, session_id: str | None,
+                     emit, started: float, tool_calls: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """AC-AGT-35: a message that is only a people or a what-changed question is answered by running the tool and
+        the deterministic renderer, with no LLM call. None to use the model."""
+        if PLACE_REFERENCE_RE.search(question):
+            return None
+        rest = scope.rest if scope is not None else question
+        if scope is not None and len(scope.places) > 1 and scope.location is None:
+            return None  # several places: the model decides
+        place = scope.location if scope is not None else None
+        if window is None and has_window_words(rest):
+            return None  # a time phrase the AC-AGT-22 parser cannot read ("since 10"): the model decides
+        if is_people_presence_question(rest):
+            name, args = "people_seen", self._people_args(place, window, notes)
+        elif is_changes_question(rest):
+            name, args = "recent_changes", self._window_args(window, notes)
+            if place:
+                args["location"] = place
+        else:
+            return None
+        result = await self._forced_call(name, args, request_id, tool_calls, emit)
+        if result is None:
+            return None
+        reply, citations = await self._render([(name, result, args)])
+        if notes:
+            reply = f"{reply} {' '.join(notes)}"
+        self._log_turn(request_id, session_id, 0, tool_calls, 0, True, 0, 0, "routed", [], False, started)
+        return {"request_id": request_id, "session_id": session_id, "reply": reply, "citations": citations,
+                "tool_calls": tool_calls, "proposals": []}
+
     async def _forced_call(self, name: str, args: dict[str, Any], request_id: str, tool_calls: list[dict[str, Any]],
                            emit) -> Any:
         """A counting tool run by the harness itself (AC-AGT-28); the result, or None when it failed."""
@@ -824,11 +994,21 @@ class AgentHarness:
         t0 = time.perf_counter()
         result = await self.toolbox.call(name, raw)
         self._record(request_id, tool_calls, name, raw, result, round((time.perf_counter() - t0) * 1000, 2))
-        return result if result.ok and result.has_data else None
+        if result.ok and result.has_data:
+            await self._emit_facts(emit, 0, name, result, args, True)
+            return result
+        return None
 
-    async def _people_args(self, question: str, window, notes: list[str]) -> dict[str, Any]:
-        """people_seen arguments for a counting question: the AC-AGT-22 window (default: today) and the location
-        when the question names exactly one place."""
+    def _people_args(self, place: str | None, window, notes: list[str]) -> dict[str, Any]:
+        """people_seen arguments for a counting/presence question: the AC-AGT-22 window (default: today) and the
+        single place the question names (AC-AGT-32)."""
+        args = self._window_args(window, notes)
+        if place:
+            args["location"] = place
+        return args
+
+    def _window_args(self, window, notes: list[str]) -> dict[str, Any]:
+        """since/until from the AC-AGT-22 window (clamped to 7 days, with the note); {} without a window."""
         args: dict[str, Any] = {}
         if window is not None:
             since, until = window
@@ -840,12 +1020,6 @@ class AgentHarness:
             args["since"] = _iso_z(since)
             if until is not None:
                 args["until"] = _iso_z(until)
-        try:
-            mentioned = await self.toolbox.mentioned_locations(question)
-        except Exception:  # noqa: BLE001 - no location filter then
-            mentioned = None
-        if mentioned and len(mentioned) == 1:
-            args["location"] = next(iter(mentioned))
         return args
 
     async def _next_page(self, marker: dict[str, Any], request_id: str, session_id: str | None, emit,
@@ -1033,10 +1207,11 @@ def _sent_catalog_entries(content_json: str) -> list[dict[str, Any]]:
 
 
 def _dedup(citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    seen: set[tuple[Any, Any, Any, Any]] = set()
+    """AC-AGT-33: one citation per entity (the first); window and catalog citations by their full key."""
+    seen: set[Any] = set()
     out = []
     for c in citations:
-        key = citation_key(c)
+        key = ("entity", c["entity_id"]) if c.get("entity_id") else citation_key(c)
         if key not in seen:
             seen.add(key)
             out.append(c)

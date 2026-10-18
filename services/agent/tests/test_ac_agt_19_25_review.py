@@ -56,7 +56,8 @@ async def test_review_location_must_be_the_place_named(make_harness, fake_invent
     load_live(fake_inventory, toolbox)
     llm = FakeLLM([assistant_tools(tool_call("list_unknowns", {"location": "NOD2"})), assistant_text("None.")])
     r = await make_harness(llm).run(user("Any unknown objects in the lab?"))
-    assert "location" not in r["tool_calls"][0]["arguments"]
+    # AC-AGT-32 (supersedes the strip): the place the message names replaces the model's other place
+    assert r["tool_calls"][0]["arguments"]["location"] == "LAB1"
     llm = FakeLLM([assistant_tools(tool_call("list_unknowns", {"location": "LAB1"})), assistant_text("ok")])
     r = await make_harness(llm).run(user("Any unknown objects in the lab?"))
     assert r["tool_calls"][0]["arguments"]["location"] == "LAB1"

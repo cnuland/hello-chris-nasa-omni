@@ -40,7 +40,8 @@ def test_ac_agt_16_status_events_then_tokens_then_done(plain_settings, inventory
     status = [d for n, d in events[:first_token] if n == "status"]
     assert "status" not in names[first_token:], "all status events precede the answer"
     phases = [s["phase"] for s in status]
-    assert phases == ["llm", "tool", "llm", "checking"]
+    assert phases == ["llm", "tool", "facts", "llm", "checking"]  # AC-AGT-35: facts as soon as the tool has data
+    assert status[2]["text"] == 'Found 1 item matching "drill"; checking the answer…'
     tool = status[1]
     assert tool["step"] == 1 and tool["tool"] == "where_is" and tool["args_summary"] == 'name="drill"'
     assert all(isinstance(s.get("text"), str) and s["text"] for s in status), "the dashboard renders `text`"

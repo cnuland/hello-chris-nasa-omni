@@ -10,6 +10,9 @@ from nasa_agent.config import Settings
 from nasa_agent.harness import NO_RECORD_REPLY, normalize_markdown
 from nasa_agent.main import stream_chat_events
 from tests.conftest import user
+
+#: AC-AGT-35 renders a multi-item where_is result for a where-question; this question keeps the model's wording.
+MODEL_WRITTEN_Q = "Which laptops have been seen recently?"
 from tests.fakes import FakeLLM, assistant_text, assistant_tools, tool_call
 from tests.live_round2 import load_live
 
@@ -83,7 +86,7 @@ async def test_ac_agt_24_harness_applies_normalisation(make_harness, fake_invent
     load_live(fake_inventory, toolbox)
     text = ("1. laptop: USOS, 2026-10-17T22:51:03Z\n\n1. laptop: NOD1, 2026-10-17T23:00:27Z")
     llm = FakeLLM([assistant_tools(tool_call("where_is", {"name": "laptop"})), assistant_text(text)])
-    r = await make_harness(llm).run(user("Where is the laptop right now?"))
+    r = await make_harness(llm).run(user(MODEL_WRITTEN_Q))
     assert r["reply"] == "1. laptop: USOS, 2026-10-17 22:51 UTC\n2. laptop: NOD1, 2026-10-17 23:00 UTC"
 
 

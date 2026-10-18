@@ -206,7 +206,7 @@ def test_ac_agt_15_chat_timeout_is_504_with_retry_hint(plain_settings, inventory
     app = create_app(replace(plain_settings, turn_deadline_s=0.2), llm=SleepyLLM([assistant_text("x")], [5]),
                      inventory=inventory, memory=fake_memory, inventory_block=FakeInventoryBlock(), dreamer=None)
     with TestClient(app) as c:
-        r = c.post("/chat", json={"messages": user("what changed?")})
+        r = c.post("/chat", json={"messages": user("what changed with the drill?")})  # not routed (AC-AGT-35)
     assert r.status_code == 504
     body = r.json()
     assert body["kind"] == "timeout" and body["retryable"] is True and body["request_id"]
