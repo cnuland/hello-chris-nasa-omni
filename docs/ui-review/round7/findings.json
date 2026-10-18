@@ -1,0 +1,150 @@
+[
+ {
+  "id": "UI7-01",
+  "priority": "P2",
+  "title": "Handheld frames with no place default to 'US Orbital Segment', so Russian-segment frames (Zarya corridor, Russian hatches) are filed under the wrong segment, and the Kibo orange sphere is re-created as a USOS unknown",
+  "page": "/overview, /, /review, chat Q1/Q5",
+  "steps": "Open the frames for m-bags 4c334ffe / ae19067f / 800d73f7 (094522, 094117: EDV-M containers, Cyrillic labels), laptop 3601e561 sighting at 094317, 'astrobee robot' 82584a5c (095822, hatch marked 'PO'), and the cylinder unknown 2dc5f3b5. Read the Overview line 'Located to a module / Segment only'.",
+  "expected": "A frame with no location evidence has no location, or 'station (unknown module)'. It is never asserted as the US segment. Russian-segment views are ROS or a ROS module.",
+  "actual": "config.py:54 DEFAULT_CAMERA_LOCATIONS maps cam-handheld to 'USOS', so every handheld sighting without a place becomes 'US Orbital Segment'. That is now 47 of 76 live items (62%) at 10:00, up from 55% in round 6. At least 4 Russian-segment frames are filed USOS. In pass 3 the Kibo orange sphere (frame 100617, same view as 093617/095118 in JPM1) was filed USOS, so it became a second unknown (3f273f2c) instead of re-attaching to 657fd743. Chat lists Russian-segment bags as 'US Orbital Segment'. Partial improvement: in pass 3, 9 items were placed in ZARYA.",
+  "suggested_fix": "Drop the cam-handheld default (or make it 'unknown'), so that an unlocated sighting stays unlocated and is shown as 'place unknown'. Let the DINOv2 revisit match and caption carry assign the module, and only then the segment. Treat 'unknown' like a segment-only sighting in re-ID (strong match needed).",
+  "files": [
+   "services/perception/perception/config.py",
+   "services/perception/perception/locations.py",
+   "services/perception/perception/reconciler.py"
+  ],
+  "screenshots": [
+   "shots/box-sheet-2.png",
+   "shots/ros-frames.png",
+   "shots/orange-sphere-usos.png",
+   "shots/overview-final-1440.png"
+  ]
+ },
+ {
+  "id": "UI7-02",
+  "priority": "P2",
+  "title": "One visible person becomes 2 or 3 person tracks in the same frame, and frames with no person create tracks: 19 tracks against 7 expected",
+  "page": "/?kind=person, chat Q7",
+  "steps": "Open the person tracks with sightings in frames 094622, 094652, 094722, 093922 and 093952. Open tracks ee9540dd, 0cc14958 and 2097271d and look at their frames.",
+  "expected": "At most one track per visible person per frame, and no track from a frame without a person.",
+  "actual": "Frames 094622, 094652, 094722 and 093922 each show one crew member, but each gave 2 tracks (for example 9cebfebb 'grey shirt, dark pants' plus 5ce7683b 'blue tank top' for the same man). 093952 shows 2 people and gave 3 tracks. Frames 094852 (a hatch into a vehicle), 094022 (PMA1 bags) and 093552 (an empty module) have no person, yet created ee9540dd 'white suit, reaching forward', 0cc14958 and 2097271d. ee9540dd was re-sighted in pass 3. Cross-module over-merge is still present: 310cd626 covers JPM1, NOD1, CUP1 and USOS ('tan pants', 'long hair'), and 1f71ef55 joins a Nauka crew member and a lab crew member. Chat: '17 person tracks', then 19 at 10:10.",
+  "suggested_fix": "Cap the person sightings per window at the detector's person-box count (or require a detector person box for a new track). Never attach 2 sightings from the same frame to different tracks unless 2 people are detected. Apply the AC-PER-66 spread cap across the whole track, not only inside a 600 s window.",
+  "files": [
+   "services/perception/perception/people.py",
+   "services/perception/perception/reconciler.py"
+  ],
+  "screenshots": [
+   "shots/people-sheet.png",
+   "shots/people-split-frames.png",
+   "shots/people-phantom-frames.png",
+   "shots/chat-q7.png"
+  ]
+ },
+ {
+  "id": "UI7-03",
+  "priority": "P2",
+  "title": "The review queue more than doubles on every pass of the tour (22 to 47 open in 23 min); one frame raises 7 identical CTB duplicate reviews, and one object gets both an unknown card and a duplicate card",
+  "page": "/review",
+  "steps": "Watch /api/review?status=open from 09:52 to 10:15. Filter possible duplicates to 10:03 UTC. Find 'white covered object' 02c04581.",
+  "expected": "A re-run of the same footage adds few new reviews. Duplicate suspicions raised by one window are grouped into one card. An entity with an open unknown review does not also get a duplicate review.",
+  "actual": "Open reviews: 22 at 09:52, 25 at 09:58, 29 at 10:02, 34 at 10:06, 46 at 10:10 and 48 at 10:17 (29 duplicates, 18 unknowns, 1 low_confidence; 2 of mine were resolved). Frame 101017 (10:03:17) raised 7 'possible duplicate of the same class last seen in another module' cards for cargo transfer bags (0bf374ed, 2026ae51, 5c526636, 93a02f47, d5115da4, dd339527, eaf864cd). 'white covered object' has both an unknown review (1f3483ee) and a duplicate review (fe2bf77b) for the same frame. In pass 3, a single Zarya frame (101117) created 8 new 'white bag' m-bag entities. Person reviews add one per new track ('19 live person entities would exceed 7').",
+  "suggested_fix": "Group duplicate reviews by window and class into one card ('7 cargo transfer bags may already be known'). Skip a duplicate review when the entity already has an open unknown review. Fold the count-cap person reviews into a single 'too many person tracks' banner.",
+  "files": [
+   "services/perception/perception/reconciler.py",
+   "services/inventory-api/inventory_api/routers/ingest.py",
+   "dashboard/src/pages/ReviewPage.tsx"
+  ],
+  "screenshots": [
+   "shots/review-final-1440.png",
+   "shots/review-dup-1440.png"
+  ]
+ },
+ {
+  "id": "UI7-04",
+  "priority": "P2",
+  "title": "The label/description conflict check misses non-listed nouns: a ventilation duct is provisional inventory as 'astrobee robot', and chat still answers 'Who used the drill?' from the flagged vacuum cleaner",
+  "page": "/items/82584a5c…, chat Q3",
+  "steps": "Open astrobee robot 82584a5c (description 'a large grey and white robotic arm with padded sections', frame 095822). Ask 'Who used the drill?' while low_confidence review 8ea6158d is open.",
+  "expected": "A description that names a different object class (robotic arm, vacuum cleaner) opens a low_confidence review. Chat answers built on an entity with an open low_confidence review say so ('the label is disputed').",
+  "actual": "82584a5c is provisional with needs_review false; the frame shows the insulated duct in a Russian hatch. Because it has a catalog label, it also bypasses structure memory. Chat Q3: 'The drill was used by a crew member in a grey t-shirt and dark shorts', citing af639860, which is the vacuum cleaner flagged by 8ea6158d, with no caveat. The second 'drill' (0a30c7a2, 'grey power tool') is boxed on a wall panel.",
+  "suggested_fix": "Check the head noun of the description against the catalog class's synonyms (a mismatch, not only a known-conflict list, opens a review). In who_moved/where_is, add 'label disputed, open review' when the entity has an open low_confidence review.",
+  "files": [
+   "services/perception/perception/labels.py",
+   "services/agent/nasa_agent/tools.py"
+  ],
+  "screenshots": [
+   "shots/astrobee-duct.png",
+   "shots/chat-q3.png",
+   "shots/ui6-06-lowconf-1440.png"
+  ]
+ },
+ {
+  "id": "UI7-05",
+  "priority": "P3",
+  "title": "Structure memory is invisible and wide: the confirm text does not say the decision is remembered, there is no list or undo in the UI, and rows are scoped to the whole US segment with no embedding",
+  "page": "/review (Not inventory confirm), GET /api/structure-memory",
+  "steps": "Click 'Not inventory (station structure)…' on an unknown and read the confirm text. Look for remembered decisions in the UI. Read GET /api/structure-memory.",
+  "expected": "The confirm says 'Similar objects in <place> will no longer be raised'. A 'Remembered decisions' list with Forget/undo exists. The memory is scoped to a module when one is known.",
+  "actual": "The confirm says only that it closes the review and hides the item. No UI page lists memory. Both rows (memory_id 1 spacesuit, memory_id 2 white padded tube) have location_id 'USOS', module_id null and embedding null, so the text rule applies across the whole US segment and, because of UI7-01, to Russian-segment frames as well.",
+  "suggested_fix": "Update the confirm copy, add a small 'Remembered as not inventory' list (Overview or Review) with Forget, and store the module (or the revisit-location module) and the crop embedding when available.",
+  "files": [
+   "dashboard/src/pages/ReviewPage.tsx",
+   "services/inventory-api/inventory_api/structure_memory.py"
+  ],
+  "screenshots": [
+   "shots/mem-02-confirm.png",
+   "shots/mem-03-after-dismiss.png",
+   "shots/mem-api.png",
+   "shots/mem-06-duct-pass2-vs-pass3.png"
+  ]
+ },
+ {
+  "id": "UI7-06",
+  "priority": "P3",
+  "title": "Segment-level private windows attach to unrelated public items anywhere in the US segment and refresh their 'last seen'",
+  "page": "/items/8c601e05…, /items/1f5cbec8…, /items/249bafb6…",
+  "steps": "Open m-bag 8c601e05, laptop 1f5cbec8 or tablet 249bafb6 and read History.",
+  "expected": "A private sighting attaches by class plus place only when the place is a module (or the private area itself).",
+  "actual": "Each has a private sighting 'USOS 09:52:47' with no image, attached by class plus 'USOS', which matches any same-class item in the segment. The NOD2 private window behaves well (it re-used its 5 m-bags).",
+  "suggested_fix": "Require module-level (or finer) places for the AC-PER private class-plus-place attach. Otherwise record the private sighting without attaching it.",
+  "files": [
+   "services/inventory-api/inventory_api/routers/ingest.py",
+   "services/perception/perception/reconciler.py"
+  ],
+  "screenshots": [
+   "shots/mbag-detail-1440.png"
+  ]
+ },
+ {
+  "id": "UI7-07",
+  "priority": "P3",
+  "title": "Wrong boxes on unknown cards outline crew members' bodies (green bag box on a crew member's leg, blue tool box on a hand)",
+  "page": "/review?kind=unknown_object",
+  "steps": "Open unknowns 53c881a3 (green bag, frame 095451) and 304473c3 (blue tool, 100222).",
+  "expected": "The dashed box lands on the bag or tool, or no box is shown when the box overlaps a person and does not match.",
+  "actual": "53c881a3's box is on a crew member's thigh and shorts during the meal scene; the green bag is to the left. 304473c3's box is on a crew member's hand. Privacy is not breached (full frame, no crop), but the card points at a person.",
+  "suggested_fix": "When an omni box overlaps a person box by more than about 50% and the label is not worn or held, drop the box (show the frame with 'box unavailable') instead of drawing it.",
+  "files": [
+   "services/perception/perception/omni.py"
+  ],
+  "screenshots": [
+   "shots/unknowns-pass2-sheet.png"
+  ]
+ },
+ {
+  "id": "UI7-08",
+  "priority": "P3",
+  "title": "Chat catalog answer repeats the count: 'catalog expected count: 1. 1.'",
+  "page": "chat Q2",
+  "steps": "Ask 'Where is the laptop right now?' then 'And where is the multimeter usually kept?'.",
+  "expected": "'…usually kept in LAB1 (Destiny (US Lab)); the catalog expects 1.'",
+  "actual": "'I can only give the usual stowage location from the catalog, not a current sighting: Fluke multimeter [multimeter] is usually kept in LAB1 (Destiny (US Lab)), catalog expected count: 1. 1.' The answer also shows the raw '[multimeter]' key.",
+  "suggested_fix": "Remove the duplicated count and the bracketed key from the lookup_catalog grounded template.",
+  "files": [
+   "services/agent/nasa_agent/tools.py"
+  ],
+  "screenshots": [
+   "shots/chat-q2.png"
+  ]
+ }
+]
