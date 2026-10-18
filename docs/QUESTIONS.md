@@ -200,3 +200,11 @@ I need from you.
        crew quarters. The window was not flagged no_capture. The fix adds sleep cues to the fail-closed privacy rule.
        The footage is NASA's public tour video, so nothing private has leaked, but the policy must catch this.
        **Need:** confirm NASA wants sleep cues treated as crew quarters (it will also catch stowed sleeping bags).
+34. **Verified live: sleep-cue privacy and person tracks (Gemma run, 2026-10-18).**
+    - **Privacy:** window 4 (Harmony, `people[1].appearance` "…sleeping…") and window 5 (30 s privacy hold) were
+      treated as no_capture. Checked in the database and object store:
+      - sightings were recorded as location-only facts, with 0 frames, 0 reviews and no raw reply;
+      - RustFS holds 0 of today's 313 objects inside 03:04:43–03:05:43. Media stops at 03:04:18 (window 3) and
+        resumes at 03:05:43 (window 6).
+    - **People:** 12 non-biometric person tracks, e.g. "black shirt, grey pants" in COL1 and "blue shorts, grey
+      long-sleeve shirt" in CUP1. Some over-splitting is expected as the crew changes clothes and modules.
