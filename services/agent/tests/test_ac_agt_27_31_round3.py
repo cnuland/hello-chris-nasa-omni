@@ -60,7 +60,8 @@ def by_module(data) -> dict[str, int]:
 def test_ac_agt_27_registered_as_read_and_grounding_tool(toolbox):
     assert "people_seen" in READ_TOOLS and "people_seen" in GROUNDING_TOOLS
     spec = {t["function"]["name"]: t["function"] for t in toolbox.specs()}["people_seen"]
-    assert set(spec["parameters"]["properties"]) == {"since", "until", "location", "offset"}
+    # AC-AGT-36 added `mode` (visited / now)
+    assert set(spec["parameters"]["properties"]) == {"since", "until", "location", "mode", "offset"}
     assert toolbox.is_read_only("people_seen")
 
 
@@ -123,8 +124,13 @@ async def test_ac_agt_27_citations_are_person_tracks_only(people):
 
 
 async def test_ac_agt_27_location_filter_and_aliases(people, fake_inventory):
+    # AC-AGT-36: the default ("who was in") checks sightings, so GET /items is not filtered on last_location;
+    # mode "now" ("who is in ... now") keeps the last_location filter.
     r = await people.call("people_seen", {"location": "Node 1"})
-    assert r.data["location"] == "NOD1" and r.data["total_tracks"] == 2
+    assert r.data["location"] == "NOD1" and r.data["total_tracks"] == 2 and r.data["mode"] == "visited"
+    assert "location" not in fake_inventory.params(fake_inventory.calls("/items")[-1])
+    now = await people.call("people_seen", {"location": "Node 1", "mode": "now"})
+    assert now.data["total_tracks"] == 2 and now.data["mode"] == "now"
     assert fake_inventory.params(fake_inventory.calls("/items")[-1])["location"] == ["NOD1"]
     n = len(fake_inventory.calls("/items"))
     bad = await people.call("people_seen", {"location": "Atlantis"})

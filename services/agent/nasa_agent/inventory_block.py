@@ -65,6 +65,7 @@ class _Location:
     parent_id: str | None
     kind: str
     display_name: str
+    no_capture: bool = False  # a private zone (crew quarters, WHC): AC-AGT-38
 
 
 def _ts(value: datetime | None) -> str:

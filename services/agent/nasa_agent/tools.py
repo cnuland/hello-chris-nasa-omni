@@ -59,6 +59,8 @@ GROUNDING_TOOLS = frozenset(
         "count_items",
     }
 )
+#: Arguments the harness sets and the LLM tool specs leave out (AC-AGT-37 paging cursor).
+HARNESS_ONLY_ARGS = ("cursor",)
 #: PATCH /items fields that the contract allows to be null.
 NULLABLE_PROPOSAL_FIELDS = frozenset({"catalog_id"})
 LOCATIONS_TTL_S = 300.0
@@ -109,6 +111,13 @@ MAX_CITATION_TEXT = 80
 SCAN_PAGE = 200
 MAX_SCAN_ROWS = 2000
 MAX_PEOPLE_TRACKS = 30
+#: AC-AGT-36 "who was in X": GET /items/{id} sighting lookups per call (bounded, no N+1 explosion) and their
+#: concurrency; the API returns at most this many recent sightings per item (inventory-api DETAIL_LIMIT).
+MAX_PRESENCE_LOOKUPS = 40
+PRESENCE_CONCURRENCY = 8
+SIGHTING_DETAIL_CAP = 20
+#: AC-AGT-38: private locations checked per answer.
+MAX_PRIVATE_LOCATIONS = 8
 PEOPLE_MAX_WINDOW = timedelta(days=7)
 #: catalog ids treated as people when GET /catalog is unavailable (AC-AGT-30).
 DEFAULT_PERSON_CATALOG_IDS = frozenset({"crew-member"})
@@ -135,6 +144,16 @@ class PlaceScope:
     location: str | None  # the single place named (None: none, or several distinct places)
     places: frozenset[str]  # every place named (after dropping containing places)
     rest: str  # the message with the named places removed
+
+
+@dataclass(frozen=True)
+class PrivateScope:
+    """AC-AGT-38: the private (no_capture) locations a message names."""
+
+    locations: tuple[str, ...]
+    label: str  # "Node 2 crew quarters (NOD2D5, NOD2O5, NOD2P5, NOD2S5)"
+    crew_quarters: bool
+    rest: str  # the message without the private and module names
 
 
 # ---------------------------------------------------------------- argument models
@@ -208,12 +227,25 @@ class RecentChangesArgs(_Args):
     )
     types: list[ChangeType] | None = Field(None, min_length=1, max_length=10, description="Default: all change types")
     offset: int = Field(0, ge=0, le=10_000)
+    #: AC-AGT-37 (harness only, not in the LLM spec): continue after this row ("<ISO time>|<row key>"); ``offset`` is
+    #: then the number of rows already shown (the numbering base), not rows to skip.
+    cursor: str | None = Field(None, min_length=3, max_length=120,
+                               pattern=r"^[0-9T:.+\-Z]{10,40}\|[a-z]:[\w-]{0,64}$")
+
+    @model_validator(mode="after")
+    def _cursor_time(self) -> RecentChangesArgs:
+        if self.cursor is not None and _parse_ts(self.cursor.partition("|")[0]) is None:
+            raise ValueError("cursor: invalid time")
+        return self
 
 
 class PeopleSeenArgs(_Args):
     since: AwareDatetime | None = None
     until: AwareDatetime | None = None
     location: str | None = Field(None, min_length=1, max_length=64)
+    #: AC-AGT-36: with a location, "visited" = any sighting there in the window ("who was in X"); "now" = last seen
+    #: there ("who is in X now").
+    mode: Literal["visited", "now"] = "visited"
     offset: int = Field(0, ge=0, le=10_000)
 
 
@@ -504,6 +536,36 @@ def citation_key(c: dict[str, Any]) -> tuple[Any, Any, Any, Any]:
     return (c.get("entity_id"), c.get("window_id"), c.get("catalog_id"), c.get("at"))
 
 
+_MIN_TS = datetime.min.replace(tzinfo=UTC)
+#: AC-AGT-37: row-key prefixes of recent_changes rows (event, new item, resolved review).
+_ROW_PREFIX = {"new_item": "n", "review_resolved": "r"}
+
+
+def change_row_key(c: dict[str, Any]) -> str:
+    """AC-AGT-37: a recent_changes row's stable identity: "e:<event_id>", "n:<entity_id>" or "r:<review_id>"."""
+    prefix = _ROW_PREFIX.get(str(c.get("change")), "e")
+    rid = c.get("review_id") if prefix == "r" else c.get("entity_id") if prefix == "n" else c.get("event_id")
+    return f"{prefix}:{rid or ''}"
+
+
+def change_sort_key(c: dict[str, Any]) -> tuple[datetime, str]:
+    return _parse_ts(c.get("at")) or _MIN_TS, change_row_key(c)
+
+
+def change_cursor(c: dict[str, Any]) -> str | None:
+    """AC-AGT-37: the cursor that continues after row ``c`` ("<ISO time>|<row key>"); None without a time."""
+    at = _parse_ts(c.get("at"))
+    key = change_row_key(c)
+    if at is None or not re.fullmatch(r"[a-z]:[\w-]{0,64}", key):
+        return None
+    return f"{at.astimezone(UTC).isoformat().replace('+00:00', 'Z')}|{key}"
+
+
+def cursor_sort_key(cursor: str) -> tuple[datetime, str]:
+    at, _, key = cursor.partition("|")
+    return _parse_ts(at) or _MIN_TS, key
+
+
 def _cap(value: Any, limit: int) -> str | None:
     if not isinstance(value, str):
         return None
@@ -671,7 +733,7 @@ class Toolbox:
             _ToolDef(
                 "people_seen",
                 "How many people (person tracks) were seen since a time (default: today UTC), per module, with "
-                "appearance and last sighting. For every people count / who was seen question.",
+                "appearance. location: tracks sighted there (mode now: last seen there). For every people question.",
                 PeopleSeenArgs,
                 self._people_seen,
             ),
@@ -709,6 +771,8 @@ class Toolbox:
         schema = _strip_titles(self._tools[name].model.model_json_schema())
         schema = _compact_optional(schema, frozenset() if self._tools[name].read_only else NULLABLE_PROPOSAL_FIELDS)
         schema = _llm_compact(schema)
+        for hidden in HARNESS_ONLY_ARGS:
+            schema.get("properties", {}).pop(hidden, None)  # AC-AGT-37: set by the harness, never by the model
         schema.pop("description", None)  # the tool description says it
         schema.setdefault("properties", {})
         schema["type"] = "object"
@@ -824,6 +888,7 @@ class Toolbox:
                     parent_id=str(r["parent_id"]) if r.get("parent_id") else None,
                     kind=str(r.get("kind") or ""),
                     display_name=_cap(r.get("display_name"), MAX_CATALOG_TEXT) or "",
+                    no_capture=r.get("no_capture") is True,
                 )
                 for r in rows
                 if isinstance(r, dict) and r.get("location_id")
@@ -923,6 +988,96 @@ class Toolbox:
                 children = {lid: sum(1 for x in locs.values() if x.parent_id == lid) for lid in top}
                 location = min(top, key=lambda lid: (-children[lid], lid))
         return PlaceScope(location=location, places=frozenset(named), rest=rest)
+
+    @staticmethod
+    def _private_terms(loc: _Location, locs: dict[str, _Location]) -> set[str]:
+        """AC-AGT-38: ways a message names a private (no_capture) location: id, display name, the name without its
+        parenthetical, the parenthetical ("toilet"), the core name without the module words ("crew quarters", "WHC"),
+        and curated synonyms (the perception private-zone terms, docs/spec/20-perception.md)."""
+        name = loc.display_name.strip()
+        terms = {loc.location_id, name} if name else {loc.location_id}
+        base = re.sub(r"\s*\(.*?\)\s*", " ", name).strip()
+        terms |= {base, *(x.strip() for x in re.findall(r"\((.*?)\)", name))}
+        core = base
+        parent = locs.get(loc.parent_id) if loc.parent_id else None
+        for alias in sorted(module_aliases(parent) if parent and parent.display_name else set(), key=len,
+                            reverse=True):
+            if core.lower().startswith(alias.lower() + " "):
+                core = core[len(alias):].strip()
+                break
+        terms.add(core)
+        low = name.lower()
+        if "crew quarters" in low:
+            terms |= {"crew quarters", "crew quarter", "sleep station", "sleep stations", "CQ", "CQs"}
+        if "whc" in low or "toilet" in low:
+            terms |= {"WHC", "toilet", "bathroom", "lavatory", "restroom", "waste and hygiene compartment",
+                      "hygiene compartment"}
+        return {t for t in terms if t and len(t) >= 2}
+
+    async def private_places(self, text: str) -> PrivateScope | None:
+        """AC-AGT-38: the private (no_capture) locations the message names, and the message with those names and any
+        module names removed. A module named as well ("crew quarters in Node 2") narrows the set to that module.
+        None when the message names no private location or GET /locations is unavailable."""
+        try:
+            locs = await self.locations()
+        except InventoryError:
+            return None
+        spans: list[tuple[int, int]] = []
+        hit: set[str] = set()
+        for loc in locs.values():
+            if not loc.no_capture:
+                continue
+            for term in self._private_terms(loc, locs):
+                flags = 0 if term.isupper() and len(term) <= 3 else re.IGNORECASE
+                for m in re.finditer(rf"(?<![\w-]){re.escape(term)}(?![\w-])", text, flags=flags):
+                    hit.add(loc.location_id)
+                    spans.append(m.span())
+        if not hit:
+            return None
+        rest = text
+        for start, end in sorted(set(spans), key=lambda sp: sp[1] - sp[0], reverse=True):
+            rest = rest[:start] + " " * (end - start) + rest[end:]
+        modules = await self.question_places(rest)
+        if modules is not None and modules.places:
+            narrowed = {lid for lid in hit if self._ancestors(lid, locs) & modules.places}
+            hit = narrowed or hit
+            rest = modules.rest
+        ids = tuple(sorted(hit))
+        names = [locs[i].display_name for i in ids]
+        crew = all("crew quarters" in n.lower() for n in names)
+        if len(ids) == 1:
+            label = f"{names[0]} ({ids[0]})" if names[0] else ids[0]
+            if names[0].endswith(")") and "(" in names[0]:
+                label = f"{names[0][:-1]}, {ids[0]})"
+        else:
+            stems = {re.sub(r"\s*\(.*?\)\s*", " ", n).strip() for n in names}
+            stem = stems.pop() if len(stems) == 1 else "private areas"
+            label = f"{stem} ({', '.join(ids)})"
+        return PrivateScope(locations=ids, label=label, crew_quarters=crew, rest=" ".join(rest.split()))
+
+    async def items_in(self, locations: tuple[str, ...]) -> list[dict[str, Any]]:
+        """AC-AGT-38: live object items whose last location is one of ``locations`` (or below), newest first; one
+        GET /items per location (at most ``MAX_PRIVATE_LOCATIONS``)."""
+        pages = await asyncio.gather(*(self.inventory.list_items({"location": lid, "kind": "object", "limit": 50})
+                                       for lid in locations[:MAX_PRIVATE_LOCATIONS]))
+        rows: dict[str, dict[str, Any]] = {}
+        for page in pages:
+            for i in _live(page.get("items") or []):
+                if isinstance(i, dict) and i.get("entity_id") and i.get("kind", "object") == "object":
+                    rows.setdefault(str(i["entity_id"]), i)
+        return sorted(rows.values(), key=lambda i: _parse_ts(i.get("last_seen_at")) or _MIN_TS, reverse=True)
+
+    async def name_lookup(self, name: str) -> dict[str, Any]:
+        """AC-AGT-39: what the inventory and the catalog say about an item name that a lookup found nothing for:
+        {total, items (at most 3 live items, newest first), catalog (at most 2 matching entries)}."""
+        page = await self.inventory.list_items({"q": name, "limit": 3})
+        items = _live(page.get("items") or [])[:3]
+        total = _total(page)
+        try:
+            catalog = [e for e in await self.catalog() if _catalog_matches(e, name)][:2]
+        except InventoryError:
+            catalog = []
+        return {"total": total if total is not None else len(items), "items": items, "catalog": catalog}
 
     @staticmethod
     def _ancestors(location_id: str, locs: dict[str, _Location]) -> set[str]:
@@ -1330,10 +1485,19 @@ class Toolbox:
                 "action": clean_text(resolution.get("action"), 40), "actor": clean_text(r.get("resolved_by")),
                 "at": r.get("resolved_at"),
             })
-        changes.sort(key=lambda c: _parse_ts(c.get("at")) or datetime.min.replace(tzinfo=UTC), reverse=True)
-        total = len(changes)
-        changes = changes[a.offset:a.offset + MAX_RECENT_CHANGES]
-        omitted = max(0, total - a.offset - len(changes))
+        # AC-AGT-37: a total order (time, then row key), newest first, so a cursor names one position
+        changes.sort(key=change_sort_key, reverse=True)
+        if a.cursor is not None:
+            # key-set paging: only rows strictly older than the cursor row; `offset` is the number already shown
+            after = cursor_sort_key(a.cursor)
+            changes = [c for c in changes if change_sort_key(c) < after]
+            total = a.offset + len(changes)
+            changes = changes[:MAX_RECENT_CHANGES]
+            omitted = max(0, total - a.offset - len(changes))
+        else:
+            total = len(changes)
+            changes = changes[a.offset:a.offset + MAX_RECENT_CHANGES]
+            omitted = max(0, total - a.offset - len(changes))
         # person subjects (AC-AGT-30): kind and appearance from one GET /items?kind=person for the window
         def personish(c: dict[str, Any]) -> bool:
             return c["change"] != "new_item" and (
@@ -1385,9 +1549,10 @@ class Toolbox:
         midnight = now.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
         since, until = self._window(a.since, a.until, midnight, PEOPLE_MAX_WINDOW)
         location = await self._resolve_or_invalid(a.location) if a.location else None
+        visited = location is not None and a.mode == "visited"
         params: dict[str, Any] = {"kind": "person", "seen_after": _iso_z(since), "sort": "-last_seen_at"}
-        if location:
-            params["location"] = location
+        if location and not visited:
+            params["location"] = location  # AC-AGT-36 "now": GET /items filters on last_location
         rows, api_total, complete = await self._scan_items(list(params.items()))
         tracks: dict[str, dict[str, Any]] = {}
         for r in rows:
@@ -1401,31 +1566,101 @@ class Toolbox:
                 continue
             tracks[str(eid)] = r
         names = await self.location_names()
-        ordered = sorted(tracks.values(), key=lambda r: _parse_ts(r.get("last_seen_at")) or datetime.min.replace(
-            tzinfo=UTC), reverse=True)
+        ordered = sorted(tracks.values(), key=lambda r: _parse_ts(r.get("last_seen_at")) or _MIN_TS, reverse=True)
+        unchecked = 0
+        if visited:
+            ordered, unchecked = await self._visited(ordered, location, since, until, a.until is not None)
+            complete = complete and not unchecked
         page = ordered[a.offset:a.offset + MAX_PEOPLE_TRACKS]
         out_tracks = []
         citations = []
         for r in page:
-            lid = r.get("last_location")
             appearance = clean_text(r.get("description"))
-            out_tracks.append({
+            last_lid = r.get("last_location")
+            last_name = clean_text(r.get("last_location_name")) or names.get(last_lid)
+            if visited:
+                lid, at = r["_here"], r["_here_at"]
+                lid_name = names.get(lid)
+            else:
+                lid, at, lid_name = last_lid, r.get("last_seen_at"), last_name
+            track = {
                 "entity_id": r.get("entity_id"), "appearance": _appearance(appearance),
-                "location": lid, "location_name": clean_text(r.get("last_location_name")) or names.get(lid),
+                "location": lid, "location_name": lid_name,
                 "first_seen_at": r.get("first_seen_at"), "last_seen_at": r.get("last_seen_at"),
-            })
-            citations.append(_cite_entity(r.get("entity_id"), r.get("last_seen_at"),
+            }
+            if visited:
+                track.update({"seen_here_at": at, "last_location": last_lid, "last_location_name": last_name})
+            out_tracks.append(track)
+            citations.append(_cite_entity(r.get("entity_id"), at,
                                           label=f"Person ({_appearance(appearance)})" if appearance else "Person",
-                                          location=lid, location_name=out_tracks[-1]["location_name"]))
-        total = len(ordered) if complete else max(api_total, len(ordered))
+                                          location=lid, location_name=lid_name))
+        # visited: the matched tracks (tracks not checked are reported as `unchecked`, never counted)
+        total = len(ordered) if visited or complete else max(api_total, len(ordered))
+        by_rows = [{**r, "last_location": r["_here"]} for r in ordered] if visited else ordered
         data = {
             "since": _iso_z(since), "until": _iso_z(until), "location": location,
             "location_name": names.get(location) if location else None, "total_tracks": total,
-            "by_module": await self._by_module(ordered, names), "tracks": out_tracks, "offset": a.offset,
+            "by_module": await self._by_module(by_rows, names), "tracks": out_tracks, "offset": a.offset,
             "tracks_omitted": max(0, len(ordered) - a.offset - len(page)), "complete": complete,
             "caveat": PEOPLE_CAVEAT,
         }
+        if location:
+            data["mode"] = "visited" if visited else "now"
+        if unchecked:
+            data["unchecked"] = unchecked
         return data, citations
+
+    async def _visited(self, rows: list[dict[str, Any]], location: str, since: datetime, until: datetime,
+                       bounded: bool) -> tuple[list[dict[str, Any]], int]:
+        """AC-AGT-36: the person tracks with a sighting in ``location`` (or below) in [since, until), newest such
+        sighting first, each with ``_here`` / ``_here_at``; and the number of tracks that could not be checked.
+
+        A track last seen inside the place within the window matches without a lookup. Others are checked with
+        GET /items/{id} (its most recent sightings), for at most ``MAX_PRESENCE_LOOKUPS`` tracks (newest first,
+        ``PRESENCE_CONCURRENCY`` at a time). A track whose detail could not be read, or whose returned sightings
+        stop short of ``since`` without a match (the detail list is capped), counts as unchecked."""
+        inside = await self._subtree(location)
+        matched: list[dict[str, Any]] = []
+        pending: list[dict[str, Any]] = []
+
+        def in_window(at: datetime | None) -> bool:
+            return at is not None and since <= at and (not bounded or at < until)
+
+        for r in rows:
+            last = _parse_ts(r.get("last_seen_at"))
+            if r.get("last_location") in inside and in_window(last):
+                matched.append({**r, "_here": r.get("last_location"), "_here_at": r.get("last_seen_at")})
+            else:
+                pending.append(r)
+        unchecked = max(0, len(pending) - MAX_PRESENCE_LOOKUPS)
+        gate = asyncio.Semaphore(PRESENCE_CONCURRENCY)
+
+        async def check(r: dict[str, Any]) -> tuple[dict[str, Any] | None, bool]:
+            async with gate:
+                try:
+                    detail = await self.inventory.get_item(str(r.get("entity_id")))
+                except InventoryError:
+                    return None, False
+            if not isinstance(detail, dict):
+                return None, False
+            sightings = [s for s in detail.get("sightings") or [] if isinstance(s, dict)]
+            hits = [(at, s.get("location_id")) for s in sightings
+                    if s.get("location_id") in inside and in_window(at := _parse_ts(s.get("seen_at")))]
+            if hits:
+                at, lid = max(hits, key=lambda h: h[0])
+                return {**r, "_here": lid, "_here_at": _iso_z(at)}, True
+            oldest = min((t for t in (_parse_ts(s.get("seen_at")) for s in sightings) if t), default=None)
+            capped = len(sightings) >= SIGHTING_DETAIL_CAP and oldest is not None and oldest > since
+            return None, not capped
+
+        results = await asyncio.gather(*(check(r) for r in pending[:MAX_PRESENCE_LOOKUPS]))
+        for hit, checked in results:
+            if hit is not None:
+                matched.append(hit)
+            elif not checked:
+                unchecked += 1
+        matched.sort(key=lambda r: (_parse_ts(r["_here_at"]) or _MIN_TS, str(r.get("entity_id"))), reverse=True)
+        return matched, unchecked
 
     async def _count_items(self, a: CountItemsArgs):
         location = await self._resolve_or_invalid(a.location) if a.location else None

@@ -386,3 +386,77 @@
     request's token estimate and the answer length. Results are in the tdd-log.
   - This supersedes the AC-AGT-17 note that "the citation dedup key is unchanged": a reply now has one citation per
     entity (AC-AGT-33).
+
+## UI review round 5 chatbot fixes (docs/ui-review/round5/REPORT.md UI5-04, UI5-07, UI5-08)
+
+- AC-AGT-36 **"Who was in X" means any sighting in X** (UI5-04, P2: "Who was in the Cupola?" named a track whose
+  only frame was in Node 1 and missed 395bae46 and 28513d12, which had CUP1 sightings but a later last location).
+  - `people_seen` gains `mode`: `visited` (default) or `now`. It only matters with a `location`.
+  - `visited` ("who was / has been in X"): a track counts when any of its sightings is in the location (or below)
+    within `[since, until)`. Candidates come from `GET /items?kind=person&seen_after=<since>` with no location
+    filter. A track whose last location is inside and whose last sighting is in the window matches without a
+    lookup. Every other candidate is checked with `GET /items/{id}` (its most recent sightings). At most 40
+    candidates are checked, newest first, 8 at a time. A failed lookup, or a capped sighting list (20 returned, all
+    newer than `since`, none inside), makes the track *unchecked*: it is never counted, `unchecked` reports how many
+    there were, and `complete` is false. Tracks are ordered by their newest sighting in the place. Each track
+    carries `seen_here_at`, `location` (the sighting's place), `last_location` and `last_seen_at`. Citations use the
+    sighting in the place, not the last sighting.
+  - `now` ("who is in X (now)"): the old filter on `items.last_location` (`GET /items?location=`).
+  - The harness sets the mode from the current message, whatever the model sent. "now", "currently" or "presently",
+    or a present-tense "is"/"are"/"who's" with no past or window words ("was", "been", "seen", "today", "last"...)
+    means `now`. Anything else means `visited`. Routed and forced people calls use the same rule.
+  - Rendering. `visited`: "4 person tracks were seen in Cupola (CUP1) between …", with lines "Person (…): seen in
+    Cupola (CUP1) at <t>; last seen in US Orbital Segment (USOS) at <t>". `now`: "2 person tracks were last seen in
+    X between … (their latest sighting is there)". An empty `now` answer reads "No person track's latest sighting
+    is in X (tracks seen between …). Ask "Who was in X?" for every track sighted there." Unchecked tracks are stated:
+    "(N other tracks seen in this window could not be checked for sightings there.)".
+  - Perception-side causes (the module carry labelling Node 1 frames CUP1, the wrong person attach) are separate.
+- AC-AGT-37 **"show more" finds the latest list and pages with a frozen cursor** (UI5-07, P3: after other questions
+  "show more changes" went through the model in 7.6 s, and page 2 repeated two rows because the window was re-read
+  at minute precision and new events had arrived).
+  - "show more changes" / "more people" picks the latest assistant reply that holds a list of that kind (a changes
+    header or a people lead), however many turns back. A bare "show more" / "more" / "next" continues only the
+    previous reply, as before.
+  - When the agent renders a page with a "show more" hint, it keeps `{since, until, cursor, location, mode}` under
+    (session_id, list kind, window, range end, place). There are at most 512 entries, oldest dropped first. `until`
+    is the page's exact end, and `cursor` is the last rendered change row: `"<ISO time>|<row key>"`, where the row key
+    is `e:<event_id>`, `n:<entity_id>` (new item) or `r:<review_id>` (resolved review).
+  - `recent_changes` orders rows by (time, row key), newest first. With `cursor` it returns only rows strictly older
+    than the cursor row, and `offset` is the number already shown (the numbering base). `total` is then offset plus
+    the rows left. `cursor` is set by the harness only: it is left out of the LLM tool specs and the MCP schema, and
+    it is validated (pattern, parseable time).
+  - The next page runs with the kept window and cursor, so rows that arrive later (newer than `until`, or backdated
+    inside the window by late ingest) neither repeat nor shift rows. People pages keep their exact window and mode.
+    If nothing is kept (for example after an agent restart, or for another session), the window, place and range
+    are read back from the reply text as before. The place pattern now also reads "Destiny (US Lab, LAB1)".
+- AC-AGT-38 **Honest empty answers, and citations only for rows the answer uses** (UI5-08, P3).
+  - **Private areas.** A message that names a private (`no_capture`) location and only asks what is there ("What
+    is in the crew quarters?") is answered in code, with no model call. Names come from the id, display name, the
+    name without its parenthetical or module words ("crew quarters", "WHC"), the parenthetical ("toilet"), and the
+    perception private-zone synonyms ("CQ", "sleep station", "bathroom"...). A module named as well narrows the set.
+    The agent checks `GET /items?location=<zone>&kind=object` for each zone, at most 8. Reply: "I checked inventory
+    items in Node 2 crew quarters (NOD2D5, NOD2O5, NOD2P5, NOD2S5): none are recorded. Crew quarters are private: the
+    system stores no images there and keeps no scene descriptions, speech or appearance descriptions from there." Any
+    recorded items are listed by label, place and time only (never a description) and cited. That note matches
+    AC-API-19/39: no frames, null scene summary, transcript and sighting/new-entity descriptions. It says nothing
+    about what is in the area.
+  - "Who was in the crew quarters?" (a people question about a private area) gets the private note plus "I don't
+    report who was in a private area.", with no tool call and no citations. Other questions that name a private
+    area ("What changed in the crew quarters?", "Is the drill in the crew quarters?") take the normal path.
+  - **Rendered-row citations.** For a model-written reply, the citations of each tool result are kept only for the
+    rows the reply states. A row counts as stated when the reply has its id or 8-character short id, its catalog_id,
+    its whole label, its label's head noun ("latch" for "yellow latch"), a person's first appearance phrase, or its
+    HH:MM time. If a result has no stated row, it is still cited for a summary ("Two unknowns…"), but not for a "no
+    record" reply. Deterministic replies already cite only their rendered rows.
+  - **Empty lookups.** When the turn has no grounding data, the reply names what was checked instead of a bare "I
+    don't have a record of that.", for example 'I checked items matching "sextant": none are recorded.', 'open
+    unknown objects in Node 1 Unity (NOD1)', 'video observations mentioning "…"', 'that item record'. An upstream
+    failure is still "I don't have a record of that.".
+- AC-AGT-39 **An item never seen gets its catalog entry** (UI5-08: "Who used the drill?" said only "I don't have a
+  record").
+  - When a `where_is`, `search_items` or `who_moved` lookup for a name finds nothing, the agent checks
+    `GET /items?q=<name>`. If that is also empty, it adds "No drill has been seen yet in this run (catalog: Pistol-grip
+    drill, usually kept in Destiny (US Lab, LAB1); 2 expected on board)." and cites the catalog entry. With no
+    catalog match it says "…, and the item catalog has no entry for it.". If items exist but `who_moved` found no
+    handling, the reply is 'I checked moves, uses and hand-overs of 1 item matching "drill": none are recorded.',
+    naming the event types and `since` when the call had them, followed by the items' last-seen lines (cited).

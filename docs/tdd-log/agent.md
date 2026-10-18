@@ -826,3 +826,114 @@ model calls, because the model's sentence is the answer there. Their first text 
 - **Dashboard:** new SSE `status` events with `phase: "facts"` carry `text` such as 'Found 9 items matching "laptop";
   writing the answer…'. `lib/sse.ts` already shows `text` (160-character cap), so no change is needed. Showing them
   more prominently than the spinner text is optional. UI4-09's timer reset (ChatPage) is yours.
+
+## UI review round 5 fixes (2026-10-18; docs/ui-review/round5 UI5-04, UI5-07, UI5-08)
+
+### Spec
+AC-AGT-36 (who *was* in X = any sighting there; who *is* in X now = last location), AC-AGT-37 ("show more" finds
+the latest list of its kind and pages with a frozen window plus a key-set cursor), AC-AGT-38 (private-area answers
+in code, citations only for rows the reply states, empty answers name what was checked) and AC-AGT-39 (an item never
+seen gets its catalog entry). See docs/spec/30-agent.md "UI review round 5 chatbot fixes".
+
+### Root causes
+- **UI5-04.** `_people_seen` passed `location` to `GET /items`, and the API filters on `entity.last_location`. So the
+  answer meant "last seen in X", not "was in X". 395bae46 and 28513d12 had CUP1 sightings, but their last location
+  later fell back to USOS. At the live re-check (06:50) no track had CUP1 as its last location, so the old code would
+  have said "No person tracks were seen in Cupola" while four tracks had CUP1 sightings. d1c983d2's CUP1 sighting comes
+  from the perception module carry (Node 1 frames labelled CUP1). That is a perception-side issue; the agent reports
+  the sighting as stored.
+- **UI5-07.** There were two causes.
+  1. The pager read only the immediately previous assistant message, so after Q5-Q7 the marker was not found and the
+     model answered (7.6 s).
+  2. The window was read back from the reply text at minute precision: `since` was floored and `until` was rounded up
+     a minute. With plain `offset` paging, events that arrived in between shifted the rows, and rows 9-10 came back as
+     11-12.
+- **UI5-08 (crew quarters).** "crew quarters" is not a module alias, so no place was resolved. The model called
+  `list_unknowns` with no scope (16-24 station-wide rows), said "no record", and the harness cited every row it had
+  fetched.
+- **UI5-08 (drill).** A `who_moved` with no data is ungrounded, which gave a bare NO_RECORD_REPLY. Nothing checked
+  whether any drill existed or what the catalog says. At live re-check time a drill had since been seen and used, so
+  the live answer is now a real one.
+
+### Red
+`tests/test_ac_agt_36_39_round5.py` (28 tests at first) on `tests/live_round5.py`: the live person tracks and their
+sightings, captured read-only at ~06:50 UTC, plus the round-5 locations with the private zones flagged, 16
+station-wide unknowns, no drill, and a 59-change hour. The first run had 20 failures. The 8 tool-level `people_seen`
+/ cursor tests passed, because the tool change was written just before them. That is honest ordering: the tool
+change was written first for those, and their red is the old `_people_seen`, which filters on last_location.
+
+### Green
+- `tools.py`:
+  - `PeopleSeenArgs.mode` and `Toolbox._visited`: bounded sighting lookups (40 max, 8 at a time, unchecked tracks
+    reported, never counted).
+  - `RecentChangesArgs.cursor`, which is harness-only: `HARNESS_ONLY_ARGS` keeps it out of the LLM specs, and
+    `mcp_server.py` keeps it out of MCP.
+  - `change_row_key` / `change_sort_key` / `change_cursor` give a total order.
+  - `Toolbox.private_places`, `items_in`, `name_lookup`.
+  - `_Location.no_capture`, read from `GET /locations`.
+- `render.py`:
+  - `visit_line`, and the `people_reply` modes.
+  - `is_now_question`, `list_kind`, `wanted_list`, `page_key`.
+  - The `_SCOPE_RE` fix for "Destiny (US Lab, LAB1)".
+  - `private_reply` / `private_note`, `never_seen_sentence`.
+- `harness.py`:
+  - Latest-list search for typed "show more".
+  - Per-session page store (`_remember`, `_next_page`), with a text fallback.
+  - Mode from the message in `_adjust_call`, `_route` and the forced call.
+  - `_private_answer` (gated by private-area words or a location id, so ordinary questions make no extra GET
+    /locations).
+  - `_empty_answer`.
+  - `cited_in_reply` (per tool result, applied to model-written replies only).
+
+### Test changes (superseded behaviour, not weakened checks)
+- test_27 location filter: the default mode no longer sends `location` to `GET /items`. The test now also asserts
+  that `mode: "now"` does. The people_seen spec properties include `mode`.
+- test_04 ×2 and test_19 no-data: a lookup that found nothing now says what was checked and the catalog result,
+  instead of the bare "I don't have a record of that.". The tests assert the exact new text and that the invented
+  claim stays absent. Upstream failures still give NO_RECORD_REPLY (test_04 upstream test unchanged).
+
+### Adversarial review (self, round 5)
+| # | Sev | Finding | Outcome |
+|---|---|---|---|
+| 1 | high | "Who was in the crew quarters?" would be routed to a station-wide people count (crew quarters is not a place alias), which reads as an answer about the private area. | **Fixed.** A people question about a private area gets the private note plus "I don't report who was in a private area." No tool call. Test added. |
+| 2 | med | A typed "show more changes" after the *final* page (no hint) would search further back and re-serve page 2 from page 1's marker. | **Fixed.** The search stops at the latest list of that kind (`list_kind`), with or without a hint. |
+| 3 | med | The `no_capture` group also matched "What changed in the crew quarters?" / "Is the drill in the crew quarters?". | **Fixed.** Only pure contents questions are answered in code; the others take the normal path. Test added. |
+| 4 | med | A capped `GET /items/{id}` sighting list (20) could hide an older sighting in the place, which would silently drop a visitor. A failed lookup did the same. | **Fixed.** Both count as `unchecked` and are stated. Tests added. |
+| 5 | low | The `who_moved` empty answer said "moves, uses and hand-overs" when the call was filtered by `since` / `event_types`. | **Fixed.** The filter is named. Test added. |
+| 6 | low | Paging fallback lost a scope whose name has its own parenthetical ("Destiny (US Lab, LAB1)"). This was an existing bug. | **Fixed** (`_SCOPE_RE`). Test added. |
+| 7 | low | Another session could pick up a page cursor. | **Fixed.** Cursors are keyed by session_id; any other session uses the text fallback. Test added. |
+| 8 | low | Citation filtering by label words could strip a model summary ("Two unknowns; the drill was stowed."). | **Decided.** The filter works per tool result: a result whose rows the reply does not state is still cited, unless the reply is a "no record" answer. |
+
+**Not changed (documented):**
+- Requests without a session_id share one cursor namespace. Their lists in the same minute are the same data.
+- Page cursors live in memory (single replica). After a restart, paging falls back to the text window, which has the
+  old minute precision.
+- "Who was in X" reports what perception stored. The module carry mislabel (d1c983d2 CUP1 at 06:31:38) is
+  perception's fix.
+- The private-area wording says only what the system does not keep. It never says whether anyone or anything is
+  there.
+
+### Live check (read-only API, 2026-10-18 ~07:05 UTC, new code run locally against the deployed API, no LLM)
+- "Who was in the Cupola?" → "4 person tracks were seen in Cupola (CUP1) between 2026-10-18 00:00 and … UTC". The
+  tracks are f77dc775 and 28513d12 (06:46), d1c983d2 (06:31) and 395bae46 (06:31, "last seen in US Orbital Segment
+  (USOS) at 06:54"); the citations are those 4. `people_seen` visited took 0.25 s with 14 candidate tracks.
+- "Who is in the Cupola now?" → "No person track's latest sighting is in Cupola (CUP1) …". This is true live: every
+  Cupola visitor was last seen in USOS.
+- "What is in the crew quarters?" → "I checked inventory items in Node 2 crew quarters (NOD2D5, NOD2O5, NOD2P5,
+  NOD2S5): none are recorded. Crew quarters are private: …", with 0 citations (was 24).
+- "What changed in the last hour?" → 1-10 of 113. After another question and a 20 s wait, "show more changes" →
+  11-20 of 113 with no model call. It ran with `until` = page 1's exact end and `cursor` = row 10, and there were no
+  repeated rows.
+
+### Final
+**668 passed** (was 632), ruff clean.
+
+### For other teams
+- **Deploy:** redeploy the agent. There are no config changes.
+- **inventory-api (proposal, not implemented):** sighting-level presence queries. Either add
+  `GET /items?kind=person&sighted_in=<location>&sighted_after=<t>&sighted_before=<t>` (an `EXISTS` on `sighting`
+  with the location subtree; the row could carry the newest matching `seen_at`/`location_id`), or add
+  `GET /sightings?location=&after=&before=&kind=&limit=`. Either would replace the bounded per-track
+  `GET /items/{id}` lookups (at most 40) and remove the `unchecked` case. Optional: `GET /items/{id}?sightings_after=`
+  so that the detail is not capped at 20 recent sightings.
+- **Dashboard:** no change needed. A private-area answer lists one tool, `private_area_items`, in `tool_calls`.

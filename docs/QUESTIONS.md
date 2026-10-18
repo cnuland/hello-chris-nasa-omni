@@ -236,3 +236,8 @@ I need from you.
     are visible and NASA's caption confirms Kibo.
     **Next (under TDD):** open-vocabulary OWLv2 queries with the unknown's own label, so unknowns get real detector
     boxes and crops. Every query box goes through the person-overlap guard.
+39. **Chat privacy choice (AC-AGT-38), for Chris to confirm.**
+    - "What is in the crew quarters?" gets a fixed answer: nothing is recorded, plus a note that no images or
+      descriptions are kept there.
+    - "Who was in the crew quarters?" is answered "I don't report who was in a private area."
+    - Change this if NASA wants presence (but not content) reported for private zones.

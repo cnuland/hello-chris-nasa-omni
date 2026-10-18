@@ -48,7 +48,9 @@ async def test_ac_agt_04_tool_returned_nothing_so_guess_is_replaced(make_harness
         assistant_text("The flux capacitor is in LAB1P3."),
     ])
     res = await make_harness(llm).run(user("where is the flux capacitor?"))
-    assert is_no_record(res["reply"])
+    # AC-AGT-38/39 (round 5): the empty answer names what was checked and the catalog result
+    assert res["reply"] == ('I checked items matching "flux capacitor": none are recorded. No flux capacitor has been '
+                            "seen yet in this run, and the item catalog has no entry for it.")
     assert "LAB1P3" not in res["reply"]
     assert res["citations"] == []
 
@@ -158,4 +160,5 @@ async def test_ac_agt_04_data_from_any_successful_tool_keeps_answer(make_harness
 async def test_ac_agt_04_step_limit_without_final_answer_does_not_guess(make_harness):
     llm = FakeLLM([], default=assistant_tools(tool_call("where_is", {"name": "flux capacitor"})))
     res = await make_harness(llm).run(user("where is the flux capacitor?"))
-    assert is_no_record(res["reply"])
+    # AC-AGT-38 (round 5): no guess; the reply says what the lookups found (nothing)
+    assert res["reply"].startswith('I checked items matching "flux capacitor": none are recorded.')

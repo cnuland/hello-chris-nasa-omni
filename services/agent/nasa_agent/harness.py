@@ -9,7 +9,8 @@ One chat turn:
    calls of the first step that has any are fed back as tool errors; a later step with an invalid call ends the loop
    without running any of its calls. Tools requested in the last allowed step are not run (nobody would read them).
 4. Grounding (per claim): only GROUNDING_TOOLS ground a turn. Without grounding data the reply is ``NO_RECORD_REPLY``
-   (or ``PROPOSAL_REPLY`` when only a proposal was made). In a grounded turn, any location/time/actor in the reply
+   (or ``PROPOSAL_REPLY`` when only a proposal was made; AC-AGT-38/39: when lookups ran and found nothing, the reply
+   names what was checked and what the catalog says about an item never seen). In a grounded turn, any location/time/actor in the reply
    that does not appear in this turn's grounding payloads replaces the reply with ``NO_RECORD_REPLY``.
 5. Catalog facts (AC-AGT-11): ``lookup_catalog`` grounds with its structured fields only and is cited by
    ``catalog_id``. A location only a catalog home_location supports, stated without a usual-stowage qualifier, makes
@@ -34,7 +35,9 @@ import logging
 import re
 import time
 import uuid
+from collections import OrderedDict
 from collections.abc import Callable
+from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -63,6 +66,8 @@ from nasa_agent.grounding import (
 from nasa_agent.llm import LLMError, LLMTimeout
 from nasa_agent.render import (
     DUPLICATE_CAVEAT,
+    EVENT_VERBS,
+    RENDER_PAGE,
     change_line,
     changes_reply,
     count_claims,
@@ -71,6 +76,7 @@ from nasa_agent.render import (
     has_window_words,
     is_changes_question,
     is_count_question,
+    is_now_question,
     is_people_count_question,
     is_people_presence_question,
     is_show_more,
@@ -79,16 +85,27 @@ from nasa_agent.render import (
     item_line,
     items_reply,
     list_item_count,
+    list_kind,
+    lookup_noun,
     may_route,
+    never_seen_sentence,
+    page_key,
     parse_page_marker,
     people_reply,
+    place,
     previous_range_end,
+    private_note,
+    private_reply,
+    safe_query_text,
     shown_note,
+    stamp,
     top_items,
+    wanted_list,
 )
 from nasa_agent.tools import (
     GROUNDING_TOOLS,
     PEOPLE_CAVEAT,
+    change_cursor,
     citation_key,
     evidence_view,
 )
@@ -166,6 +183,33 @@ TOOL_STATUS = {
 }
 
 log = logging.getLogger("nasa_agent.harness")
+#: AC-AGT-37: the chat session of the running turn (page cursors are kept per session).
+_SESSION: ContextVar[str | None] = ContextVar("nasa_agent_session", default=None)
+#: AC-AGT-37: page cursors kept (oldest dropped first).
+MAX_PAGE_CURSORS = 512
+#: AC-AGT-38: words of a "what is in <private place>?" question once the place names are removed.
+_CONTENTS_WORDS = frozenset({
+    "what", "whats", "is", "are", "in", "inside", "the", "there", "anything", "any", "items", "item", "stuff",
+    "things", "stored", "kept", "of", "which", "show", "me", "list", "do", "we", "have", "s", "contents", "a", "at",
+    "on", "currently", "now", "right", "objects", "object", "inventory", "tell", "about", "our", "my", "please",
+    "can", "you", "see", "recorded", "record", "records",
+})
+_CONTENTS_TRIGGERS = frozenset({"what", "whats", "anything", "items", "stuff", "things", "contents", "objects",
+                                "inventory", "stored", "kept", "list", "show"})
+#: AC-AGT-38: words that may name a private area (the curated perception private-zone terms); others need an id.
+_PRIVATE_HINT_RE = re.compile(r"\b(?:quarters?|cqs?|sleep|toilet|whc|bathroom|lavatory|restroom|hygiene|private)\b",
+                              re.IGNORECASE)
+_PEOPLE_TRIGGERS = frozenset({"who", "whos", "anyone", "anybody", "someone", "somebody", "people", "crew"})
+#: AC-AGT-38: the reply to "who was in <private area>?" (says nothing about what is there).
+PRIVATE_PEOPLE_REPLY = "I don't report who was in a private area."
+_WORD_RE = re.compile(r"[a-z]+|\d+")
+#: AC-AGT-38: words of a cited label that do not identify it on their own.
+_GENERIC_LABEL_WORDS = frozenset({"unknown", "object", "item", "thing", "record", "person", "the", "and", "with",
+                                  "new", "small", "large", "big"})
+#: AC-AGT-38: a model reply that says nothing is on record (its citations are then dropped unless it names them).
+_NEGATIVE_RE = re.compile(r"\b(?:no record|not have a record|don't have a record|do not have any|no (?:items?|"
+                          r"objects?|records?|data|information)\b|nothing (?:is |was )?(?:recorded|on record))",
+                          re.IGNORECASE)
 
 
 # ---------------------------------------------------------------- untrusted LLM output
@@ -304,6 +348,8 @@ class AgentHarness:
         self.settings = settings
         self.memory = memory
         self.inventory_block = inventory_block
+        #: AC-AGT-37: {page_key: {since, until, cursor, location, mode}} of rendered pages with a "show more" hint
+        self._pages: OrderedDict[str, dict[str, Any]] = OrderedDict()
 
     # ------------------------------------------------------------ context sources
     async def _render_block(self, question: str, request_id: str) -> str:
@@ -367,7 +413,8 @@ class AgentHarness:
             return pattern
 
     async def _adjust_call(self, call: dict[str, Any], window, place_is_named, notes: list[str],
-                           question_place: str | None = None, page_offset: int = 0) -> dict[str, Any]:
+                           question_place: str | None = None, page_offset: int = 0,
+                           now_mode: bool = False) -> dict[str, Any]:
         """AC-AGT-20/22/32/33: the arguments actually run. The single place the current message names replaces the
         model's location (search_items: ``filters.location``); otherwise a model location is dropped unless the
         message names it. A relative window parsed from the message replaces the model's since/until. The harness
@@ -395,6 +442,15 @@ class AgentHarness:
         elif name in SCOPED_TOOLS and loc is not None and not (isinstance(loc, str) and await place_is_named(loc)):
             args.pop("location")
             changed = True
+        if name == "people_seen":
+            # AC-AGT-36: "who is in X now" (last seen there) or "who was in X" (any sighting there), from the message
+            want = "now" if now_mode and args.get("location") else None
+            if args.get("mode") != want and (want or "mode" in args):
+                if want:
+                    args["mode"] = want
+                else:
+                    args.pop("mode", None)
+                changed = True
         if name in PAGED_TOOLS:
             # AC-AGT-33: the harness owns paging; the model's offset is never used
             if page_offset and args.get("offset") != page_offset:
@@ -461,6 +517,7 @@ class AgentHarness:
     ) -> dict[str, Any]:
         """Returns {request_id, session_id, reply, citations, tool_calls, proposals}. Raises LLMError/LLMTimeout."""
         request_id = request_id or str(uuid.uuid4())
+        _SESSION.set(session_id)
         started = time.perf_counter()
         deadline = started + float(getattr(self.settings, "turn_deadline_s", 45.0))
 
@@ -493,9 +550,15 @@ class AgentHarness:
         page_calls: list[dict[str, Any]] = []  # a failed paging attempt stays visible in tool_calls
         page_offset = 0  # AC-AGT-33: the harness owns paging
         if follow_up and is_show_more(question):
-            # AC-AGT-29: "show more" after a paged, rendered list is answered in code (no LLM call)
-            previous = next((m["content"] for m in reversed(raw_history[:-1])
-                             if m["role"] == "assistant" and isinstance(m.get("content"), str)), "")
+            # AC-AGT-29: "show more" after a paged, rendered list is answered in code (no LLM call). AC-AGT-37: a
+            # "show more changes/people" finds the latest list of that kind, however many turns back; a bare "more"
+            # only continues the previous reply.
+            replies = [m["content"] for m in reversed(raw_history[:-1])
+                       if m["role"] == "assistant" and isinstance(m.get("content"), str)]
+            previous = replies[0] if replies else ""
+            wanted = wanted_list(question)
+            if wanted is not None:
+                previous = next((r for r in replies if list_kind(r) == wanted), previous)
             page_offset = previous_range_end(previous)
             marker = parse_page_marker(previous, question)
             if marker is not None:
@@ -513,6 +576,9 @@ class AgentHarness:
 
         window = parse_time_window(question, self._now())  # AC-AGT-22
         notes: list[str] = []  # harness notes appended to the reply (AC-AGT-22 clamp)
+        private = await self._private_answer(question, request_id, session_id, started)
+        if private is not None:
+            return private  # AC-AGT-38: what is recorded in a private area, said in code
         if may_route(question):
             await question_place()
             routed = await self._route(question, scope_box[0], window, notes, request_id, session_id, emit, started,
@@ -556,6 +622,7 @@ class AgentHarness:
         non_render_data = False  # a grounding result that the deterministic renderer cannot answer
         where_q = is_where_question(question)
         item_args: list[tuple[str, Any, Any]] = []  # (tool, result, args) of item tools with data (AC-AGT-34)
+        empty_lookups: list[tuple[str, Any]] = []  # (tool, args) of ok lookups that found nothing (AC-AGT-38/39)
 
         def renderable(name: str, result: Any) -> bool:
             if not result.ok:
@@ -633,7 +700,8 @@ class AgentHarness:
                 break
             place = (await question_place() if any(c["function"]["name"] in SCOPED_TOOLS | {"search_items"}
                                                    for c in requested) else None)
-            requested = [await self._adjust_call(c, window, place_is_named, notes, place, page_offset)
+            requested = [await self._adjust_call(c, window, place_is_named, notes, place, page_offset,
+                                                 is_now_question(question))
                          for c in requested]
             pre = [self.toolbox.validate(c["function"]["name"], c["function"]["arguments"]) for c in requested]
             if any(p is not None for p in pre) and invalid_step_seen:
@@ -664,6 +732,8 @@ class AgentHarness:
                 content_json = fit_payload(result.to_message_payload(), payload_budget)
                 parsed_args = _parse_arguments(raw_args)
                 step_results.append((name, result, parsed_args))
+                if result.ok and not result.has_data:
+                    empty_lookups.append((name, parsed_args))
                 if result.has_data:
                     allowed_counts |= tool_totals(name, result, content_json)
                     turn_results.append((name, result))
@@ -775,6 +845,11 @@ class AgentHarness:
                 reply = INVALID_TOOL_REPLY
             else:
                 reply = NO_RECORD_REPLY
+                empty = await self._empty_answer(empty_lookups) if empty_lookups else None
+                if empty is not None:
+                    # AC-AGT-38/39: say what was checked, and what the catalog knows about an item never seen
+                    reply, citations = empty
+                    grounded, fallback = True, "empty_lookup"
         elif stop_reason == "answer":
             text = final or ""
             if finish_reason == "length" and text.strip():
@@ -823,8 +898,9 @@ class AgentHarness:
         forced: str | None = None
         if not proposals and is_people_count_question(question):
             if people_r is None:
-                people_r = await self._forced_call("people_seen", self._people_args(await question_place(), window, notes),
-                                                   request_id, tool_calls, emit)
+                people_r = await self._forced_call(
+                    "people_seen", self._people_args(await question_place(), window, notes, is_now_question(question)),
+                    request_id, tool_calls, emit)
                 forced = "people_count" if people_r is not None else None
             if people_r is not None:
                 reply, citations = await self._render([("people_seen", people_r)])
@@ -853,6 +929,8 @@ class AgentHarness:
         if model_reply:
             reply = normalize_markdown(reply)  # AC-AGT-24
             reply = await self._capped_note(reply, item_args)  # AC-AGT-34
+            citations = cited_in_reply(reply, _dedup(citations),
+                                       [r.citations for _n, r in turn_results if r.citations])  # AC-AGT-38
         if notes and grounded and reply not in CANNED_REPLIES:
             reply = f"{reply} {' '.join(notes)}"
         cited = grounded and (not rejected or fallback is not None)
@@ -893,12 +971,18 @@ class AgentHarness:
             elif name == "recent_changes":
                 if data.get("changes"):
                     text, cited = changes_reply(data, result.citations, names)
+                    shown = [c for c in data["changes"] if isinstance(c, dict)][:RENDER_PAGE]
+                    self._remember(text, {"since": data.get("since"), "until": data.get("until"),
+                                          "cursor": change_cursor(shown[-1]) if shown else None,
+                                          "location": data.get("location")})
                 elif data.get("offset"):
                     text, cited = "There are no more changes in that window.", []
                 else:
                     text, cited = none_found_reply([data]), []
             elif name == "people_seen":
                 text, cited = people_reply(data, result.citations, names)
+                self._remember(text, {"since": data.get("since"), "until": data.get("until"),
+                                      "location": data.get("location"), "mode": data.get("mode")})
             else:
                 text, cited = count_reply(data, names), []
             texts.append(text)
@@ -968,7 +1052,7 @@ class AgentHarness:
         if window is None and has_window_words(rest):
             return None  # a time phrase the AC-AGT-22 parser cannot read ("since 10"): the model decides
         if is_people_presence_question(rest):
-            name, args = "people_seen", self._people_args(place, window, notes)
+            name, args = "people_seen", self._people_args(place, window, notes, is_now_question(question))
         elif is_changes_question(rest):
             name, args = "recent_changes", self._window_args(window, notes)
             if place:
@@ -999,12 +1083,14 @@ class AgentHarness:
             return result
         return None
 
-    def _people_args(self, place: str | None, window, notes: list[str]) -> dict[str, Any]:
-        """people_seen arguments for a counting/presence question: the AC-AGT-22 window (default: today) and the
-        single place the question names (AC-AGT-32)."""
+    def _people_args(self, place: str | None, window, notes: list[str], now_mode: bool = False) -> dict[str, Any]:
+        """people_seen arguments for a counting/presence question: the AC-AGT-22 window (default: today), the
+        single place the question names (AC-AGT-32) and, for "who is in X now", mode "now" (AC-AGT-36)."""
         args = self._window_args(window, notes)
         if place:
             args["location"] = place
+            if now_mode:
+                args["mode"] = "now"
         return args
 
     def _window_args(self, window, notes: list[str]) -> dict[str, Any]:
@@ -1022,14 +1108,37 @@ class AgentHarness:
                 args["until"] = _iso_z(until)
         return args
 
+    def _remember(self, text: str, info: dict[str, Any]) -> None:
+        """AC-AGT-37: keep the exact window and cursor of a rendered page that ends with a "show more" hint."""
+        marker = parse_page_marker(text)
+        if marker is None:
+            return
+        self._pages[page_key(marker, _SESSION.get())] = {**info, "tool": marker["tool"]}
+        self._pages.move_to_end(page_key(marker, _SESSION.get()))
+        while len(self._pages) > MAX_PAGE_CURSORS:
+            self._pages.popitem(last=False)
+
     async def _next_page(self, marker: dict[str, Any], request_id: str, session_id: str | None, emit,
                          started: float, tool_calls: list[dict[str, Any]]) -> dict[str, Any] | None:
-        """AC-AGT-29: the next page of a rendered list, read back from the previous reply; None to use the LLM."""
-        now = self._now()
-        until = min(marker["until"], now)
-        if until <= marker["since"]:
-            return None
-        args: dict[str, Any] = {"since": _iso_z(marker["since"]), "until": _iso_z(until), "offset": marker["offset"]}
+        """AC-AGT-29: the next page of a rendered list, read back from an earlier reply; None to use the LLM.
+        AC-AGT-37: when this agent rendered that page, the page continues from its exact window end and (changes)
+        from its last row (key-set cursor), so rows that arrive later neither repeat nor shift the page. Otherwise
+        (an agent restart) the window and range are read back from the reply text."""
+        kept = self._pages.get(page_key(marker, session_id))
+        if kept is not None and kept.get("tool") == marker["tool"] and kept.get("since") and kept.get("until"):
+            args: dict[str, Any] = {"since": kept["since"], "until": kept["until"], "offset": marker["offset"]}
+            if kept.get("cursor") and marker["tool"] == "recent_changes":
+                args["cursor"] = kept["cursor"]
+            if kept.get("mode") == "now":
+                args["mode"] = "now"
+        else:
+            now = self._now()
+            until = min(marker["until"], now)
+            if until <= marker["since"]:
+                return None
+            args = {"since": _iso_z(marker["since"]), "until": _iso_z(until), "offset": marker["offset"]}
+            if marker.get("mode") == "now":
+                args["mode"] = "now"
         if marker.get("location"):
             args["location"] = marker["location"]
         result = await self._forced_call(marker["tool"], args, request_id, tool_calls, emit)
@@ -1039,6 +1148,106 @@ class AgentHarness:
         self._log_turn(request_id, session_id, 0, tool_calls, 0, True, 0, 0, "paged", [], False, started)
         return {"request_id": request_id, "session_id": session_id, "reply": reply, "citations": citations,
                 "tool_calls": tool_calls, "proposals": []}
+
+    async def _private_answer(self, question: str, request_id: str, session_id: str | None,
+                              started: float) -> dict[str, Any] | None:
+        """AC-AGT-38: "What is in the crew quarters?" is answered in code: the inventory items recorded in the private
+        area(s) the message names (label and place only), what was checked, and what the system keeps from there.
+        A people-presence question about a private area ("Who was in the crew quarters?") gets a fixed reply: who
+        was in a private area is not reported. None (the normal path) for any other message."""
+        words = set(_WORD_RE.findall((question or "").lower().replace("'", "")))
+        if not words & (_CONTENTS_TRIGGERS | _PEOPLE_TRIGGERS) or len(words) > 16:
+            return None
+        if not (_PRIVATE_HINT_RE.search(question) or LOCATION_ID_RE.search(question)):
+            return None  # cheap gate: no GET /locations for ordinary questions
+        scope_of = getattr(self.toolbox, "private_places", None)
+        if scope_of is None:
+            return None
+        try:
+            scope = await scope_of(question)
+        except Exception:  # noqa: BLE001 - the normal path answers then
+            return None
+        if scope is None:
+            return None
+        if is_people_presence_question(scope.rest):
+            reply = f"{private_note(scope.crew_quarters, scope.label)} {PRIVATE_PEOPLE_REPLY}"
+            self._log_turn(request_id, session_id, 0, [], 0, False, 0, 0, "private_area", [], False, started)
+            return {"request_id": request_id, "session_id": session_id, "reply": reply, "citations": [],
+                    "tool_calls": [], "proposals": []}
+        if not set(_WORD_RE.findall(scope.rest.lower().replace("'", ""))) <= _CONTENTS_WORDS:
+            return None
+        tool_calls: list[dict[str, Any]] = []
+        t0 = time.perf_counter()
+        try:
+            items = await self.toolbox.items_in(scope.locations)
+            ok = True
+        except Exception as exc:  # noqa: BLE001 - never guess: the model path answers then
+            log.warning("private area lookup failed", extra={"request_id": request_id, "error": type(exc).__name__})
+            return None
+        tool_calls.append({"name": "private_area_items", "arguments": {"locations": list(scope.locations)},
+                           "ok": ok, "error_kind": None, "latency_ms": round((time.perf_counter() - t0) * 1000, 2)})
+        names = await self._location_names()
+        reply = private_reply(scope.label, scope.crew_quarters, items, names)
+        shown = {i.get("entity_id") for i in items[:RENDER_PAGE]}
+        citations = [_private_cite(i) for i in items if i.get("entity_id") in shown]
+        self._log_turn(request_id, session_id, 0, tool_calls, 0, True, 0, 0, "private_area", [], False, started)
+        return {"request_id": request_id, "session_id": session_id, "reply": reply, "citations": citations,
+                "tool_calls": tool_calls, "proposals": []}
+
+    async def _empty_answer(self, lookups: list[tuple[str, Any]]) -> tuple[str, list[dict[str, Any]]] | None:
+        """AC-AGT-38/39: the answer when every lookup of the turn found nothing. Names what was checked ("I checked
+        items matching "sextant": none are recorded."). For an item name: if nothing by that name was ever seen,
+        "No drill has been seen yet in this run (catalog: ...)."; if items exist but nobody handled them, the items
+        checked. None when there is nothing honest to add."""
+        names = await self._location_names()
+        checked: list[str] = []
+        extra: list[str] = []
+        cites: list[dict[str, Any]] = []
+        seen_names: set[str] = set()
+        lookup = getattr(self.toolbox, "name_lookup", None)
+        for tool, args in lookups:
+            args = args if isinstance(args, dict) else {}
+            if tool in ("where_is", "who_moved", "search_items"):
+                noun = lookup_noun(args.get("name") if tool != "search_items" else args.get("q"))
+                if noun is None or lookup is None:
+                    continue
+                try:
+                    found = await lookup(noun)
+                except Exception as exc:  # noqa: BLE001 - the plain reply stands
+                    log.warning("name lookup failed", extra={"tool": tool, "error": type(exc).__name__})
+                    continue
+                if not found["total"]:
+                    if noun.lower() not in seen_names:
+                        seen_names.add(noun.lower())
+                        if tool in ("search_items", "where_is"):
+                            checked.append(f'items matching "{noun}"')
+                        extra.append(never_seen_sentence(noun, found["catalog"], names))
+                        cites += [{"catalog_id": e["catalog_id"], "label": e.get("display_name")}
+                                  for e in found["catalog"]]
+                elif tool == "who_moved":
+                    n = found["total"]
+                    kinds = [EVENT_VERBS.get(t, t) for t in args.get("event_types") or [] if t in EVENT_VERBS]
+                    what = ("events (" + ", ".join(kinds) + ")") if kinds else "moves, uses and hand-overs"
+                    since = stamp(args.get("since")) if args.get("since") else None
+                    checked.append(f'{what} of {n} item{"" if n == 1 else "s"} matching "{noun}"'
+                                   + (f" since {since}" if since else ""))
+                    extra.append("\n".join(item_line(i, names) for i in found["items"]))
+                    cites += [_private_cite(i) for i in found["items"]]
+                else:
+                    checked.append(f'items matching "{noun}"')
+            elif tool == "list_unknowns":
+                where = place(args.get("location"), names) if args.get("location") else None
+                checked.append("open unknown objects" + (f" in {where}" if where else ""))
+            elif tool == "search_observations":
+                q = safe_query_text(args.get("q"))
+                checked.append(f'video observations mentioning "{q}"' if q else "video observations")
+            elif tool in ("get_item", "item_history"):
+                checked.append("that item record")
+        if not checked and not extra:
+            return None
+        parts = ([f"I checked {', '.join(dict.fromkeys(checked))}: none are recorded."] if checked else []) + extra
+        sep = "\n" if any(": last seen" in x or ": no sighting" in x for x in extra) else " "
+        return sep.join(x for x in parts if x).strip(), cites
 
     async def _verified_label(self, location_id: str, question: str) -> str:
         """Review 8: a scope is printed only when it is a known location or the operator typed it."""
@@ -1079,6 +1288,66 @@ class AgentHarness:
                 "latency_ms": round((time.perf_counter() - started) * 1000, 2),
             },
         )
+
+
+def _private_cite(item: dict[str, Any]) -> dict[str, Any]:
+    """A citation for a rendered item row (label, last location and time; never its description)."""
+    cite = {"entity_id": item.get("entity_id"), "at": item.get("last_seen_at"), "label": item.get("label"),
+            "location": item.get("last_location")}
+    if item.get("last_location_name"):
+        cite["location_name"] = item["last_location_name"]
+    return {k: v for k, v in cite.items() if v is not None}
+
+
+def _label_words(label: Any) -> tuple[str | None, list[str]]:
+    """(whole label without its parenthetical, identifying words) of a cited label, lower case."""
+    text = str(label or "").lower()
+    inner = " ".join(re.findall(r"\((.*?)\)", text))
+    base = re.sub(r"\s*\(.*?\)\s*", " ", text).strip()
+    words = [w for w in _WORD_RE.findall(base) if len(w) >= 3 and w not in _GENERIC_LABEL_WORDS]
+    head = words[-1:] if words else []
+    phrase = inner.split(",")[0].strip() if inner else ""
+    return (base or None), head + ([phrase] if phrase else [])
+
+
+def _names_row(c: dict[str, Any], text: str, words: set[str]) -> bool:
+    """AC-AGT-38: the reply states this cited row: its id (or 8-character short id), catalog_id, whole label, the
+    label's head noun ("latch" for "yellow latch"), a person's first appearance phrase, or its HH:MM time."""
+    ident = str(c.get("entity_id") or c.get("window_id") or "").lower()
+    if ident and (ident in text or ident[:8] in text):
+        return True
+    if c.get("catalog_id") and str(c["catalog_id"]).lower() in text:
+        return True
+    whole, keys = _label_words(c.get("label"))
+    if whole and whole in text:
+        return True
+    for k in keys:
+        if (" " in k and k in text) or k in words or f"{k}s" in words or (k.endswith("s") and k[:-1] in words):
+            return True
+    at = _hhmm(c.get("at"))
+    return bool(at) and at in text
+
+
+def cited_in_reply(reply: str, citations: list[dict[str, Any]], groups: list[list[dict[str, Any]]]
+                   ) -> list[dict[str, Any]]:
+    """AC-AGT-38: a model-written reply cites only rows it uses. Per tool result (``groups``): if the reply states some
+    of its rows, only those are cited; if it states none, the result is cited only when the reply is not a
+    "no record" answer (a summary such as "Two unknowns" still uses it). Citations from no group are kept."""
+    text = (reply or "").lower()
+    words = set(_WORD_RE.findall(text))
+    negative = bool(_NEGATIVE_RE.search(reply or ""))
+    present = {citation_key(c) for c in citations}
+    grouped: set[Any] = set()
+    keep: set[Any] = set()
+    for group in groups:
+        rows = [c for c in group if citation_key(c) in present]
+        grouped |= {citation_key(c) for c in rows}
+        named = [c for c in rows if _names_row(c, text, words)]
+        if named:
+            keep |= {citation_key(c) for c in named}
+        elif not negative:
+            keep |= {citation_key(c) for c in rows}
+    return [c for c in citations if citation_key(c) in keep or citation_key(c) not in grouped]
 
 
 def _last(results: list[tuple[str, Any]], name: str) -> Any:

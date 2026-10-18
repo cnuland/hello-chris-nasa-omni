@@ -117,4 +117,7 @@ async def test_ac_agt_19_no_data_is_still_no_record(make_harness):
     llm = FakeLLM([assistant_tools(tool_call("who_moved", {"name": "flux capacitor"})),
                    assistant_text("It was used by the commander at 10:00.")])
     r = await make_harness(llm).run(user("Who used the flux capacitor?"))
-    assert r["reply"] == NO_RECORD_REPLY and r["citations"] == []
+    # AC-AGT-39 (round 5): never seen and not in the catalog, said instead of a bare "no record"
+    assert r["reply"] == ("No flux capacitor has been seen yet in this run, and the item catalog has no entry for "
+                          "it.") and r["citations"] == []
+    assert "commander" not in r["reply"]

@@ -168,8 +168,12 @@ class FakeInventory:
         self.stats = deepcopy(STATS)
         self.catalog = default_catalog()
         self.locations = deepcopy(LOCATIONS)
+        #: GET /items/{id} sightings per entity ({location_id, seen_at, ...}, newest first)
+        self.sightings: dict[str, list[dict[str, Any]]] = {}
         self.requests: list[httpx.Request] = []
         self.fail_with: int | None = None
+        #: paths that answer 503 (one failing upstream lookup)
+        self.fail_paths: set[str] = set()
         #: simulate an inventory-api without the `types=` filter on GET /events (422 on unknown query use)
         self.reject_types = False
         #: when True GET /events adds entity_label (the newer API); default mirrors the deployed API (no label)
@@ -192,6 +196,8 @@ class FakeInventory:
     # -- routing
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
+        if request.url.path in self.fail_paths:
+            return httpx.Response(503, json={"detail": "forced failure"})
         if self.fail_with is not None:
             return httpx.Response(self.fail_with, json={"detail": "forced failure"})
         if request.method != "GET":
@@ -210,7 +216,7 @@ class FakeInventory:
                 return httpx.Response(404, json={"detail": "not found"})
             detail = deepcopy(item)
             detail["events"] = [e for e in self.events if e["entity_id"] == item["entity_id"]]
-            detail["sightings"] = []
+            detail["sightings"] = deepcopy(self.sightings.get(item["entity_id"], []))[:20]  # API DETAIL_LIMIT
             detail["exemplar_count"] = 0
             return httpx.Response(200, json=detail)
         if len(parts) == 3 and parts[0] == "items" and parts[2] == "history":

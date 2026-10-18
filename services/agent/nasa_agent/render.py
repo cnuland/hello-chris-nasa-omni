@@ -224,41 +224,72 @@ def changes_reply(data: dict[str, Any], citations: list[dict[str, Any]],
     return text, _cites_for(shown, citations)
 
 
+def visit_line(t: dict[str, Any], names: dict[str, str | None]) -> str:
+    """AC-AGT-36: "Person (...): seen in Cupola (CUP1) at <time>; last seen in US Orbital Segment (USOS) at <time>"."""
+    who = person_subject(t.get("appearance"))
+    here = place(t.get("location"), names, t.get("location_name")) or NO_PLACE
+    text = f"{who}: seen in {here}" + (f" at {stamp(t.get('seen_here_at'))}" if stamp(t.get("seen_here_at")) else "")
+    last = place(t.get("last_location"), names, t.get("last_location_name"))
+    if t.get("last_seen_at") and t.get("last_seen_at") != t.get("seen_here_at"):
+        text += f"; last seen{f' in {last}' if last else ''} at {stamp(t.get('last_seen_at'))}"
+    return text
+
+
 def people_reply(data: dict[str, Any], citations: list[dict[str, Any]],
                  names: dict[str, str | None]) -> tuple[str, list[dict[str, Any]]]:
-    """people_seen as the track total, the per-module counts, the caveat and a page of tracks (AC-AGT-27/29)."""
+    """people_seen as the track total, the per-module counts, the caveat and a page of tracks (AC-AGT-27/29).
+    With a place (AC-AGT-36): "visited" lists tracks sighted there (with where they were last seen); "now" lists
+    tracks whose latest sighting is there."""
     total = int(data.get("total_tracks") or 0)
     offset = int(data.get("offset") or 0)
+    mode = data.get("mode")
     scope = place(data.get("location"), names, data.get("location_name"))
     where = f" in {scope}" if scope else ""
     window = window_text(data.get("since"), data.get("until"))
     tracks = [t for t in data.get("tracks") or [] if isinstance(t, dict)]
     shown = tracks[:RENDER_PAGE]
-    lines = [item_line({**t, "kind": "person", "last_location": t.get("location"),
-                        "last_location_name": t.get("location_name")}, names) for t in shown]
+    if mode == "visited":
+        lines = [visit_line(t, names) for t in shown]
+    else:
+        lines = [item_line({**t, "kind": "person", "last_location": t.get("location"),
+                            "last_location_name": t.get("location_name")}, names) for t in shown]
+    seen = "last seen" if mode == "now" else "seen"
+    unchecked = int(data.get("unchecked") or 0)
+    unchecked_note = (f" ({unchecked} other track{'s' if unchecked != 1 else ''} seen in this window could not be "
+                      "checked for sightings there.)") if unchecked else ""
     if offset:
         head = f"Person tracks{where} {window} (showing {offset + 1}-{offset + len(shown)} of {total}):"
         parts = [head, "\n".join(_numbered(lines, offset + 1))]
     else:
         if total == 0:
-            return f"No person tracks were seen{where} {window}.", []
+            if mode == "now":
+                return (f"No person track's latest sighting is{where} (tracks seen {window}). Ask \"Who was in "
+                        f"{scope}?\" for every track sighted there.{unchecked_note}"), []
+            return f"No person tracks were seen{where} {window}.{unchecked_note}", []
         modules = [m for m in data.get("by_module") or [] if isinstance(m, dict)]
         if scope and len(modules) == 1 and modules[0].get("location") == data.get("location"):
             modules = []  # "2 person tracks were seen in Cupola (CUP1)", not "...: Cupola (CUP1) 2."
         counts = ", ".join(f"{place(m.get('location'), names, m.get('location_name')) or 'unknown location'} "
                            f"{int(m.get('count') or 0)}" for m in modules)
         noun = "person track was" if total == 1 else "person tracks were"
-        lead = f"{total} {noun} seen{where} {window}" + (f": {counts}." if counts else ".")
-        if data.get("complete") is False:
+        lead = f"{total} {noun} {seen}{where} {window}" + (f": {counts}." if counts else ".")
+        if mode == "now":
+            lead = lead[:-1] + (" (its latest sighting is there)." if total == 1 else
+                                " (their latest sighting is there).")
+        if unchecked:
+            lead += unchecked_note
+        elif data.get("complete") is False:
             lead += " (Per-module counts cover only the first tracks scanned.)"
         parts = [lead, str(data.get("caveat") or PEOPLE_CAVEAT)]
         if shown:
-            parts.append(f"Most recent tracks (showing 1-{len(shown)} of {total}):\n" + "\n".join(_numbered(lines, 1)))
+            title = "Most recent sightings there" if mode == "visited" else "Most recent tracks"
+            parts.append(f"{title} (showing 1-{len(shown)} of {total}):\n" + "\n".join(_numbered(lines, 1)))
     text = "\n\n".join(parts)
     more = total - offset - len(shown)
     if more > 0 and shown:
         text += f"\n\nand {more} more; {PEOPLE_MORE}."
-    return text, _cites_for(shown, citations, "last_seen_at")
+    keys = {t.get("entity_id") for t in shown}
+    return text, [c for c in citations if c.get("entity_id") in keys]
 
 
 def count_reply(data: dict[str, Any], names: dict[str, str | None]) -> str:
@@ -297,8 +328,14 @@ _SHOW_MORE_WORDS = frozenset({
 _SHOW_MORE_TRIGGERS = frozenset({"more", "next", "rest", "remaining", "continue", "others", "going"})
 _WINDOW_RE = re.compile(r"between (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) and (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) UTC")
 _RANGE_RE = re.compile(r"\(showing (\d+)-(\d+) of (\d+)\)")
-_SCOPE_RE = re.compile(r"(?:Changes|tracks were seen|track was seen|Person tracks) in [^\n]*?\(([A-Z][A-Z0-9_-]{1,15})\)"
-                       r" between")
+_SCOPE_RE = re.compile(r"(?:Changes|tracks were (?:last )?seen|track was (?:last )?seen|Person tracks) in [^\n]*?"
+                       r"\((?:[^()\n]*, )?([A-Z][A-Z0-9_-]{1,15})\) between")
+#: AC-AGT-37: the header of a rendered list, by kind (a finished list has no "show more" hint but still counts).
+_LIST_HEAD_RE = {
+    "recent_changes": re.compile(r"(?m)^Changes\b[^\n]*\(showing \d+-\d+ of \d+\):|no more changes in that window"),
+    "people_seen": re.compile(r"(?m)person tracks? (?:was|were) (?:last )?seen|^Person tracks\b[^\n]*\(showing|"
+                              r"^No person track"),
+}
 
 
 def is_show_more(question: str) -> bool:
@@ -331,6 +368,32 @@ def parse_page_marker(reply: str, question: str = "") -> dict[str, Any] | None:
     scope = _SCOPE_RE.search(reply)
     return {"tool": tool, "since": since, "until": until, "location": scope.group(1) if scope else None,
             "offset": end}
+
+
+def list_kind(reply: Any) -> str | None:
+    """AC-AGT-37: the kind of rendered list a reply holds ("recent_changes" / "people_seen"), else None."""
+    if not isinstance(reply, str):
+        return None
+    for kind, rx in _LIST_HEAD_RE.items():
+        if rx.search(reply):
+            return kind
+    return None
+
+
+def wanted_list(question: str) -> str | None:
+    """AC-AGT-37: the list type a "show more" message names ("show more changes" / "more people"), else None."""
+    q = (question or "").lower()
+    if "change" in q:
+        return "recent_changes"
+    if "people" in q or "person" in q or "track" in q:
+        return "people_seen"
+    return None
+
+
+def page_key(marker: dict[str, Any], session: str | None) -> str:
+    """AC-AGT-37: the key a rendered page's cursor is kept under (session, list, window, range end, place)."""
+    return "|".join(str(x) for x in (session, marker["tool"], marker["since"].isoformat(),
+                                      marker["until"].isoformat(), marker["offset"], marker.get("location")))
 
 
 def previous_range_end(reply: Any) -> int:
@@ -481,6 +544,20 @@ def is_people_presence_question(rest: str) -> bool:
     return bool(ws & _PRESENCE_WORDS) or ("how" in ws and "many" in ws)
 
 
+_NOW_WORDS = frozenset({"now", "currently", "presently", "current"})
+_PAST_WORDS = frozenset({"was", "were", "been", "seen", "has", "have", "had", "visited", "went", "today", "yesterday",
+                         "since", "last", "past", "earlier", "ago", "hour", "hours", "day", "days"})
+
+
+def is_now_question(question: str) -> bool:
+    """AC-AGT-36: "who is in X (now)" asks where tracks were last seen; "who was / has been in X" asks for any sighting
+    there. True for "now"/"currently", or a present-tense "is/are/who's" without past or window words."""
+    ws = set(_words(question))
+    if ws & _NOW_WORDS:
+        return True
+    return bool(ws & {"is", "are", "whos"}) and not ws & _PAST_WORDS
+
+
 def is_changes_question(rest: str) -> bool:
     """AC-AGT-35: the message (named places already removed) is only a what-changed question: "What changed in the last
     hour?", "Any changes since 10am?". A message with "there" (an earlier place) or any other word is not."""
@@ -587,3 +664,55 @@ def facts_text(name: str, data: Any, args: Any, scope_total: Any, names: dict[st
     if name == "search_observations" and isinstance(data, list):
         return f"Found {plural(len(data), 'video observation', 'video observations')}" + tail
     return None
+
+
+# ---------------------------------------------------------------- AC-AGT-38/39 honest empty answers
+def private_note(crew_quarters: bool, label: str) -> str:
+    """AC-AGT-38: what the system keeps from a private (no_capture) area; says nothing about what is there."""
+    what = "Crew quarters are private" if crew_quarters else "This is a private area"
+    return (f"{what}: the system stores no images there and keeps no scene descriptions, speech or appearance "
+            "descriptions from there.")
+
+
+def private_reply(label: str, crew_quarters: bool, items: list[dict[str, Any]],
+                  names: dict[str, str | None]) -> str:
+    """AC-AGT-38: "I checked inventory items in <place>: none are recorded." plus the private note; recorded items
+    are listed by label and place only (never a description)."""
+    if not items:
+        return f"I checked inventory items in {label}: none are recorded. {private_note(crew_quarters, label)}"
+    shown = items[:RENDER_PAGE]
+    n = len(items)
+    lines = [item_line({k: v for k, v in i.items() if k != "description"}, names) for i in shown]
+    head = (f"I checked inventory items in {label}: {n} inventory item{' is' if n == 1 else 's are'} recorded"
+            + (f" (showing 1-{len(shown)}):" if n > len(shown) else ":"))
+    return "\n".join([head, *_numbered(lines, 1)]) + f"\n\n{private_note(crew_quarters, label)}"
+
+
+_ARTICLE_RE = re.compile(r"^(?:the|a|an|any|some|our|my)\s+", re.IGNORECASE)
+
+
+def lookup_noun(value: Any) -> str | None:
+    """A model-chosen item name fit to repeat ("the drill" -> "drill"), else None."""
+    q = safe_query_text(value)
+    return _ARTICLE_RE.sub("", q).strip() or None if q else None
+
+
+def catalog_phrase(entry: dict[str, Any], names: dict[str, str | None]) -> str:
+    """ "Pistol-grip drill, usually kept in Destiny (US Lab, LAB1); 2 expected on board" from a catalog entry."""
+    name = clean_text(entry.get("display_name"), 60) or clean_text(entry.get("class_name"), 60) or entry["catalog_id"]
+    if not _FREE_TEXT_RE.fullmatch(name):
+        name = entry["catalog_id"]
+    text = name
+    home = place(entry.get("home_location"), names)
+    if home:
+        text += f", usually kept in {home}"
+    if isinstance(entry.get("expected_count"), int) and entry["expected_count"] > 0:
+        text += f"; {entry['expected_count']} expected on board"
+    return text
+
+
+def never_seen_sentence(noun: str, catalog: list[dict[str, Any]], names: dict[str, str | None]) -> str:
+    """AC-AGT-39: "No drill has been seen yet in this run (catalog: Pistol-grip drill, usually kept in ...)."."""
+    if not catalog:
+        return f"No {noun} has been seen yet in this run, and the item catalog has no entry for it."
+    return f"No {noun} has been seen yet in this run (catalog: {'; '.join(catalog_phrase(e, names) for e in catalog)})."

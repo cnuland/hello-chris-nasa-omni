@@ -28,6 +28,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from nasa_agent.logs import configure_logging
+from nasa_agent.tools import HARNESS_ONLY_ARGS
 
 log = logging.getLogger("nasa_agent.mcp")
 
@@ -51,6 +52,8 @@ def _make_tool_fn(toolbox, name: str):
     model = toolbox.argument_model(name)
     params = []
     for field_name, info in model.model_fields.items():
+        if field_name in HARNESS_ONLY_ARGS:
+            continue  # AC-AGT-37: the chat harness's paging cursor is not part of the tool surface
         default = inspect.Parameter.empty if info.is_required() else None
         params.append(
             inspect.Parameter(field_name, inspect.Parameter.KEYWORD_ONLY, default=default, annotation=info.annotation)
