@@ -114,9 +114,11 @@ def test_ac_per_11_no_capture_window_has_no_reviews(make_reconciler, inv):
     assert inv.last.get("reviews", []) == []
 
 
-def test_ac_per_11_no_capture_window_is_summarised(make_reconciler, inv):
+def test_ac_per_11_no_capture_window_is_not_summarised(make_reconciler, inv):
+    """AC-PER-43 (UI3-02) withdraws "summarised only": a private window keeps no summary text."""
     _no_capture_window(make_reconciler)
-    assert inv.last["window"]["scene_summary"] == "crew working in the module"
+    assert inv.last["window"]["scene_summary"] is None
+    assert inv.last["window"]["private"] is True
 
 
 def test_ac_per_11_no_capture_events_carry_no_evidence(make_reconciler, inv, storage):

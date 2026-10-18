@@ -232,8 +232,9 @@ def revisit_new_entity_rate(revisit: RevisitResult | None) -> float | None:
 GENERIC_PERSON_WORDS = frozenset(
     {"crew", "member", "person", "astronaut", "a", "an", "the", "in", "with", "wearing", "and"}
 )
-# GoldOmni's sleep-cue window carries this neutral summary (no sleep cue: only people[] can reveal it); summaries are
-# stored for private windows too (perception AC-PER-11), so the scorer finds the window by it.
+# GoldOmni's sleep-cue window carries this neutral summary (no sleep cue: only people[] can reveal it). Private
+# windows no longer store a summary (perception AC-PER-43, inventory-api AC-API-39), so the scorer finds the window
+# by its stored privacy_reason "sleep_cue"; the summary still identifies it in the reference snapshot.
 SLEEP_SUMMARY = "Crew member resting in the module"
 
 
@@ -273,7 +274,11 @@ def person_tracks_per_person(dataset: Dataset, snapshot: Snapshot) -> float:
 
 
 def _sleep_window_ids(snapshot: Snapshot) -> set[str]:
-    return {w.window_id for w in snapshot.windows if w.scene_summary == SLEEP_SUMMARY}
+    return {
+        w.window_id
+        for w in snapshot.windows
+        if w.scene_summary == SLEEP_SUMMARY or getattr(w, "privacy_reason", None) == "sleep_cue"
+    }
 
 
 def sleep_window_person_sightings(dataset: Dataset, snapshot: Snapshot) -> int | None:

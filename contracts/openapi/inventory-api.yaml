@@ -175,9 +175,13 @@ paths:
     get:
       summary: Full-text search over entities and observation windows (agent tool, memory tier 2 index)
       parameters: [{name: q, in: query, required: true, schema: {type: string}}, {name: limit, in: query, schema: {type: integer, default: 20}}]
-      responses: {'200': {description: hits}}
+      responses:
+        '200':
+          description: 'hits, entity and window lists interleaved. Window hits are {type: window, id, snippet, time, camera_id, is_private}. Private windows (AC-API-39) are never returned, so is_private is always false'
   /stats:
-    get: {summary: Counts by status/location/kind and open review items, responses: {'200': {description: stats}}}
+    get:
+      summary: 'Counts by status/location/kind, open review items, and windows {total, private} (AC-API-39)'
+      responses: {'200': {description: 'stats: {windows: {total, private}, by_status, by_kind, by_module, open_reviews_by_kind}'}}
   /media/{key}:
     get:
       summary: Proxy an image/crop from the object store
@@ -367,6 +371,7 @@ components:
         source: {type: string}
         entity_label: {type: [string, 'null']}
         entity_catalog_id: {type: [string, 'null']}
+        entity_kind: {enum: [object, person, null], description: "kind of the event's entity (AC-API-40); a person track has no entity_catalog_id"}
         from_location_name: {type: [string, 'null']}
         to_location_name: {type: [string, 'null']}
         location_role: {enum: [at, from_to, null], description: "'from_to' for a move (moved, or from != to), 'at' when it happened in one place, null without location (AC-API-38)"}
@@ -431,7 +436,18 @@ components:
         window:
           type: object
           required: [camera_id, t_start, t_end, model]
-          properties: {camera_id: {type: string}, t_start: {type: string, format: date-time}, t_end: {type: string, format: date-time}, scene_summary: {type: string}, transcript: {type: string}, audio_events: {type: array}, model: {type: string}, raw_uri: {type: string}}
+          properties:
+            camera_id: {type: string}
+            t_start: {type: string, format: date-time}
+            t_end: {type: string, format: date-time}
+            scene_summary: {type: [string, 'null'], description: 'null for a private window (AC-API-39 / AC-PER-43); the API stores null for a private window whatever is sent'}
+            transcript: {type: [string, 'null'], description: 'null for a private window'}
+            audio_events: {type: array, description: 'stored as an empty list for a private window'}
+            model: {type: string}
+            raw_uri: {type: [string, 'null']}
+            private: {type: [boolean, 'null'], description: 'AC-API-39: true for a no_capture window. The API also treats the window as private when privacy.no_capture is true, the camera location is no_capture, or any sighting/event is in a no_capture location'}
+            privacy_reason: {enum: [private_zone, sleep_cue, privacy_hold, null], description: coarse category only (never the cue text); any other value is stored as private_zone}
+            privacy: {type: [object, 'null'], description: 'older perception metadata {no_capture, reason, field}; only no_capture/reason are read'}
         assignments:
           type: array
           items:
@@ -445,7 +461,7 @@ components:
               sighting:
                 type: object
                 required: [seen_at, confidence]
-                properties: {location_id: {type: [string, 'null']}, seen_at: {type: string, format: date-time}, bbox: {type: [array, 'null']}, bbox_source: {enum: [detector, omni, null], description: 'optional (AC-API-37); ignored when bbox is null'}, confidence: {type: number}, frame_uri: {type: string}, description: {type: string}}
+                properties: {location_id: {type: [string, 'null']}, seen_at: {type: string, format: date-time}, bbox: {type: [array, 'null']}, bbox_source: {enum: [detector, omni, null], description: 'optional (AC-API-37); ignored when bbox is null'}, confidence: {type: number}, frame_uri: {type: string}, description: {type: [string, 'null'], description: 'stored as null in a private window'}}
               exemplar: {type: [object, 'null'], properties: {embedding: {type: array, items: {type: number}}, quality: {type: number}, crop_uri: {type: string}}}
               ref: {type: string, description: local ref so events/reviews in the same payload can point at new entities}
         events:

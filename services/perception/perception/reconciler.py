@@ -91,6 +91,8 @@ logger = logging.getLogger(__name__)
 
 SAME_OR_NEW = "same_or_new"
 SPEECH_ACT = "speech_act"
+# AC-PER-43 window.privacy_reason categories (the cue text itself is never sent)
+PRIVATE_ZONE, SLEEP_CUE, PRIVACY_HOLD = "private_zone", "sleep_cue", "privacy_hold"
 MAX_DECISION_OPTIONS = 4  # candidates offered to the decision model (+ NEW)
 # Candidates whose match score is within this of the best one are a near tie (identical twins: the same appearance
 # against both entities); among them the candidate last seen in the observation's own location ranks first.
@@ -475,19 +477,21 @@ class Reconciler:
             camera_location, obs.get("location_hint"), str(obs.get("scene_summary") or "")  # AC-PER-39/40
         )
         location, no_capture = scope.location, scope.no_capture
-        privacy: dict[str, Any] | None = {"no_capture": True, "reason": "location"} if no_capture else None
+        # AC-PER-43: one coarse category per private window ("private_zone" | "sleep_cue" | "privacy_hold")
+        privacy: dict[str, Any] | None = {"no_capture": True, "reason": PRIVATE_ZONE} if no_capture else None
         if not no_capture and self.resolver.names_private_place(str(obs.get("scene_summary") or "")):
             # AC-PER-23 review: the hint may name only the parent module while the summary says crew quarters
             logger.info("scene summary names a private place; window treated as no_capture",
                         extra={"camera_id": self.camera_id, "window": window.index})
             no_capture = True
-            privacy = {"no_capture": True, "reason": "scene_summary"}
+            privacy = {"no_capture": True, "reason": PRIVATE_ZONE}
         if not no_capture and (cue := find_sleep_cue(obs)):
             # AC-PER-37: a sleeping person or a sleeping bag in use means crew quarters (fail closed, over-private)
             logger.info("sleep cue; window treated as no_capture",
                         extra={"camera_id": self.camera_id, "window": window.index, "cue": cue[0], "field": cue[1]})
             no_capture = True
-            privacy = {"no_capture": True, "reason": "sleep_cue", "cue": cue[0], "field": cue[1]}
+            # AC-PER-43: the field path only; the cue word itself describes the private scene
+            privacy = {"no_capture": True, "reason": SLEEP_CUE, "field": cue[1]}
         hold = timedelta(seconds=max(float(self.config.privacy_hold_s or 0.0), 0.0))
         if no_capture and hold:
             until = window.t_end + hold
@@ -497,7 +501,7 @@ class Reconciler:
             logger.info("window within the privacy hold of a private window; treated as no_capture",
                         extra={"camera_id": self.camera_id, "window": window.index})
             no_capture = True
-            privacy = {"no_capture": True, "reason": "privacy_hold"}
+            privacy = {"no_capture": True, "reason": PRIVACY_HOLD}
         # AC-PER-41: after every privacy decision, so nothing carries into or out of a no_capture window
         self._module_carry.resolver = self.resolver
         self._module_carry.carry_s = float(self.config.module_carry_s or 0.0)
@@ -553,14 +557,17 @@ class Reconciler:
         speech_events, claims = self._speech_events(ctx, transcript, instances)
         events.extend(speech_events)
 
+        # AC-PER-43: a private window carries no text at all (summary, transcript, audio event labels)
         window_doc: dict[str, Any] = {
             "camera_id": self.camera_id,
             "t_start": _iso(window.t_start),
             "t_end": _iso(window.t_end),
-            "scene_summary": str(obs.get("scene_summary") or ""),
-            "transcript": "" if no_capture else (transcript or ""),
-            "audio_events": list(obs.get("audio_events") or []),
+            "scene_summary": None if no_capture else str(obs.get("scene_summary") or ""),
+            "transcript": None if no_capture else (transcript or ""),
+            "audio_events": [] if no_capture else list(obs.get("audio_events") or []),
             "model": model or omni.model or "unknown",
+            "private": bool(no_capture),
+            "privacy_reason": privacy["reason"] if privacy is not None else None,
         }
         window_doc["location"] = window_location  # AC-PER-41 metadata (inventory-api ignores unknown window fields)
         if privacy is not None:
@@ -1112,7 +1119,7 @@ class Reconciler:
         subject = {
             "camera_id": self.camera_id,
             "observed_at": observed_at,
-            "label": o.obj.get("label"),
+            "label": self._subject_label(ctx, o),
             "catalog_id": o.catalog_id,
             "location_id": o.location,
             "basis": "class_and_place_revisit",
@@ -1161,6 +1168,13 @@ class Reconciler:
                 ),
             }
         )
+
+    def _subject_label(self, ctx: _WindowContext, o: _Observed) -> Any:
+        """The label stored in the decision log: the omni label, or in a private window the catalog class name
+        (AC-PER-43: no model text from a private window is stored)."""
+        if ctx.no_capture:
+            return o.match.class_name or o.catalog_id
+        return o.obj.get("label")
 
     def _observation_state(self, o: _Observed, observed_at: str) -> dict[str, Any]:
         return {
@@ -1230,7 +1244,7 @@ class Reconciler:
         subject = {
             "camera_id": self.camera_id,
             "observed_at": _iso(ctx.frame_ts(o.frame_idx)),
-            "label": o.obj.get("label"),
+            "label": self._subject_label(ctx, o),
             "catalog_id": o.catalog_id,
             "location_id": o.location,
             "candidates": [
@@ -1314,7 +1328,8 @@ class Reconciler:
             # AC-PER-34: a linked detector box is exact; omni's own box is coarse (the UI draws it as approximate)
             "bbox_source": None if o.bbox is None else ("detector" if o.detection is not None else "omni"),
             "confidence": confidence,
-            "description": str(o.obj.get("description") or "")[:400],
+            # AC-PER-43: a sighting in a private window is a location-only fact
+            "description": None if ctx.no_capture else str(o.obj.get("description") or "")[:400],
         }
         frame_uri = ctx.frame_uri(o.frame_idx)
         if frame_uri:
@@ -1343,7 +1358,7 @@ class Reconciler:
                 "kind": "person" if is_person else "object",
                 "status": "unknown" if o.is_unknown else "provisional",
                 "label": (item.get("class_name") if item else None) or str(o.obj.get("label") or "unknown object"),
-                "description": str(o.obj.get("description") or ""),
+                "description": None if ctx.no_capture else str(o.obj.get("description") or ""),
                 "attributes": attributes,
             }
             if o.is_unknown:
@@ -1472,8 +1487,9 @@ class Reconciler:
                     "event_type": ev.get("type"),
                     "entity_ref": target.ref,
                     # AC-PER-35/36: the people[] descriptor, sanitised; none for people in a private zone
+                    # AC-PER-44: a person track's own movement names no actor (only a person handling an object)
                     "actor_desc": (sanitise_text(actor.get("appearance")) or None)
-                    if actor and not ctx.no_capture
+                    if actor and not ctx.no_capture and not self._is_person(target)
                     else None,
                     "from_location": target.previous_location if target.entity_id else None,
                     "to_location": to_location,

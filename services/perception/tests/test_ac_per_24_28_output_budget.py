@@ -596,7 +596,7 @@ def test_review_salvaged_private_window_stores_nothing(make_reconciler, inv, sto
         transcript="talking in my quarters")
     assert storage.objects == {}
     p = inv.last
-    assert p.get("reviews", []) == [] and p["window"].get("raw_uri") is None and p["window"]["transcript"] == ""
+    assert p.get("reviews", []) == [] and p["window"].get("raw_uri") is None and p["window"]["transcript"] is None  # AC-PER-43: null
 
 
 def test_review_cap_keeps_every_distinct_instance_before_repeats():

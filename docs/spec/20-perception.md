@@ -596,3 +596,39 @@ Residual risks accepted:
   was seen in two Cupola-caption windows; resolving it would have scored them wrong.
 - At the live cadence (5 s windows every 30 s) a carry reaches one window (25 s gap; the next is 55 s after the
   anchor). Zarya windows in the run carry no evidence at all (no hint, no name in the summary) and stay unresolved.
+
+## Amendment: private-window text redaction (UI review round 3, finding UI3-02)
+
+The round-3 UI review found that `no_capture` windows stored no media but still stored their `scene_summary`, which
+was full-text searchable (`/api/search?q=sleeping` returned "person is sleeping in a sleeping bag inside the Harmony
+Module"). AC-PER-11's "summarised only" is withdrawn: a private window keeps **no descriptive text**. AC-PER-43
+amends AC-PER-11, AC-PER-36 and AC-PER-37 (inventory-api side: AC-API-39).
+
+- AC-PER-43 **Private windows carry no text.** For a window that the reconciler treats as `no_capture` (any reason:
+  camera/hint/scene-summary private place, sleep cue, privacy hold) the ingest payload's `window` has:
+  - `private: true` and `privacy_reason` = one coarse category: `"private_zone"` (camera, hint or summary names a
+    no_capture place; was `location` / `scene_summary`), `"sleep_cue"` or `"privacy_hold"`. A capturable window has
+    `private: false` and `privacy_reason: null`.
+  - `scene_summary: null`, `transcript: null` and `audio_events: []` (the contract allows null for both texts;
+    audio event labels are model text too).
+  - `privacy = {"no_capture": true, "reason": <the same category>}` plus `field` for a sleep cue (e.g.
+    `people[1].appearance`, a field path). The matched cue word (`cue`, e.g. "sleeping bag") is **no longer sent**: it
+    is itself a description of the private scene. The INFO log keeps the cue word (logs are not searchable through
+    the API, and they never contain the model text).
+  - Sightings (known objects only; people are never sighted, AC-PER-36) are location-only facts:
+    `sighting.description = null` and, for a new entity, `new_entity.description = null` (its label is the catalog
+    class name, because unknown objects are skipped). An object description such as "laptop next to the sleeping
+    crew member" would otherwise describe the private scene.
+  - Decision-log subjects name the catalog class (`label` = class name), never the omni label text; speech-act
+    subjects already omit the utterance.
+  - Events keep `actor_desc = null` (AC-PER-36) and carry no text field.
+  *Accepted.* A private window's new object entity has no description, so a later same-or-new decision for it
+  has only the class, place and time (it was created from a private window; describing it from that window is
+  exactly what is withheld). Speech claims from a private window's transcript still become `moved` events (a
+  location fact; the words are not stored).
+- AC-PER-44 **A person's own movement has no actor** (amends AC-PER-35; orchestrator request, round 3). When the
+  entity of an omni event is a person track itself (the event's object label maps to the person class), the event
+  gets `actor_desc = null`: the person moved, nobody moved them. `actor_desc` is set only when a person handles an
+  object. Live example fixed: "person 87dbd193 moved by person (spacesuit, dark visor)".
+  *Eval:* AC-PER-38's scorer found the sleep-cue window by its stored summary; it now also matches the stored
+  `privacy_reason = "sleep_cue"` (the summary is null).

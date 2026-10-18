@@ -202,3 +202,48 @@ All additions are optional response fields, an optional ingest field and one new
       no actor (no `actor_desc` and no `actor_entity`).
   - **History event entries** carry the same two fields, and their summary reads `used at USOS by X`. Only moves
     read `moved A -> B by X`.
+
+## UI review round 3: private-window text redaction (docs/ui-review/round3 finding UI3-02)
+
+Private (`no_capture`) windows stored no media but kept their `scene_summary`, which `/search` (and so the agent's
+`search_observations`) returned. Perception now sends no text for them (perception AC-PER-43); the API enforces it
+on its own (defence in depth) and redacts what is already stored.
+
+- AC-API-39 **Private windows.**
+  - **Storage:** migration `005_private_windows.sql` (idempotent) adds `observation_window.is_private boolean not
+    null default false` and `privacy_reason text` (CHECK: null or `private_zone` / `sleep_cue` / `privacy_hold` /
+    `legacy_redaction`).
+  - **Ingest:** a window is private when **any** of these holds: `window.private` is true; `window.privacy.no_capture`
+    is true (older perception); the camera's location is no_capture; any sighting or event of the payload is private
+    under AC-API-19. A private window is stored with `is_private = true`, `privacy_reason` = the client's category
+    when it is one of the three, else `private_zone`, and `scene_summary`, `transcript` = null and
+    `audio_events = []` **whatever the client sent**. Every sighting of a private window is stored with
+    `description = null`; a new entity created by it gets `description = null`; its events get `actor_desc = null`;
+    and decision subjects lose the text keys `utterance`, `description`, `transcript`, `scene_summary`, `text` and
+    `evidence`. When the client flags the window private (or the camera is no_capture) every sighting and event is
+    private under AC-API-19 (no frame, crop, snapshot or evidence URI) and any review is 422 with nothing written.
+    A capturable window is stored with `is_private = false`, `privacy_reason = null`. The ingest audit row
+    gains `"private": true|false` (no text; the audit never held window text).
+  - **Search:** `/search` never returns a private window (`WHERE NOT w.is_private`), even if text were present.
+    No other endpoint returns window text.
+  - **Stats:** `/stats` gains `windows: {total, private}`: counting private windows is honest and reveals nothing.
+  - **Existing rows (migration 005, one-shot redaction).** A stored window is treated as private and redacted when
+    `raw_uri IS NULL` **and** none of its sightings has a `frame_uri` **and** (it has a sighting **or** its summary or
+    transcript matches the private-cue pattern: sleep/asleep/sleeping bag/bunk/crew quarters/CQ/toilet/WHC/
+    hygiene). Perception uploads the raw reply for every capturable window (AC-PER-13), so a window without a raw
+    reply and without any stored frame is a no_capture window; the cue pattern only adds windows with no sightings
+    at all (a sleeper alone is never sighted). Such rows get `is_private = true`, `privacy_reason =
+    'legacy_redaction'`, null summary and transcript, `audio_events = '[]'`; their sightings' descriptions are nulled;
+    descriptions of pipeline-created entities whose first sighting is in such a window and still equal that
+    sighting's description are nulled; and `agent_memory` rows whose `source_from..source_to` span covers such a window
+    are deleted (dreaming regenerates them without the text). The redaction runs only in the same transaction that
+    adds the `is_private` column, so a later restart never re-applies it to new rows (new rows follow the ingest
+    rule).
+  - *Accepted.* Over-privacy: a capturable window that sights an object in a no_capture zone, or whose speech claim
+    moves an item into one, loses its summary and transcript. Perception never places a capturable window's sighting
+    in a no_capture zone (AC-PER-11 zones), so in practice this is the speech-claim case.
+- AC-API-40 **`entity_kind` on events** (orchestrator request, round 3). Every event (`/events`, item detail
+  `events`) carries `entity_kind` = the event entity's `kind` (`"object"` | `"person"`). A person track has no
+  `entity_catalog_id`, so the agent and dashboard no longer guess. Optional and additive (OpenAPI `Event`).
+- **Window hits expose `is_private`** (always `false`, because private windows are never returned). The agent's
+  `search_observations` filters on exactly this name.

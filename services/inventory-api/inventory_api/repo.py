@@ -75,7 +75,7 @@ EVENT_COLUMNS = """event_id, event_type, entity_id, actor_entity, actor_desc, fr
 EVENT_SELECT = """
     SELECT ev.event_id, ev.event_type, ev.entity_id, ev.actor_entity, ev.actor_desc, ev.from_location,
            ev.to_location, ev.occurred_at, ev.confidence, ev.evidence_uri, ev.source, ev.created_at,
-           en.label AS entity_label, en.catalog_id AS entity_catalog_id,
+           en.label AS entity_label, en.catalog_id AS entity_catalog_id, en.kind AS entity_kind,
            lf.display_name AS from_location_name, lt.display_name AS to_location_name
       FROM event ev
       LEFT JOIN entity en ON en.entity_id = ev.entity_id
@@ -187,7 +187,8 @@ def serialize_event(row: dict[str, Any], bucket: str, url_for) -> dict[str, Any]
         "location_role": event_location_role(row["event_type"], row["from_location"], row["to_location"]),
         "actor_kind": event_actor_kind(row["source"], row["actor_desc"], row["actor_entity"]),
     }
-    for key in ("entity_label", "entity_catalog_id", "from_location_name", "to_location_name"):
+    # entity_kind (AC-API-40): "object" | "person"; a person track has no catalog_id, so clients need not guess
+    for key in ("entity_label", "entity_catalog_id", "entity_kind", "from_location_name", "to_location_name"):
         if key in row:
             out[key] = row[key]
     return out

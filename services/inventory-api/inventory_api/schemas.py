@@ -140,6 +140,11 @@ class WindowIn(_Model):
     audio_events: list[Any] = Field(default_factory=list)
     model: NonEmptyStr
     raw_uri: str | None = None
+    # AC-API-39: perception's privacy flag and coarse reason; ``privacy`` is the older metadata object
+    # ({"no_capture": true, ...}). The API decides privacy itself as well (routers/ingest.py).
+    private: bool | None = None
+    privacy_reason: str | None = None
+    privacy: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def _ordered(self) -> WindowIn:

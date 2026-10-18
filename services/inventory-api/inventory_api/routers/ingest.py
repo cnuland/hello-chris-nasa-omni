@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ingest", tags=["ingest"])
 
 PIPELINE_ACTOR = "pipeline"
+# AC-API-39: stored privacy_reason categories (perception AC-PER-43); anything else from a client -> private_zone
+PRIVACY_REASONS = frozenset({"private_zone", "sleep_cue", "privacy_hold"})
+# decision subject keys that hold model or speech text; dropped for a private window
+SUBJECT_TEXT_KEYS = frozenset({"utterance", "description", "transcript", "scene_summary", "text", "evidence"})
 EXEMPLAR_CAP = 20
 MAX_MERGE_HOPS = 16
 
@@ -217,7 +221,11 @@ def _target_key(ref: str | None, entity_id: UUID | None, survivors: dict[UUID, _
 
 
 def _decide_privacy(
-    body: IngestWindow, locs: _Locations, camera_location: str | None, survivors: dict[UUID, _Survivor]
+    body: IngestWindow,
+    locs: _Locations,
+    camera_location: str | None,
+    survivors: dict[UUID, _Survivor],
+    force: bool = False,
 ) -> _Privacy:
     """Work out what must not be stored, and reject reviews that would need a private image (422).
 
@@ -227,13 +235,14 @@ def _decide_privacy(
     - A review is private when its location, any sighting of its entity in this payload, the existing entity's stored
       last_location (when this payload does not sight it), or (when it names nothing else) the camera location is
       no_capture; or when its image is one that this payload drops for privacy.
+    - ``force`` (AC-API-39: the client flagged the window private): every part is private, and any review is 422.
     """
     sightings_by_target: dict[str, list[str | None]] = {}
     private_assignments: list[bool] = []
     dropped: set[str] = set()
     for a in body.assignments:
         loc = a.sighting.location_id or camera_location
-        private = locs.no_capture(loc)
+        private = force or locs.no_capture(loc)
         private_assignments.append(private)
         if private:
             dropped |= {u for u in (a.sighting.frame_uri, a.exemplar.crop_uri if a.exemplar else None) if u}
@@ -246,7 +255,7 @@ def _decide_privacy(
         locations += sightings_by_target.get(_target_key(ev.entity_ref, ev.entity_id, survivors) or "", [])
         if not any(locations):
             locations = [camera_location]
-        private = any(locs.no_capture(loc) for loc in locations) or (ev.evidence_uri in dropped)
+        private = force or any(locs.no_capture(loc) for loc in locations) or (ev.evidence_uri in dropped)
         private_events.append(private)
         if private and ev.evidence_uri:
             dropped.add(ev.evidence_uri)
@@ -258,11 +267,33 @@ def _decide_privacy(
             locations.append(survivors[rv.entity_id].last_location)
         if not any(locations):
             locations = [camera_location]
+        if force:
+            raise Unprocessable(f"reviews[{i}]: the window is private; a review cannot carry an image or description")
         if any(locs.no_capture(loc) for loc in locations):
             raise Unprocessable(f"reviews[{i}]: location is no_capture; a review cannot carry an image there")
         if rv.image_uri in dropped:
             raise Unprocessable(f"reviews[{i}]: image_uri was captured in a no_capture zone and is not stored")
     return _Privacy(private_assignments, private_events, dropped)
+
+
+def _window_privacy(
+    body: IngestWindow, locs: _Locations, camera_location: str | None, privacy: _Privacy
+) -> tuple[bool, str | None]:
+    """AC-API-39: (is_private, privacy_reason). Private when the client says so (``private`` or the older
+    ``privacy.no_capture``), the camera's location is no_capture, or any sighting/event is private (AC-API-19). A
+    client cannot make a window capturable that the API sees as private."""
+    w = body.window
+    claimed = bool(w.private) or bool((w.privacy or {}).get("no_capture"))
+    private = (
+        claimed
+        or locs.no_capture(camera_location)
+        or any(privacy.private_assignments)
+        or any(privacy.private_events)
+    )
+    if not private:
+        return False, None
+    reason = w.privacy_reason or (w.privacy or {}).get("reason")
+    return True, reason if reason in PRIVACY_REASONS else "private_zone"
 
 
 def _request_digest(body: IngestWindow) -> str:
@@ -334,13 +365,29 @@ def _record_window(conn: psycopg.Connection, body: IngestWindow) -> dict[str, An
         "SELECT location_id FROM camera WHERE camera_id = %s", (body.window.camera_id,)
     ).fetchone()
     camera_location = camera_row["location_id"] if camera_row else None
-    privacy = _decide_privacy(body, locs, camera_location, survivors)
+    w0 = body.window
+    claimed = bool(w0.private) or bool((w0.privacy or {}).get("no_capture")) or locs.no_capture(camera_location)
+    privacy = _decide_privacy(body, locs, camera_location, survivors, force=claimed)
 
     w = body.window
+    private_window, privacy_reason = _window_privacy(body, locs, camera_location, privacy)
+    # AC-API-39: a private window keeps no text, whatever the client sent
     window_id = conn.execute(
         """INSERT INTO observation_window (camera_id, t_start, t_end, scene_summary, transcript, audio_events, model,
-               raw_uri) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING window_id""",
-        (w.camera_id, w.t_start, w.t_end, w.scene_summary, w.transcript, jsonb(w.audio_events), w.model, w.raw_uri),
+               raw_uri, is_private, privacy_reason) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+           RETURNING window_id""",
+        (
+            w.camera_id,
+            w.t_start,
+            w.t_end,
+            None if private_window else w.scene_summary,
+            None if private_window else w.transcript,
+            jsonb([] if private_window else w.audio_events),
+            w.model,
+            w.raw_uri,
+            private_window,
+            privacy_reason,
+        ),
     ).fetchone()["window_id"]
 
     ref_map: dict[str, UUID] = {}
@@ -366,7 +413,7 @@ def _record_window(conn: psycopg.Connection, body: IngestWindow) -> dict[str, An
                     ne.kind,
                     ne.status,
                     ne.label,
-                    ne.description,
+                    None if private_window else ne.description,
                     jsonb(ne.attributes),
                     s.location_id,
                     s.seen_at,
@@ -435,7 +482,7 @@ def _record_window(conn: psycopg.Connection, body: IngestWindow) -> dict[str, An
             """INSERT INTO sighting (entity_id, window_id, location_id, seen_at, bbox, bbox_source, confidence,
                    frame_uri, description) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (entity_id, window_id, s.location_id, s.seen_at, s.bbox, s.bbox_source, s.confidence, frame_uri,
-             s.description),
+             None if private_window else s.description),
         )
         # Appearance vectors of people captured in crew quarters / the WHC are not kept (they are derived from
         # private pixels). Object embeddings are kept without their crop, because dedup needs them.
@@ -470,7 +517,7 @@ def _record_window(conn: psycopg.Connection, body: IngestWindow) -> dict[str, An
                     (
                         ev.event_type,
                         ev_entity,
-                        ev.actor_desc,
+                        None if private_window else ev.actor_desc,
                         ev.from_location,
                         ev.to_location,
                         ev.occurred_at,
@@ -519,7 +566,14 @@ def _record_window(conn: psycopg.Connection, body: IngestWindow) -> dict[str, An
         conn.execute(
             """INSERT INTO decision_log (question, subject, choice, probabilities, model, latency_ms)
                VALUES (%s, %s, %s, %s, %s, %s)""",
-            (d.question, jsonb(d.subject), d.choice, jsonb(d.probabilities), d.model, d.latency_ms),
+            (
+                d.question,
+                jsonb({k: v for k, v in d.subject.items() if k not in SUBJECT_TEXT_KEYS} if private_window else d.subject),
+                d.choice,
+                jsonb(d.probabilities),
+                d.model,
+                d.latency_ms,
+            ),
         )
 
     for su in body.stock_updates:
@@ -550,6 +604,7 @@ def _record_window(conn: psycopg.Connection, body: IngestWindow) -> dict[str, An
             "decisions": len(body.decisions),
             "stock_keys": [{"catalog_id": su.catalog_id, "location_id": su.location_id} for su in body.stock_updates],
             "privacy_dropped_uris": len(privacy.dropped_uris),
+            "private": private_window,
         },
     )
     return {"window_id": window_id, "entities": entities}

@@ -190,3 +190,14 @@ Reported, not changed (they need spec or contract owners):
 - **`/ingest/candidates`** could break similarity ties deterministically by recency or zone on the API side as well.
   This is optional now that perception ranks near ties itself.
 - **`dashboard` has no ESLint config.** `make lint` uses `tsc --noEmit` for it.
+
+## Private-window text redaction (UI3-02) (2026-10-18)
+
+- `tests/e2e/test_e2e_private_windows.py::test_e2e_12`: the eval scene's sleep-cue window (GoldOmni "dark hair,
+  sleeping in a blue sleeping bag" under "Crew member resting in the module") ends with `is_private`, no summary,
+  transcript, audio events or raw reply; its object sightings exist with a location and no frame/description;
+  `/search` for "resting", "sleeping", the full summary returns no window hit; capturable windows stay searchable with
+  `is_private: false`; `/stats.windows.private` equals the private row count; each private ingest is audited with
+  `private: true`.
+- `make test`: inventory-api 465, perception 1040, agent 560, eval 401 + 1 skipped (both gates PASSED), dashboard
+  389, e2e 28. All suites passed.

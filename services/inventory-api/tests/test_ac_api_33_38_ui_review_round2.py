@@ -571,7 +571,7 @@ def test_ac_api_37_runner_upgrades_a_003_database_with_data_twice():
                          ([str(s), str(t)],))
         for _ in range(2):
             applied = apply_migrations(url, CONTRACTS_DB)
-            assert applied[-1] == "004_ui_review_round2.sql"
+            assert "004_ui_review_round2.sql" in applied  # 005 (AC-API-39) now follows it
         with psycopg.connect(url, autocommit=True) as conn:
             assert conn.execute("SELECT count(*), count(bbox_source) FROM sighting").fetchone() == (1, 0)
             assert conn.execute("SELECT count(*) FROM entity").fetchone()[0] == 2

@@ -688,7 +688,7 @@ def test_ac_per_23_private_hint_window_stores_nothing(make_reconciler, inv, stor
     assert storage.objects == {}, list(storage.objects)
     p = inv.last
     assert p.get("reviews", []) == []
-    assert p["window"].get("raw_uri") is None and p["window"]["transcript"] == ""
+    assert p["window"].get("raw_uri") is None and p["window"]["transcript"] is None  # AC-PER-43: null
     for a in p["assignments"]:
         assert a["sighting"].get("frame_uri") is None
         assert (a.get("exemplar") or {}).get("crop_uri") is None

@@ -40,6 +40,8 @@ class PredWindow:
     t_end: datetime
     raw_uri: str | None = None
     scene_summary: str | None = None
+    # inventory-api AC-API-39: private windows store no summary, so the sleep-cue window is found by this instead
+    privacy_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -123,11 +125,12 @@ def read_snapshot(database_url: str) -> Snapshot:
             "FROM sighting ORDER BY seen_at, sighting_id"
         ):
             snap.sightings.append(PredSighting(sid, resolve(eid), seen_at, loc, _bbox(bbox), wid, frame_uri))
-        for wid, t_start, t_end, raw_uri, summary in conn.execute(
-            "SELECT window_id::text, t_start, t_end, raw_uri, scene_summary FROM observation_window "
-            "ORDER BY t_start, window_id"
+        # to_jsonb(w): privacy_reason (migration 005) is read only when the column exists
+        for wid, t_start, t_end, raw_uri, summary, reason in conn.execute(
+            "SELECT window_id::text, t_start, t_end, raw_uri, scene_summary, to_jsonb(w)->>'privacy_reason' "
+            "FROM observation_window w ORDER BY t_start, window_id"
         ):
-            snap.windows.append(PredWindow(wid, t_start, t_end, raw_uri, summary))
+            snap.windows.append(PredWindow(wid, t_start, t_end, raw_uri, summary, reason))
         for etype, eid, occurred_at, actor, to_loc in conn.execute(
             "SELECT event_type, entity_id::text, occurred_at, actor_desc, to_location FROM event "
             "ORDER BY occurred_at, event_id"
@@ -196,6 +199,7 @@ def snapshot_to_dict(snap: Snapshot, **meta: object) -> dict:
                 "t_end": _ts(w.t_end),
                 "raw_uri": w.raw_uri,
                 "scene_summary": w.scene_summary,
+                **({"privacy_reason": w.privacy_reason} if w.privacy_reason else {}),
             }
             for w in snap.windows
         ],
@@ -262,7 +266,8 @@ def snapshot_from_dict(d: dict) -> Snapshot:
     for w in d.get("windows", []):
         snap.windows.append(
             PredWindow(
-                w["window_id"], _parse_ts(w["t_start"]), _parse_ts(w["t_end"]), w.get("raw_uri"), w.get("scene_summary")
+                w["window_id"], _parse_ts(w["t_start"]), _parse_ts(w["t_end"]), w.get("raw_uri"), w.get("scene_summary"),
+                w.get("privacy_reason"),
             )
         )
     rv = d.get("revisit")

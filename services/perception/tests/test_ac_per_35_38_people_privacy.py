@@ -287,13 +287,13 @@ def test_ac_per_37_real_gemma_sleeping_crew_window_is_no_capture(make_reconciler
                      hint="Harmony")
     assert storage.objects == {}, list(storage.objects)
     w = payload["window"]
-    assert w.get("raw_uri") is None and w["transcript"] == ""
+    assert w.get("raw_uri") is None and w["transcript"] is None  # AC-PER-43: null
     assert payload["reviews"] == []
     assert person_assignments(payload, inv) == []
     assert [a["new_entity"]["catalog_id"] for a in payload["assignments"]] == ["laptop"]  # known object still sighted
     assert payload["assignments"][0]["sighting"].get("frame_uri") is None
-    assert w["privacy"] == {"no_capture": True, "reason": "sleep_cue", "cue": "sleeping bag",
-                            "field": "people[1].appearance"}
+    # AC-PER-43: the cue word ("sleeping bag") is no longer sent, only the field path
+    assert w["privacy"] == {"no_capture": True, "reason": "sleep_cue", "field": "people[1].appearance"}
     rec = next(r for r in caplog.records if "sleep cue" in r.getMessage())
     assert rec.levelno == logging.INFO
     assert GEMMA_SLEEPING not in rec.getMessage() and GEMMA_SLEEPING not in str(rec.__dict__)
@@ -345,8 +345,8 @@ def test_ac_per_37_no_sleep_cue_keeps_the_window_capturable(make_reconciler, inv
 
 
 @pytest.mark.parametrize("kwargs,reason", [
-    ({"hint": "NOD2S5"}, "location"),
-    ({"summary": "view into the crew quarters"}, "scene_summary"),
+    ({"hint": "NOD2S5"}, "private_zone"),  # AC-PER-43 coarse category (was "location")
+    ({"summary": "view into the crew quarters"}, "private_zone"),  # (was "scene_summary")
 ])
 def test_ac_per_37_other_private_reasons_are_recorded(make_reconciler, inv, storage, kwargs, reason):
     payload, _ = run(make_reconciler("cam-handheld"), **kwargs)

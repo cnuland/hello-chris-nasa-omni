@@ -557,3 +557,52 @@ docs/spec/10-inventory-api.md, plus the AC-API-25 order amendment. Perception's 
 - **Live data:** review 85c4f568 (`d34865e0...` into `99eba10e...`) can now be undone with
   `POST /items/d34865e0-e208-486f-a248-b8873bd92fc9/unmerge`. Its merge audit predates the watermark, so the
   window-time rule applies.
+
+## Private-window text redaction (UI3-02) — AC-API-39, AC-API-40 (2026-10-18)
+
+- **Finding:** UI3-02 (P2). No_capture windows stored no media but kept `scene_summary`, which `/search` returned
+  (`q=sleeping` -> 2615840b "person is sleeping in a sleeping bag inside the Harmony Module", 5c1d9aa4). The
+  transcript was already blank for private windows (perception sent ""); 0 live private windows held one.
+- **Spec:** AC-API-39 (private windows: storage, ingest rule, search, stats, one-shot redaction of existing rows),
+  AC-API-40 (`entity_kind` on events, orchestrator request), `is_private` on window hits (name fixed for the agent).
+- **Red:** `tests/test_ac_api_39_private_windows.py`, 12 tests first (KeyError/`is_private` missing/stored text), then
+  `entity_kind` (1), then 2 adversarial-review tests.
+- **Green:**
+  - `contracts/db/005_private_windows.sql`: `is_private boolean not null default false`, `privacy_reason text` with
+    CHECK (`private_zone|sleep_cue|privacy_hold|legacy_redaction`), partial index. Redaction runs only in the
+    transaction that adds `is_private` (one-shot; tested: a row inserted after the migration survives a re-run).
+  - Redaction rule: `raw_uri IS NULL` AND no sighting with a `frame_uri` AND (has a sighting OR summary/transcript
+    matches `\m(sleep*|asleep|bunks?|crew quarters|quarters|cqs?|toilets?|whc|hygiene|napping|dozing|slumber*)\M`).
+    Also nulls those windows' sighting descriptions, the description of pipeline entities created there (first
+    sighting there, description unchanged), sets `audio_events='[]'`, and deletes overlapping `agent_memory` rows.
+    Tested on a fresh 001..004 DB holding a sleep window, a hold window, a sighting-less "CQ" window (all redacted),
+    and three look-alikes that must stay (capturable "sleeping bag stowed", no raw + no sighting + no cue, no raw but a
+    stored frame).
+  - Ingest (`routers/ingest.py`): window private if `window.private`, `window.privacy.no_capture`, camera location
+    no_capture, or any sighting/event private (AC-API-19). Then summary/transcript null, audio `[]`, sighting and
+    new-entity descriptions null, `actor_desc` null, decision-subject text keys dropped, audit `detail.private`.
+  - `/search`: `WHERE NOT w.is_private`; window hits carry `is_private: false`. `/stats`: `windows {total, private}`.
+  - `/events` and item-detail events: `entity_kind`.
+  - OpenAPI: window `private`/`privacy_reason`/`privacy`, nullable texts, search/stats descriptions, `Event.entity_kind`.
+- **Live count (read-only SELECT on the cluster, 2026-10-18):** the rule matches **8 of 102** windows (5c1d9aa4
+  03:04:43, 540b29b4 03:05:13, 2615840b 03:19:43, 24c4a8cb 03:20:13, 519e16b7 03:34:43, 2f687b46 03:35:13, 43e2853c
+  03:49:43, 67f43a0b 03:50:13: three sleep windows and their privacy-hold neighbours, one per tour pass), 22 sighting
+  descriptions, 8 entity descriptions, 0 agent_memory rows. The cue pattern alone would have caught only the 4 sleep
+  windows and missed the 4 hold windows (neutral summaries), so the media-based rule is the primary one.
+
+### Adversarial self-review
+| # | Path | Finding / resolution |
+|---|------|----------------------|
+| 1 | `events.evidence` | Not a column; `EventIn` has no such field and extra fields are ignored, so omni evidence text is never stored. No change. |
+| 2 | Review descriptions | **Leak (fixed):** a window flagged private but in a capturable location (sleep cue in NOD2) could still store a review (description + image). Now 422, nothing written (`test_review_private_window_review_is_rejected_even_outside_no_capture_zones`). |
+| 3 | Media for a flagged window | **Leak (fixed):** frame/crop/evidence URIs were dropped only for no_capture *locations*; a window flagged private by the client kept them. The flag now forces every part private (`test_review_private_window_drops_frames_crops_and_evidence_too`). |
+| 4 | `audit_log` | Ingest audits ids, counts, the request sha256 and now `private`; never the payload text. The create audit holds the entity label (catalog class name; perception skips unknown objects in private windows). Live: 1 old row with label "sleeping bag" (window a8838eaf, a capturable window from before the sleep-cue feature): an inventory label, left as is. |
+| 5 | `decision_log` | Text keys (`utterance`, `description`, `transcript`, `scene_summary`, `text`, `evidence`) dropped for a private window; perception also sends the class name as `label`. Live: 75 speech-act subjects hold an utterance, none from a private window (0 match "sleep"). |
+| 6 | `agent_memory` (dreaming) | Dreaming reads `observation_window` directly (not through the API); with the text nulled it has nothing to quote. The migration deletes memory rows whose span covers a redacted window (live: 0 rows). |
+| 7 | Sighting / entity text in item detail, history, `/items?q=`, entity search | Null for private windows (ingest + migration). |
+| 8 | Request digest | `request_sha256` is a hash of the whole payload (embeddings included); not reversible. Accepted. |
+| 9 | Over-privacy | A capturable window with a speech claim into a no_capture zone loses its text. Accepted (fail closed). |
+
+### Test counts
+- inventory-api: 465 passed (450 + 15 new). One existing assertion edited: the 004 runner test asserted 004 was the
+  last migration file; it now asserts 004 is applied (005 follows).

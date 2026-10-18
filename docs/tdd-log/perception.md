@@ -984,3 +984,24 @@ No window had the wrong module; all 14 misses stayed at segment level (USOS).
     `ui3_*` tests), in files this change does not touch.
   - `make eval`: gate PASSED, with every metric unchanged.
 - **New env vars:** `PERCEPTION_MODULE_CARRY_S` (45) and `PERCEPTION_MODULE_CARRY_CONFIDENCE` (0.5).
+
+## Private-window text redaction (UI3-02) — AC-PER-43, AC-PER-44 (2026-10-18)
+
+- **Spec:** AC-PER-43 withdraws AC-PER-11's "summarised only". A private window's payload has `private: true`,
+  `privacy_reason` (`private_zone` | `sleep_cue` | `privacy_hold`), `scene_summary`/`transcript` null,
+  `audio_events` [], no cue word in `privacy` (field path only), null sighting and new-entity descriptions, and the
+  catalog class as decision-subject `label`. AC-PER-44 (orchestrator request): a person track's own movement gets
+  `actor_desc = null`.
+- **Red:** `tests/test_ac_per_43_private_window_text.py`, 7 tests (sleep cue, private zone by hint and by summary,
+  privacy hold, existing entity + same_or_new decision, AC-PER-36 re-check, capturable control), every one asserting
+  that a marker word placed in all model text fields is absent from the whole payload. Then 1 test for AC-PER-44
+  ("spacesuit, dark visor" on the person's own `moved`).
+- **Green:** `reconciler.py` (`_build` window doc, `_assignment`, `_subject_label`, `_visual_events`).
+- **AC-PER-36 verified:** no person sighting and `actor_desc` null in a private window (re-tested on the new path).
+- **Existing tests edited (spec change, each marked AC-PER-43):** `transcript == ""` -> `is None` (3 places);
+  `test_ac_per_11_no_capture_window_is_summarised` -> `..._is_not_summarised`; `privacy` no longer has `cue`; the
+  reasons `location`/`scene_summary` are now `private_zone`.
+- **eval (outside this component, minimal):** the scorer found the sleep-cue window by its stored summary, which is
+  now null. `PredWindow.privacy_reason` (read from the DB when the column exists, exported only when set) and
+  `_sleep_window_ids` also match `privacy_reason == "sleep_cue"`. Committed baseline unchanged; gate PASSED.
+- **Counts:** perception 1040 passed (1032 + 8).

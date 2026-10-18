@@ -24,7 +24,7 @@ def search(
     limit: int = Query(20, ge=1, le=200),
 ) -> list[dict[str, Any]]:
     """Entity hits (label/description/catalog substring match) and observation-window hits (English full-text over
-    scene_summary + transcript). The two ranked lists are interleaved so both kinds stay visible under ``limit``."""
+    scene_summary + transcript; private windows never, AC-API-39). The two ranked lists are interleaved so both kinds stay visible under ``limit``."""
     q = q.strip()
     if not q:
         return []
@@ -48,7 +48,7 @@ def search(
                        ts_headline('english', {_WINDOW_DOC}, query, %(opts)s) AS snippet,
                        ts_rank(to_tsvector('english', {_WINDOW_DOC}), query) AS rank
                   FROM observation_window w, plainto_tsquery('english', %(q)s) query
-                 WHERE to_tsvector('english', {_WINDOW_DOC}) @@ query
+                 WHERE NOT w.is_private AND to_tsvector('english', {_WINDOW_DOC}) @@ query
                  ORDER BY rank DESC, w.t_start DESC
                  LIMIT %(limit)s""",
             {"q": q, "opts": _HEADLINE_OPTS, "limit": limit},
@@ -69,6 +69,7 @@ def search(
             "snippet": (w["snippet"] or "").strip(),
             "time": w["time"],
             "camera_id": w["camera_id"],
+            "is_private": False,  # AC-API-39: private windows are never returned; the flag is explicit for clients
         }
         for w in windows
     ]
@@ -79,7 +80,7 @@ def search(
 @router.get("/stats")
 def stats(ctx: Ctx) -> dict[str, dict[str, int]]:
     """Counts by status (all entities), by kind and by module (live entities only, zones rolled up to their module),
-    and open review items by kind."""
+    open review items by kind, and observation windows (total and private, AC-API-39: a count reveals nothing)."""
     hidden = list(HIDDEN_STATUSES)
     with ctx.db.connection() as conn:
         by_status = {
@@ -116,7 +117,11 @@ def stats(ctx: Ctx) -> dict[str, dict[str, int]]:
                 "SELECT kind AS k, count(*) AS n FROM review_item WHERE status = 'open' GROUP BY kind"
             )
         }
+        windows = conn.execute(
+            "SELECT count(*) AS total, count(*) FILTER (WHERE is_private) AS private FROM observation_window"
+        ).fetchone()
     return {
+        "windows": {"total": windows["total"], "private": windows["private"]},
         "by_status": {s: by_status.get(s, 0) for s in EntityStatus.__args__},
         "by_kind": {k: by_kind.get(k, 0) for k in EntityKind.__args__},
         "by_module": by_module,
