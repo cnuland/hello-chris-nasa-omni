@@ -1,0 +1,401 @@
+[
+  {
+    "id": "UI-01",
+    "priority": "P1",
+    "title": "Chat follow-up questions in the same conversation return \"I don't have a record of that.\"",
+    "page": "/chat",
+    "steps": "Open /chat. Ask \"Where is the laptop right now?\" and wait for the answer. In the same conversation ask \"Where is the multimeter usually kept?\" (and the other questions in the review list).",
+    "expected": "Each question is answered from the database. The multimeter question should say the catalog home is LAB1 (Destiny), which is what the agent answers in a fresh conversation.",
+    "actual": "All 4 follow-up questions came back as \"I don't have a record of that.\" with no citations, each within 2-5 s. Asked in a fresh conversation, the multimeter question was answered correctly with a catalog citation (69-chat-fresh-q0-done). Whenever there is earlier history, the agent stops calling tools usefully, so the chat breaks after the first question.",
+    "suggested_fix": "ChatPage.send() posts the whole transcript, including long markdown assistant replies full of UUIDs, as `messages`. Option 1: send only the last N turns, or send user turns plus a short summary, and/or use the agent's session_id instead of replaying prose. Option 2: fix the agent's system prompt or tool loop so that a new user turn always triggers tool calls. Add an e2e test that asks two questions in sequence.",
+    "files": [
+      "dashboard/src/pages/ChatPage.tsx",
+      "dashboard/src/api/client.ts (streamChat)",
+      "services/agent"
+    ],
+    "screenshot": [
+      "61-chat-q1.png",
+      "62-chat-q2.png",
+      "63-chat-q3.png",
+      "64-chat-q4.png",
+      "65-chat-q5.png",
+      "69-chat-fresh-q0-done.png"
+    ]
+  },
+  {
+    "id": "UI-02",
+    "priority": "P1",
+    "title": "Chatbot cannot answer actor and time questions (\"Who used the drill?\", \"What changed in the last hour?\")",
+    "page": "/chat",
+    "steps": "In a fresh /chat session, ask \"What changed in the last hour?\" and then \"Who used the drill?\". The same questions can also be sent with POST /agent/chat/stream.",
+    "expected": "R8: answers grounded in events. Expected the 2 operator events in the last hour (move of af8031d3 USOS->NOD1 at 00:06:31Z, item 8b2949a6 added at 00:07:48Z) and the people (actor_desc) linked to drill use or move events, each with citations.",
+    "actual": "\"What changed in the last hour?\" took 64 s. It listed unknown objects last seen about 70 min earlier, left out both real changes, and had no event citations. One direct API call returned `{\"detail\":\"llm failure\"}`. \"Who used the drill?\" took 57 s and dumped a markdown list of drill entities, never saying who. \"What unknown objects are in Node 1?\" called list_unknowns with location=\"Node 1\" (a display name, not the NOD1 code) and replied \"I don't have a record of that.\" instead of \"No open unknowns in Node 1 (NOD1)\".",
+    "suggested_fix": "Agent side: add or use an events tool (GET /events?since=&entity=) for \"changed / who moved / who used\" intents, and resolve module names to location codes before tool calls. Return an explicit 'none found in <scope>' reply. Dashboard side: show the in-stream `error` event inline in the conversation, not only as a toast.",
+    "files": [
+      "services/agent",
+      "dashboard/src/pages/ChatPage.tsx"
+    ],
+    "screenshot": [
+      "65-chat-q5.png",
+      "69-chat-fresh-q1-done.png",
+      "63-chat-q3.png"
+    ]
+  },
+  {
+    "id": "UI-03",
+    "priority": "P1",
+    "title": "Possible-duplicate cards don't give the operator enough to decide a merge",
+    "page": "/review",
+    "steps": "Open /review and scroll to a POSSIBLE DUPLICATE card, e.g. review 9d1680e5 (headset) or 9507864f (camera).",
+    "expected": "AC-UI-7: the subject and each candidate shown side by side with image, label, location, last-seen UTC, confidence and a link, so the operator can tell them apart and merge.",
+    "actual": "Only 14 of the 37 duplicate reviews have any candidates. The other 23 (e.g. \"18 live 'camera' entities would exceed the expected count of 4\") show no candidates at all, so merging is impossible and only Classify or Dismiss remain. When candidates do exist, they appear as a strip of identical captions and buttons (5x \"headset\" / \"Merge into headset\") with no location, time, confidence or id, and the subject image has no caption. Nothing on the card links to the item detail.",
+    "suggested_fix": "ReviewCard: draw the subject in a left column and the candidates in a grid on the right. Give each candidate tile its image, catalog name, last_location_name (code), formatUtc(last_seen_at), ConfidenceBar, an id prefix and a <Link to=/items/:id>, and make the merge button label unique (\"Merge into headset 163e1c50 (NOD1)\"). For over-count reviews with no candidates, have the API return the N nearest same-class entities as candidates, or link to the inventory filtered by catalog_id. Add a \"Not a duplicate / keep\" action.",
+    "files": [
+      "dashboard/src/pages/ReviewPage.tsx",
+      "dashboard/src/styles/theme.css",
+      "services/inventory-api (review candidates)"
+    ],
+    "screenshot": [
+      "41-review-duplicate-headset-candidates.png",
+      "42-review-duplicate-laptop.png",
+      "43-review-duplicate-no-candidates.png"
+    ]
+  },
+  {
+    "id": "UI-04",
+    "priority": "P2",
+    "title": "\"Person with blue shirt moved item at TIME\" is rarely shown and reads badly when it is",
+    "page": "/items/:id, /",
+    "steps": "Open /items/ec044362-a184-449b-a016-8d011373ee10 (person) and /items/da9709e7-4ed6-4b2d-beb0-aa6c814ae764 (laptop with 'used' events). Look at the inventory 'Moved by' column.",
+    "expected": "Diagram 'Items last seen': a sentence such as \"Person (blue shirt, headset) moved laptop from USOS to NOD1 at 22:50:05 UTC\" with the saved frame, shown for move, use and hand-over events.",
+    "actual": "The Movements section only lists event_type=='moved'. The laptop's 2 'used' events (\"by Blue shirt, black shorts, headset\") show \"No recorded movements\" and \"Last moved by \u2014\". The actor text is pasted in raw: \"Moved by wearing a blue tank top and a headset at \u2026\". A missing destination shows as \"USOS \u2192 ?\". Evidence frames exist on events (evidence_url) but are not shown in Movements. Only 2 of 125 rows fill the Moved-by column.",
+    "suggested_fix": "ItemDetailPage: rename the section to 'Activity' and include moved, used and handed_over events. Render the actor as \"person (<actor_desc>)\" and link actor_entity when present. Write \"to unknown location\" instead of '?'. Show evidence_url as a Thumb. Fill the inventory Moved-by column from the latest move, use or hand-over event (API last_moved_by or a new last_actor field).",
+    "files": [
+      "dashboard/src/pages/ItemDetailPage.tsx",
+      "dashboard/src/pages/InventoryPage.tsx",
+      "dashboard/src/lib/format.ts"
+    ],
+    "screenshot": [
+      "22-detail-person-bluetank-moved.png",
+      "20-detail-laptop-used.png",
+      "23-detail-moved-actor.png"
+    ]
+  },
+  {
+    "id": "UI-05",
+    "priority": "P2",
+    "title": "Chat streaming isn't perceptible: up to 64 s of '\u2026' and then the whole answer at once",
+    "page": "/chat",
+    "steps": "Ask \"Where is the laptop right now?\" or \"Who used the drill?\".",
+    "expected": "AC-UI-8 streaming reply: tokens appear progressively, or at least a visible status (\"searching inventory\u2026\", tool name) and a Stop button.",
+    "actual": "The first token arrived at the same moment as the last one (23.5 s for Q1, 57 s for the drill question, 64 s for the last-hour question; measured both in the browser and with curl on /agent/chat/stream). The agent buffers the whole reply and then sends it as token events. The UI shows a bare '\u2026' with no spinner, elapsed time or cancel button.",
+    "suggested_fix": "Agent: stream LLM tokens as they are generated and emit `status` or tool_call events. ChatPage: render a typing indicator with elapsed seconds and the tool currently running, and add a Stop button that calls abortRef.current.abort().",
+    "files": [
+      "dashboard/src/pages/ChatPage.tsx",
+      "dashboard/src/lib/sse.ts",
+      "services/agent"
+    ],
+    "screenshot": [
+      "68-chat-fresh-q1-waiting.png",
+      "61-chat-q1.png"
+    ]
+  },
+  {
+    "id": "UI-06",
+    "priority": "P2",
+    "title": "Chat shows raw Markdown and UUIDs, and citations are opaque ids",
+    "page": "/chat",
+    "steps": "Ask \"Where is the laptop right now?\".",
+    "expected": "A readable answer (bold or list rendered, no backticks). Citations show item label, location and UTC time and link to the item.",
+    "actual": "The reply shows literal `**US Orbital Segment (USOS)**` and backtick-wrapped full UUIDs. The citation chips read \"Item da9709e7 \u00b7 2026-10-17 22:51:03 UTC\" with no label or location, so the operator can't tell the 5 laptops apart. The citations are clickable and do open the item.",
+    "suggested_fix": "Render assistant text with a small safe markdown renderer (no raw HTML), or tell the agent to answer in plain text. Turn entity_id mentions in the text into Links. In Citations, look up the label and last_location (getItem, cached) and render \"laptop \u00b7 NOD1 \u00b7 23:00:27 UTC\".",
+    "files": [
+      "dashboard/src/pages/ChatPage.tsx (Citations, msg-text)",
+      "services/agent (prompt)"
+    ],
+    "screenshot": [
+      "61-chat-q1.png",
+      "66-chat-citation-opens-item.png"
+    ]
+  },
+  {
+    "id": "UI-07",
+    "priority": "P2",
+    "title": "Last-seen time is only relative (\"1 h ago\" on every row); UTC is hover-only",
+    "page": "/",
+    "steps": "Load /. Look at the Last seen column.",
+    "expected": "Trustworthy UTC timestamps visible at a glance for operators, e.g. \"23:01:41 UTC \u00b7 1 h ago\".",
+    "actual": "All 125 rows read \"1 h ago\" (the data spans 22:41-23:01 UTC), so the column can't tell items apart. The exact UTC time is only in a title tooltip, which keyboard and touch users can't reach. The detail page does the same for 'Last seen'.",
+    "suggested_fix": "InventoryPage ItemRow and ItemDetailPage facts: render <time dateTime>{formatUtc(...)}</time> with the relative time as secondary muted text. Consider an HH:MM:SS UTC column with the date shown once per group.",
+    "files": [
+      "dashboard/src/pages/InventoryPage.tsx",
+      "dashboard/src/pages/ItemDetailPage.tsx",
+      "dashboard/src/lib/format.ts"
+    ],
+    "screenshot": [
+      "01-inventory-default.png"
+    ]
+  },
+  {
+    "id": "UI-08",
+    "priority": "P2",
+    "title": "Many review and inventory images are full video frames with no box around the object",
+    "page": "/review, /",
+    "steps": "Open /review and look at the first UNKNOWN OBJECT card (\"tool: a black tool with a long handle\").",
+    "expected": "R6 and the diagram's saved frame: the operator can see which object the description refers to (crop, or frame with a bounding box), and can enlarge it.",
+    "actual": "18 of 30 unknown-object review images and 72 of 125 inventory snapshots are whole frames (/media/frames/...), not crops, and there is no bounding-box overlay. On a 160 px thumbnail of a cluttered module, the operator can't find \"the tool\". Images can't be clicked to view them full size.",
+    "suggested_fix": "API: return the bbox (or a crop_url) on review items and sightings. Thumb: overlay the bbox on frames and wrap the image in a button that opens a lightbox at full resolution. Make review images at least 240-320 px wide.",
+    "files": [
+      "dashboard/src/components/Thumb.tsx",
+      "dashboard/src/pages/ReviewPage.tsx",
+      "dashboard/src/styles/theme.css",
+      "services/inventory-api"
+    ],
+    "screenshot": [
+      "40-review-top.png",
+      "01-inventory-default.png"
+    ]
+  },
+  {
+    "id": "UI-09",
+    "priority": "P2",
+    "title": "An operator edit resets 'Last seen' to 'just now'",
+    "page": "/items/:id",
+    "steps": "Edit item af8031d3 and change the location from USOS to NOD1 (done during this review at 00:06:31Z).",
+    "expected": "'Last seen' keeps meaning the last camera sighting (22:57:14 UTC). The operator change appears as 'Last updated by ui-review at \u2026'.",
+    "actual": "After saving, the facts show \"Last seen: just now\" and the item jumps to the top of the newest-first inventory. That tells mission control the camera saw it, which it did not.",
+    "suggested_fix": "inventory-api: don't bump last_seen_at on a PATCH, or add a separate last_sighting_at field. ItemDetailPage: show 'Last sighting' and 'Last operator update' as separate facts.",
+    "files": [
+      "services/inventory-api",
+      "dashboard/src/pages/ItemDetailPage.tsx"
+    ],
+    "screenshot": [
+      "32-edit-saved-toast.png",
+      "33-edit-history-after.png"
+    ]
+  },
+  {
+    "id": "UI-10",
+    "priority": "P2",
+    "title": "Dismiss resolves in one click with no confirmation or undo, and is ambiguous on duplicate cards",
+    "page": "/review",
+    "steps": "Enter an operator on /review and click Dismiss on any card.",
+    "expected": "Destructive actions confirm, or offer an Undo toast. On duplicate cards, it's clear whether Dismiss closes the review or dismisses the entity.",
+    "actual": "One click POSTs action=dismiss and the card disappears. Resolving review eca3e3a0 also set entity af8031d3 to status 'dismissed', which hides it from the default inventory, and nothing says so. On a possible-duplicate card, Dismiss could remove a real item.",
+    "suggested_fix": "ReviewCard: use a two-step confirm (button turns into 'Confirm dismiss?') or an Undo toast with a 5-10 s delay before the POST. Label the actions per kind: 'Not an object (dismiss)' for unknowns, 'Not a duplicate' for duplicates.",
+    "files": [
+      "dashboard/src/pages/ReviewPage.tsx",
+      "dashboard/src/state/toasts.tsx"
+    ],
+    "screenshot": [
+      "47-review-text-overlay-before-dismiss.png",
+      "46-review-after-classify-toast.png"
+    ]
+  },
+  {
+    "id": "UI-11",
+    "priority": "P2",
+    "title": "Review queue: 67 cards in one list with no filtering, sorting or link to the item",
+    "page": "/review",
+    "steps": "Open /review.",
+    "expected": "Operators can filter by kind (unknown / duplicate), location and time, sort, and open the underlying item.",
+    "actual": "All 67 open cards render in one long two-column grid. There are no filters, no sort control, no count per kind, and no link to /items/:entity_id. Each card repeats the full 24-entry catalog select.",
+    "suggested_fix": "Add kind tabs with counts (from stats.open_reviews_by_kind), a location select and a sort to ReviewPage. Add an 'Open item' link in each card header. Consider pagination or virtualisation.",
+    "files": [
+      "dashboard/src/pages/ReviewPage.tsx"
+    ],
+    "screenshot": [
+      "48-review-full.png",
+      "40-review-top.png"
+    ]
+  },
+  {
+    "id": "UI-12",
+    "priority": "P2",
+    "title": "History timeline is flooded with \"update by pipeline\" audit lines that have no detail",
+    "page": "/items/:id",
+    "steps": "Open /items/ec044362-a184-449b-a016-8d011373ee10.",
+    "expected": "The history focuses on sightings and events. Audit entries say what changed (field: old \u2192 new) and can be filtered or collapsed.",
+    "actual": "The person entity's history starts with 14 consecutive \"AUDIT \u2026 update by pipeline\" lines before the first sighting. None of them says what changed. There is no filter by entry kind.",
+    "suggested_fix": "Timeline: add kind filter chips (Sightings / Events / Audit). Collapse consecutive pipeline audits into one line (\"14 pipeline updates\"). Have the API include the changed fields in the audit summary.",
+    "files": [
+      "dashboard/src/pages/ItemDetailPage.tsx (Timeline)",
+      "services/inventory-api (history)"
+    ],
+    "screenshot": [
+      "22-detail-person-bluetank-moved.png",
+      "20-detail-laptop-used.png"
+    ]
+  },
+  {
+    "id": "UI-13",
+    "priority": "P2",
+    "title": "Overview event feed shows opaque item ids and fragment actor text",
+    "page": "/overview",
+    "steps": "Open /overview.",
+    "expected": "Each event reads e.g. \"MOVED laptop (SSC laptop) by person in blue shirt, USOS \u2192 NOD1, 23:01:12 UTC\".",
+    "actual": "Events read \"item eb76b0fe\" with no label. The actor shows as \"by sleeping, wearing a headset\". Routes show as \"\u2014 \u2192 NOD1\" or \"NOD3 \u2192 \u2014\". Item labels are never shown.",
+    "suggested_fix": "Have GET /events return entity_label (join) or resolve labels client-side. Format the actor as \"person (<desc>)\" and drop the route when both ends are missing. Write \"added at NOD1\" for added events.",
+    "files": [
+      "dashboard/src/pages/OverviewPage.tsx (EventLine)",
+      "services/inventory-api (events)"
+    ],
+    "screenshot": [
+      "70-overview.png"
+    ]
+  },
+  {
+    "id": "UI-14",
+    "priority": "P2",
+    "title": "Chat conversation is lost when you navigate away (e.g. by clicking a citation)",
+    "page": "/chat",
+    "steps": "Ask a question, click a citation chip, then press Back.",
+    "expected": "The conversation is still there.",
+    "actual": "After Back there are 0 messages, because ChatPage keeps messages in local component state. Clicking a citation is the main way to drill down, so the operator loses their thread every time.",
+    "suggested_fix": "Lift messages into a context provider next to ReviewCountProvider, or persist them to sessionStorage. Optionally open citations in a side drawer instead of navigating away.",
+    "files": [
+      "dashboard/src/pages/ChatPage.tsx",
+      "dashboard/src/App.tsx"
+    ],
+    "screenshot": [
+      "66-chat-citation-opens-item.png",
+      "67-chat-after-back.png"
+    ]
+  },
+  {
+    "id": "UI-15",
+    "priority": "P3",
+    "title": "Date filters say UTC but use the browser-locale 12-hour picker",
+    "page": "/",
+    "steps": "Look at Seen after / Seen before (UTC).",
+    "expected": "24-hour ISO UTC entry (YYYY-MM-DD HH:MM) that matches every other timestamp in the app.",
+    "actual": "The inputs show 'mm/dd/yyyy, --:-- --' with AM/PM (en-US locale) while the rest of the UI uses 2026-10-17 23:01:41 UTC. There are no quick ranges such as 'last 1 h / 24 h'.",
+    "suggested_fix": "Replace datetime-local with a text input using pattern YYYY-MM-DDTHH:MM plus a format hint, or add preset range buttons. Keep localInputToIso.",
+    "files": [
+      "dashboard/src/pages/InventoryPage.tsx",
+      "dashboard/src/lib/format.ts"
+    ],
+    "screenshot": [
+      "06-filter-seen-after.png",
+      "01-inventory-default.png"
+    ]
+  },
+  {
+    "id": "UI-16",
+    "priority": "P3",
+    "title": "Sorting by label is case-sensitive",
+    "page": "/",
+    "steps": "Pick Sort: Label (A-Z).",
+    "expected": "Case-insensitive alphabetical order.",
+    "actual": "\"Pressurized Mating Adapter\", \"Research Results\" and \"Space Station\" sort before \"astrobee robot\".",
+    "suggested_fix": "inventory-api: ORDER BY lower(label). The dashboard only passes sort=label.",
+    "files": [
+      "services/inventory-api"
+    ],
+    "screenshot": [
+      "11-sort-oldest.png"
+    ]
+  },
+  {
+    "id": "UI-17",
+    "priority": "P3",
+    "title": "The large snapshot uses object-fit: cover, which crops the evidence",
+    "page": "/items/:id",
+    "steps": "Open /items/af8031d3-443f-4844-90ff-30e903cf26fb.",
+    "expected": "The whole frame is visible (letterboxed if needed).",
+    "actual": "The right edge of the frame is cut off (the overlay text reads \"Science on al\u2026\"). Small thumbnails crop the same way.",
+    "suggested_fix": "theme.css: .thumb-lg { object-fit: contain; background: var(--bg-sunken) }. Use contain for the md evidence thumbs as well.",
+    "files": [
+      "dashboard/src/styles/theme.css"
+    ],
+    "screenshot": [
+      "32-edit-saved-toast.png"
+    ]
+  },
+  {
+    "id": "UI-18",
+    "priority": "P3",
+    "title": "A malformed item id shows a generic error instead of 'Item not found'",
+    "page": "/items/:id",
+    "steps": "Open /items/not-a-real-id.",
+    "expected": "'Item not found.' with a link back.",
+    "actual": "The API returns 422 (invalid UUID), the page says 'This item could not be loaded.', and two console errors are logged.",
+    "suggested_fix": "ItemDetailPage: treat 422 like 404, or check the UUID shape before fetching.",
+    "files": [
+      "dashboard/src/pages/ItemDetailPage.tsx"
+    ],
+    "screenshot": [
+      "25-detail-notfound.png"
+    ]
+  },
+  {
+    "id": "UI-19",
+    "priority": "P3",
+    "title": "A failed chat request loses the typed question and offers no retry",
+    "page": "/chat",
+    "steps": "Make /agent/chat/stream fail (simulated 502) and send a question.",
+    "expected": "The user message is marked failed and has a Retry button, or the draft is restored.",
+    "actual": "A toast says 'Chat request failed: bad gateway'. The user bubble stays with no reply, and the input is empty.",
+    "suggested_fix": "ChatPage.send(): on failure, restore setDraft(text) or mark the message failed and add a Retry action.",
+    "files": [
+      "dashboard/src/pages/ChatPage.tsx"
+    ],
+    "screenshot": [
+      "83-chat-agent-down.png"
+    ]
+  },
+  {
+    "id": "UI-20",
+    "priority": "P3",
+    "title": "Add-item form only explains the missing image, not the missing label or location",
+    "page": "/items/new",
+    "steps": "Choose an image but leave Label empty. The Add item button stays disabled with no reason given.",
+    "expected": "Inline 'Label is required' and 'Location is required' messages, linked with aria-describedby.",
+    "actual": "Only the image has a message. The disabled submit is also skipped by Tab, so keyboard users get no hint at all. The file input never sets aria-invalid.",
+    "suggested_fix": "AddItemPage: show field-error text for label and location once they've been touched or a submit was attempted. Set aria-invalid on the invalid fields. Consider an enabled submit that focuses the first invalid field.",
+    "files": [
+      "dashboard/src/pages/AddItemPage.tsx"
+    ],
+    "screenshot": [
+      "50-add-empty.png",
+      "51-add-no-image-validation.png",
+      "52-add-non-image-rejected.png"
+    ]
+  },
+  {
+    "id": "UI-21",
+    "priority": "P3",
+    "title": "Filter bar polish: 'Needs review' checkbox is misaligned and the confidence value is hidden from screen readers",
+    "page": "/",
+    "steps": "Load / at 1440 px and at 1024 px.",
+    "expected": "Checkboxes line up with the other filters. The slider announces its value.",
+    "actual": "'Needs review' sits centered in its own column, away from the Status group. The % read-out next to the slider is aria-hidden and the input has no aria-valuetext. There is no 'Clear filters' button and no skip-to-content link.",
+    "suggested_fix": "theme.css .filters: align the checkbox field to the left. InventoryPage: add aria-valuetext={`${pct}%`}, a 'Reset filters' button and a skip link in App.tsx.",
+    "files": [
+      "dashboard/src/pages/InventoryPage.tsx",
+      "dashboard/src/styles/theme.css",
+      "dashboard/src/App.tsx"
+    ],
+    "screenshot": [
+      "01-inventory-default.png",
+      "14-inventory-1024.png"
+    ]
+  },
+  {
+    "id": "UI-22",
+    "priority": "P3",
+    "title": "Data quality the UI surfaces: one 'person' track holds different crew members",
+    "page": "/items/:id",
+    "steps": "Open /items/ec044362-a184-449b-a016-8d011373ee10.",
+    "expected": "One person entity per crew member.",
+    "actual": "The 14 exemplars include 'white spacesuit', 'man in gray shirt and black shorts' and 'blue shirt'. The person was also 'moved' by another person. Operators have no way in the UI to split a track.",
+    "suggested_fix": "Pipeline: tighten person re-identification. UI: add a 'Split / remove sighting' action in the timeline (needs an API endpoint).",
+    "files": [
+      "services/perception",
+      "dashboard/src/pages/ItemDetailPage.tsx"
+    ],
+    "screenshot": [
+      "22-detail-person-bluetank-moved.png"
+    ]
+  }
+]

@@ -158,13 +158,13 @@ async def test_ac_agt_07_harness_sends_system_prompt_and_global_memory(make_harn
 
 
 async def test_ac_agt_07_harness_applies_configured_budget(make_harness, plain_settings):
-    llm = FakeLLM([assistant_text("hi")])
+    llm = FakeLLM([], default=assistant_text("hi"))  # a follow-up without tools is nudged once (AC-AGT-12)
     settings = replace(plain_settings, context_token_budget=1500)
     hist = long_history(40)
     await make_harness(llm, settings=settings, inventory_block=FakeInventoryBlock(BLOCK)).run(hist)
     sent = llm.requests[0]["messages"]
     assert total_tokens(sent) <= 1500
-    assert chat_part(sent)[-1]["content"] == "LATEST: where is the drill?"
+    assert chat_part(sent)[-1]["content"].startswith("LATEST: where is the drill?")  # + AC-AGT-12 marker
     assert len(chat_part(sent)) < len(hist)
 
 

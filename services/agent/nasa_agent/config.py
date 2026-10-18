@@ -22,16 +22,20 @@ class Settings:
     agent_llm_api_key: str | None = None  # AGENT_LLM_API_KEY (optional)
     max_steps: int = MAX_STEPS_LIMIT  # AGENT_MAX_STEPS (never above 6)
     context_token_budget: int = 6000  # AGENT_CONTEXT_TOKEN_BUDGET
-    inventory_block_token_budget: int = 1500  # AGENT_INVENTORY_TOKEN_BUDGET
+    inventory_block_token_budget: int = 600  # AGENT_INVENTORY_TOKEN_BUDGET (AC-AGT-15: was 1500)
     dream_window_hours: float = 6.0  # DREAM_WINDOW_HOURS
     dream_interval_seconds: float = 900.0  # DREAM_INTERVAL_SECONDS
     dream_token_budget: int = 400  # DREAM_TOKEN_BUDGET (per summary)
     http_timeout_s: float = 30.0  # AGENT_HTTP_TIMEOUT_S
     inventory_recent_hours: float = 24.0  # AGENT_INVENTORY_RECENT_HOURS (moves window of the inventory block)
     dream_in_process: bool = False  # DREAM_IN_PROCESS: also run the periodic dreaming job inside the API pod
-    tool_result_token_budget: int = 1500  # AGENT_TOOL_RESULT_TOKEN_BUDGET: cap per tool result fed back to the LLM
+    tool_result_token_budget: int = 800  # AGENT_TOOL_RESULT_TOKEN_BUDGET: cap per tool result fed back (was 1500)
     stream_keepalive_seconds: float = 10.0  # AGENT_STREAM_KEEPALIVE_S: SSE comment interval while the loop runs
     admin_token: str | None = None  # AGENT_ADMIN_TOKEN (optional): bearer token required by POST /memory/dream
+    max_output_tokens: int = 400  # AGENT_MAX_OUTPUT_TOKENS: max_tokens of every LLM request (AC-AGT-15)
+    grounded_extra_steps: int = 1  # AGENT_GROUNDED_EXTRA_STEPS: tool steps allowed after grounding data (>= 0)
+    turn_deadline_s: float = 45.0  # AGENT_TURN_DEADLINE_S: wall-clock budget of one chat turn's LLM calls
+    history_reply_tokens: int = 150  # AGENT_HISTORY_REPLY_TOKENS: cap per earlier assistant reply (AC-AGT-12)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -42,7 +46,7 @@ class Settings:
         if missing:
             raise ValueError(f"missing required environment variable(s): {', '.join(missing)}")
 
-        def num(name: str, default: Any, cast: Callable[[str], Any]) -> Any:
+        def num(name: str, default: Any, cast: Callable[[str], Any], *, allow_zero: bool = False) -> Any:
             raw = env.get(name)
             if raw is None or raw.strip() == "":
                 return default
@@ -50,8 +54,8 @@ class Settings:
                 value = cast(raw.strip())
             except ValueError as exc:
                 raise ValueError(f"{name} must be a number, got {raw!r}") from exc
-            if value <= 0:
-                raise ValueError(f"{name} must be > 0, got {raw!r}")
+            if value < 0 or (value == 0 and not allow_zero):
+                raise ValueError(f"{name} must be {'>= 0' if allow_zero else '> 0'}, got {raw!r}")
             return value
 
         return cls(
@@ -72,6 +76,10 @@ class Settings:
             tool_result_token_budget=num("AGENT_TOOL_RESULT_TOKEN_BUDGET", cls.tool_result_token_budget, int),
             stream_keepalive_seconds=num("AGENT_STREAM_KEEPALIVE_S", cls.stream_keepalive_seconds, float),
             admin_token=env.get("AGENT_ADMIN_TOKEN", "").strip() or None,
+            max_output_tokens=num("AGENT_MAX_OUTPUT_TOKENS", cls.max_output_tokens, int),
+            grounded_extra_steps=num("AGENT_GROUNDED_EXTRA_STEPS", cls.grounded_extra_steps, int, allow_zero=True),
+            turn_deadline_s=num("AGENT_TURN_DEADLINE_S", cls.turn_deadline_s, float),
+            history_reply_tokens=num("AGENT_HISTORY_REPLY_TOKENS", cls.history_reply_tokens, int),
         )
 
     @property

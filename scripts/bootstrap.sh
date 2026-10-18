@@ -31,6 +31,8 @@ if step inference; then
   [ "$(echo "$T4" | grep -c node)" -ge 2 ] || { echo "need 2 T4 nodes"; exit 1; }
   oc label "$(echo "$T4" | sed -n 1p)" nasa-role=perception --overwrite
   oc label "$(echo "$T4" | sed -n 2p)" nasa-role=decision --overwrite
+  # optional third 4xT4 node: Gemma 4 12B perception (US-origin omni candidate, research/07-us-models.md)
+  [ -n "$(echo "$T4" | sed -n 3p)" ] && oc label "$(echo "$T4" | sed -n 3p)" nasa-role=gemma --overwrite
   oc apply -k "$ROOT/deploy/inference"
 fi
 

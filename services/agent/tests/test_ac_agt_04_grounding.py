@@ -95,7 +95,8 @@ async def test_ac_agt_04_previous_turn_facts_do_not_ground_this_turn(make_harnes
         {"role": "assistant", "content": f"The drill is in LAB1S2 [{E_DRILL}]."},
         {"role": "user", "content": "and who moved it?"},
     ]
-    llm = FakeLLM([assistant_text("A crew member in a blue shirt moved it at 12:20Z.")])
+    # default: the model keeps restating the old turn even after the AC-AGT-12 nudge
+    llm = FakeLLM([], default=assistant_text("A crew member in a blue shirt moved it at 12:20Z."))
     res = await make_harness(llm).run(history)
     assert is_no_record(res["reply"])
     assert res["citations"] == []

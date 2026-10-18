@@ -13,7 +13,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from nasa_agent.context import is_context_message
+from nasa_agent.context import FOLLOW_UP_MARKER, is_context_message
 from nasa_agent.llm import OpenAICompatLLM
 from nasa_agent.main import create_app
 from tests.fakes import (
@@ -97,7 +97,9 @@ def test_ac_agt_01_multi_turn_history_accepted(make_client):
     assert r.status_code == 200
     sent = [m["content"] for m in llm.requests[0]["messages"]
             if m["role"] in ("user", "assistant") and not is_context_message(m)]
-    assert sent == ["hi", "hello", "where is the drill?"]
+    assert sent[:2] == ["hi", "hello"]
+    # AC-AGT-12: a follow-up's latest user message ends with the follow-up marker
+    assert sent[2].startswith("where is the drill?") and FOLLOW_UP_MARKER in sent[2] and len(sent) == 3
 
 
 def test_ac_agt_01_ungrounded_reply_over_http(make_client):

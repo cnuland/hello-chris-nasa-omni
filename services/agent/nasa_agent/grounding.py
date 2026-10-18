@@ -37,6 +37,19 @@ _WORD_RE = re.compile(r"[a-z0-9]+")
 _STOPWORDS = frozenset({"a", "an", "the", "in", "with", "wearing", "of", "who", "was", "is", "someone", "person"})
 
 
+_SCRUB_RES = (re.compile(LOCATION_ID_RE.pattern, re.IGNORECASE), NODE_RE, TIME_RE, DATE_RE)
+
+
+def scrub_claims(text: Any) -> Any:
+    """Free text that may support actor words only: location ids, "Node N", clock times and dates are removed, so an
+    actor description such as "crew member who put it in NOD3 at 09:00" cannot ground a location or time claim."""
+    if not isinstance(text, str):
+        return text
+    for pattern in _SCRUB_RES:
+        text = pattern.sub(" ", text)
+    return " ".join(text.split())
+
+
 def evidence_text(payloads: list[Any]) -> str:
     """All grounding payloads of the turn as one searchable string."""
     return "\n".join(json.dumps(p, default=str) for p in payloads)
@@ -138,14 +151,47 @@ def unqualified_home_locations(reply: str, entries: list[dict[str, Any]], other_
     return out
 
 
+def catalog_facts(entry: dict[str, Any]) -> list[str]:
+    """Provable structured catalog fields of an entry, as short phrases (AC-AGT-18)."""
+    facts = []
+    count = entry.get("expected_count")
+    if isinstance(count, int) and not isinstance(count, bool):
+        facts.append(f"catalog expected count: {count}")
+    if entry.get("is_fungible") is True:
+        facts.append("tracked as stock counts")
+    return facts
+
+
 def usual_location_reply(entries: list[dict[str, Any]]) -> str:
-    """Deterministic reply stating catalog home locations as usual stowage locations only. The operator-entered
-    display name is used only if it carries no location/time/actor claim of its own; otherwise the catalog_id."""
+    """Deterministic reply stating catalog home locations as usual stowage locations only, plus the entries' provable
+    catalog fields. The operator-entered display name is used only if it carries no location/time/actor claim of its
+    own; otherwise the catalog_id."""
     parts = []
     for e in entries:
         where = e["home_location"] + (f" ({e['home_location_name']})" if e.get("home_location_name") else "")
         name = e.get("display_name")
         if not name or unsupported_claims(name, evidence_text(catalog_evidence([e]))):
             name = e["catalog_id"]
-        parts.append(f"{name} [{e['catalog_id']}] is usually kept in {where}")
+        parts.append(", ".join([f"{name} [{e['catalog_id']}] is usually kept in {where}", *catalog_facts(e)]))
     return f"{USUAL_LOCATION_LEAD} " + "; ".join(parts) + "."
+
+
+def kept_sentences(reply: str, homes: list[dict[str, Any]], entries: list[dict[str, Any]]) -> str:
+    """The sentences of ``reply`` that survive the usual-location rewrite (AC-AGT-18): every sentence naming one of
+    the offending catalog-only ``homes`` is dropped, and so is a current-position sentence that names no location
+    ("It is there right now")."""
+    keep = []
+    for sentence in _SENTENCE_RE.split(reply):
+        text = sentence.strip()
+        if not text or any(_mentions_home(text, e) for e in homes):
+            continue
+        if CURRENT_RE.search(text) and not _names_a_location(text, entries):
+            continue
+        keep.append(text)
+    return " ".join(keep)
+
+
+def usual_location_rewrite(reply: str, homes: list[dict[str, Any]], entries: list[dict[str, Any]]) -> tuple[str, bool]:
+    """(rewritten reply, whether any sentence of the model's reply was kept)."""
+    kept = kept_sentences(reply, homes, entries)
+    return (f"{usual_location_reply(homes)} {kept}".strip(), bool(kept))

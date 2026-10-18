@@ -58,7 +58,7 @@ async def test_ac_agt_03_tool_result_is_fed_back_as_tool_message(make_harness):
 
 
 async def test_ac_agt_03_conversation_order_preserved_user_last_before_tools(make_harness):
-    llm = FakeLLM([assistant_text("ok")])
+    llm = FakeLLM([], default=assistant_text("ok"))  # a follow-up without tools is nudged once (AC-AGT-12)
     history = [
         {"role": "user", "content": "first question"},
         {"role": "assistant", "content": "first answer"},
@@ -67,7 +67,9 @@ async def test_ac_agt_03_conversation_order_preserved_user_last_before_tools(mak
     await make_harness(llm).run(history)
     chat = [m for m in llm.requests[0]["messages"]
             if m["role"] in ("user", "assistant") and not is_context_message(m)]
-    assert [m["content"] for m in chat] == ["first question", "first answer", "where is the drill?"]
+    contents = [m["content"] for m in chat]
+    assert contents[:2] == ["first question", "first answer"] and len(contents) == 3
+    assert contents[2].startswith("where is the drill?")  # + AC-AGT-12 follow-up marker
     assert llm.requests[0]["messages"][0]["role"] == "system"
 
 
@@ -95,7 +97,8 @@ async def test_ac_agt_03_tool_calls_are_reported_with_name_arguments_and_status(
 
 
 async def test_ac_agt_03_at_most_six_steps_when_llm_never_stops(make_harness):
-    llm = FakeLLM([], default=assistant_tools(WHERE_DRILL))
+    # inventory_stats does not ground, so the AC-AGT-15 early stop does not shorten the loop: this still pins the cap
+    llm = FakeLLM([], default=assistant_tools(tool_call("inventory_stats", {})))
     res = await make_harness(llm).run(user("loop forever"))
     assert llm.calls == 6
     assert isinstance(res["reply"], str) and res["reply"].strip()
@@ -113,7 +116,7 @@ async def test_ac_agt_03_configured_max_steps_lower_than_six_is_respected(make_h
 async def test_ac_agt_03_max_steps_above_six_is_still_capped(make_harness, plain_settings):
     from dataclasses import replace
 
-    llm = FakeLLM([], default=assistant_tools(WHERE_DRILL))
+    llm = FakeLLM([], default=assistant_tools(tool_call("inventory_stats", {})))  # non-grounding (AC-AGT-15)
     await make_harness(llm, settings=replace(plain_settings, max_steps=50)).run(user("loop"))
     assert llm.calls == 6
 

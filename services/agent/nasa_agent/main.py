@@ -1,9 +1,11 @@
 """FastAPI app: /healthz, /chat, /chat/stream (SSE), /memory/dream. Run with
 ``uvicorn --factory nasa_agent.main:create_app``.
 
-Streaming design: the reply is only known after the whole tool loop and the grounding check (AC-AGT-4), so
-``/chat/stream`` sends SSE comment keepalives (``: keepalive``) every ``AGENT_STREAM_KEEPALIVE_S`` seconds while the loop
-runs (keeps proxies/routes from idling the connection out), then the checked reply as ``token`` events and ``done``.
+Streaming design (SSE contract: docs/spec/30-agent.md AC-AGT-16): while the tool loop runs ``/chat/stream`` sends
+``status`` events (phase llm/tool/checking) and SSE comment keepalives (``: keepalive``) every
+``AGENT_STREAM_KEEPALIVE_S`` seconds. The reply is only known after the grounding check (AC-AGT-4), so it is then sent
+as word-chunked ``token`` events and ``done``; failures are one ``error`` event ``{detail, kind, retryable,
+request_id}``. A client disconnect cancels the loop task and with it the in-flight LLM request.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Annotated, Any, Literal
 
 import psycopg
@@ -26,10 +28,10 @@ from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
 
 from nasa_agent.config import Settings
 from nasa_agent.dreaming import Dreamer, dream_forever
-from nasa_agent.harness import AgentHarness
+from nasa_agent.harness import LLM_DOWN_DETAIL, TIMEOUT_DETAIL, AgentHarness
 from nasa_agent.inventory_block import InventoryBlockRenderer
 from nasa_agent.inventory_client import InventoryClient
-from nasa_agent.llm import LLMError, OpenAICompatLLM
+from nasa_agent.llm import LLMError, LLMTimeout, OpenAICompatLLM
 from nasa_agent.logs import configure_logging
 from nasa_agent.memory import MemoryStore
 from nasa_agent.tools import Toolbox
@@ -88,9 +90,81 @@ def sse(event: str, data: Any) -> str:
     return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
 
 
+def error_body(exc: BaseException, request_id: str, deadline_s: float) -> dict[str, Any]:
+    """``{detail, kind, retryable, request_id}`` for /chat errors and the SSE ``error`` event (AC-AGT-15/16)."""
+    if isinstance(exc, LLMTimeout):
+        detail = str(exc) if str(exc).startswith("The language model") else TIMEOUT_DETAIL.format(seconds=deadline_s)
+        return {"detail": detail, "kind": "timeout", "retryable": True, "request_id": request_id}
+    if isinstance(exc, LLMError):
+        return {"detail": LLM_DOWN_DETAIL, "kind": "llm", "retryable": True, "request_id": request_id}
+    return {"detail": "Internal error in the agent. Please retry; if it persists, report the request id.",
+            "kind": "internal", "retryable": True, "request_id": request_id}
+
+
+async def stream_chat_events(
+    run: Callable[[Callable[[dict[str, Any]], Awaitable[None]]], Awaitable[dict[str, Any]]],
+    *,
+    keepalive_s: float,
+    request_id: str,
+    deadline_s: float = 45.0,
+) -> AsyncIterator[str]:
+    """SSE frames for one chat turn. ``run(on_event)`` runs the harness. Status events are forwarded as they happen;
+    closing or cancelling this generator (client disconnect) cancels the run task and waits for it, so the in-flight
+    LLM HTTP request is closed and no further tool or LLM call starts."""
+    started = time.perf_counter()
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+    async def on_event(event: dict[str, Any]) -> None:
+        queue.put_nowait(event)
+
+    task = asyncio.create_task(run(on_event))
+    getter: asyncio.Future | None = None
+    try:
+        while True:
+            getter = asyncio.ensure_future(queue.get())
+            done, _ = await asyncio.wait({task, getter}, timeout=keepalive_s, return_when=asyncio.FIRST_COMPLETED)
+            if getter in done:
+                yield sse("status", getter.result())
+                continue
+            getter.cancel()
+            if task in done:
+                break
+            yield ": keepalive\n\n"
+        while not queue.empty():
+            yield sse("status", queue.get_nowait())
+        try:
+            result = task.result()
+        except Exception as exc:  # noqa: BLE001 - reported to the client as an SSE error event
+            log.warning(
+                "stream failure",
+                extra={"request_id": request_id, "error": type(exc).__name__, "latency_ms": _ms(started)},
+            )
+            yield sse("error", error_body(exc, request_id, deadline_s))
+            return
+        for chunk in split_tokens(result["reply"]):
+            yield sse("token", {"text": chunk})
+        yield sse("done", result)
+        log.info("chat stream", extra={"request_id": request_id, "latency_ms": _ms(started), "status": 200})
+    finally:
+        if getter is not None and not getter.done():
+            getter.cancel()
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+            log.info("chat stream cancelled", extra={"request_id": request_id, "latency_ms": _ms(started)})
+
+
 # ---------------------------------------------------------------- app factory
 def create_app(
-    settings: Settings | None = None, *, llm=None, inventory=None, memory=None, inventory_block=None, dreamer=None
+    settings: Settings | None = None,
+    *,
+    llm=None,
+    inventory=None,
+    memory=None,
+    inventory_block=None,
+    dreamer=None,
+    llm_transport=None,
 ) -> FastAPI:
     """Build the agent API. Every dependency is injectable (tests); defaults come from ``Settings.from_env``."""
     settings = settings or Settings.from_env()
@@ -102,6 +176,8 @@ def create_app(
         settings.agent_llm_model,
         api_key=settings.agent_llm_api_key,
         timeout=settings.http_timeout_s,
+        max_tokens=settings.max_output_tokens,
+        transport=llm_transport,
     )
     memory = memory if memory is not None else MemoryStore(settings.database_url)
     inventory_block = inventory_block or InventoryBlockRenderer(
@@ -144,9 +220,9 @@ def create_app(
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
-    async def _run(body: ChatRequest, request_id: str) -> dict[str, Any]:
+    async def _run(body: ChatRequest, request_id: str, on_event=None) -> dict[str, Any]:
         messages = [m.model_dump() for m in body.messages]
-        return await harness.run(messages, session_id=body.session_id, request_id=request_id)
+        return await harness.run(messages, session_id=body.session_id, request_id=request_id, on_event=on_event)
 
     @app.post("/chat")
     async def chat(body: ChatRequest) -> JSONResponse:
@@ -156,10 +232,13 @@ def create_app(
         try:
             result = await _run(body, request_id)
         except LLMError as exc:
-            log.warning("llm failure", extra={"request_id": request_id, "error": str(exc), "latency_ms": _ms(started)})
-            return JSONResponse(
-                {"detail": f"agent LLM unavailable: {exc}", "request_id": request_id}, status_code=502, headers=headers
+            log.warning(
+                "llm failure",
+                extra={"request_id": request_id, "error": type(exc).__name__, "latency_ms": _ms(started)},
             )
+            status = 504 if isinstance(exc, LLMTimeout) else 502
+            return JSONResponse(error_body(exc, request_id, settings.turn_deadline_s), status_code=status,
+                                headers=headers)
         except Exception as exc:  # never a bare 500 without a request id
             log.exception(
                 "chat failure",
@@ -175,34 +254,13 @@ def create_app(
     async def chat_stream(body: ChatRequest) -> StreamingResponse:
         request_id = str(uuid.uuid4())
 
-        async def events() -> AsyncIterator[str]:
-            started = time.perf_counter()
-            task = asyncio.create_task(_run(body, request_id))
-            try:
-                while True:
-                    done, _ = await asyncio.wait({task}, timeout=settings.stream_keepalive_seconds)
-                    if done:
-                        break
-                    yield ": keepalive\n\n"
-                result = task.result()
-            except asyncio.CancelledError:
-                task.cancel()
-                raise
-            except Exception as exc:  # noqa: BLE001 - reported to the client as an SSE error event
-                kind = "llm" if isinstance(exc, LLMError) else "internal"
-                log.warning(
-                    "stream failure",
-                    extra={"request_id": request_id, "error": type(exc).__name__, "latency_ms": _ms(started)},
-                )
-                yield sse("error", {"detail": f"{kind} failure", "request_id": request_id})
-                return
-            for chunk in split_tokens(result["reply"]):
-                yield sse("token", {"text": chunk})
-            yield sse("done", result)
-            log.info("chat stream", extra={"request_id": request_id, "latency_ms": _ms(started), "status": 200})
-
         return StreamingResponse(
-            events(),
+            stream_chat_events(
+                lambda on_event: _run(body, request_id, on_event),
+                keepalive_s=settings.stream_keepalive_seconds,
+                request_id=request_id,
+                deadline_s=settings.turn_deadline_s,
+            ),
             media_type="text/event-stream",
             headers={"X-Request-ID": request_id, "Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )

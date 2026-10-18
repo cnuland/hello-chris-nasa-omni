@@ -89,7 +89,9 @@ def test_e2e_contract_agent_stream_matches_dashboard_parser(replay, make_agent):
         data = json.loads("\n".join(ln[len("data: "):] for ln in lines if ln.startswith("data: ")))
         events.append((name, data))
     names = [n for n, _ in events]
-    assert names[-1] == "done" and set(names[:-1]) == {"token"}
+    # AC-AGT-16: progress `status` events may precede the answer tokens; tokens still join to done.reply
+    assert names[-1] == "done" and "token" in names and set(names[:-1]) <= {"status", "token"}
+    assert all(d.get("phase") in {"llm", "tool", "checking"} for n, d in events if n == "status")
     done = events[-1][1]
     assert "".join(d["text"] for n, d in events if n == "token") == done["reply"]
     assert done["citations"] and all(c.get("entity_id") and c.get("at") for c in done["citations"])

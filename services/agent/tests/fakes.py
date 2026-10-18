@@ -170,6 +170,10 @@ class FakeInventory:
         self.locations = deepcopy(LOCATIONS)
         self.requests: list[httpx.Request] = []
         self.fail_with: int | None = None
+        #: simulate an inventory-api without the `types=` filter on GET /events (422 on unknown query use)
+        self.reject_types = False
+        #: when True GET /events adds entity_label (the newer API); default mirrors the deployed API (no label)
+        self.event_labels = False
         self.transport = httpx.MockTransport(self.handler)
 
     # -- helpers for assertions
@@ -222,18 +226,30 @@ class FakeInventory:
                 evs = [e for e in evs if e["entity_id"] == one("entity_id")]
             if one("type"):
                 evs = [e for e in evs if e["event_type"] == one("type")]
+            if one("types"):
+                if self.reject_types:
+                    return httpx.Response(422, json={"detail": "unknown query parameter types"})
+                wanted = set(one("types").split(","))
+                evs = [e for e in evs if e["event_type"] in wanted]
             if one("after"):
                 evs = [e for e in evs if e["occurred_at"] >= _z(one("after"))]
             if one("before"):
                 evs = [e for e in evs if e["occurred_at"] <= _z(one("before"))]
             evs.sort(key=lambda e: e["occurred_at"], reverse=True)
+            evs = deepcopy(evs[: int(one("limit") or 100)])
+            if self.event_labels:
+                for e in evs:
+                    item = self._find(e["entity_id"])
+                    e.setdefault("entity_label", item["label"] if item else None)
             return httpx.Response(200, json=evs)
         if path == "/review":
             status = one("status") or "open"
             rv = [r for r in self.reviews if r["status"] == status]
             if one("kind"):
                 rv = [r for r in rv if r["kind"] == one("kind")]
-            return httpx.Response(200, json=rv)
+            if one("location"):
+                rv = [r for r in rv if (r.get("location_id") or "").startswith(one("location"))]
+            return httpx.Response(200, json=rv[: int(one("limit") or 50)])
         if path == "/search":
             term = (one("q") or "").lower()
             hits = [{"type": "entity", "id": i["entity_id"], "snippet": i["label"], "time": i["last_seen_at"]}
@@ -274,6 +290,9 @@ class FakeInventory:
         if q.get("needs_review"):
             want = q["needs_review"][0].lower() == "true"
             items = [i for i in items if i["needs_review"] == want]
+        if q.get("seen_after"):
+            after = _z(q["seen_after"][0])
+            items = [i for i in items if (i["last_seen_at"] or "") >= after]
         if q.get("min_confidence"):
             items = [i for i in items if i["confidence"] >= float(q["min_confidence"][0])]
         items.sort(key=lambda i: i["last_seen_at"] or "", reverse=True)

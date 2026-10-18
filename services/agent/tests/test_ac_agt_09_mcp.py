@@ -21,8 +21,8 @@ from mcp.server.mcpserver import MCPServer
 import mcp_server
 from tests.fakes import E_DRILL, MISSING_ID
 
-READ = {"search_items", "get_item", "item_history", "where_is", "who_moved", "list_unknowns", "inventory_stats",
-        "search_observations", "recall_memory", "lookup_catalog"}
+READ = {"search_items", "get_item", "item_history", "where_is", "who_moved", "recent_changes", "list_unknowns",
+        "inventory_stats", "search_observations", "recall_memory", "lookup_catalog"}
 
 
 def result_text(res) -> str:

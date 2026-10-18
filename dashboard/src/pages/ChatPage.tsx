@@ -86,10 +86,13 @@ function ProposalCard({ proposal, state, canConfirm, onConfirm }: ProposalCardPr
 }
 
 /** Entity citation chip: "label (location) · time", label/location looked up via the cached GET /items/{id}. */
-function EntityCitation({ id, at }: { id: string; at?: string }) {
+function EntityCitation({ id, at, c }: { id: string; at?: string; c?: Citation }) {
   const item = useCachedItem(id);
-  const label = item?.label || `Item ${shortId(id)}`;
-  const loc = item ? locationLabel(item.last_location, item.last_location_name) : '';
+  // AC-UI-24: prefer the agent's own label/location (as of the answer); fall back to the cached item lookup.
+  const label = c?.label || item?.label || `Item ${shortId(id)}`;
+  const loc = c?.location || c?.location_name
+    ? locationLabel(c?.location ?? '', c?.location_name)
+    : item ? locationLabel(item.last_location, item.last_location_name) : '';
   const time = formatUtcMinute(at);
   return (
     <Link to={`/items/${id}`} title={id}>
@@ -111,10 +114,10 @@ function Citations({ citations }: { citations: Citation[] }) {
       {citations.map((c, i) => (
         <li key={i}>
           {c.entity_id ? (
-            <EntityCitation id={c.entity_id} at={c.at} />
+            <EntityCitation id={c.entity_id} at={c.at} c={c} />
           ) : c.catalog_id ? (
             <span className="muted" title="Catalog reference (usual stowage / expected count), not a sighting">
-              {`Catalog ${c.catalog_id}`}
+              {c.label ? `Catalog: ${c.label}` : `Catalog ${c.catalog_id}`}
             </span>
           ) : (
             <span className="muted">{`Video window ${shortId(c.window_id)}${c.at ? ` · ${formatUtcMinute(c.at)}` : ''}`}</span>

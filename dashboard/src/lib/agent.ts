@@ -35,12 +35,24 @@ export function proposalPatch(p: Proposal, operator: string): ItemPatch {
   return { ...sanitizeProposalFields(p.fields), operator: operator.trim(), note };
 }
 
+/** AC-UI-24: optional display fields from the agent (AC-AGT-17); plain strings up to 200 chars, else dropped. */
+function citationLabels(raw: Record<string, unknown>): Pick<Citation, 'label' | 'location' | 'location_name'> {
+  const out: Pick<Citation, 'label' | 'location' | 'location_name'> = {};
+  for (const k of ['label', 'location', 'location_name'] as const) {
+    const v = raw[k];
+    if (typeof v === 'string' && v.trim() && v.length <= 200) out[k] = v;
+  }
+  return out;
+}
+
 function sanitizeCitation(raw: unknown): Citation | null {
   if (!isObj(raw)) return null;
   const at = typeof raw.at === 'string' ? raw.at : undefined;
-  if (isUuid(raw.entity_id)) return { entity_id: raw.entity_id, at };
-  if (shortStr(raw.window_id, 128) && raw.window_id) return { window_id: raw.window_id, at };
-  if (typeof raw.catalog_id === 'string' && CATALOG_ID_RE.test(raw.catalog_id)) return { catalog_id: raw.catalog_id, at };
+  const labels = citationLabels(raw);
+  const catalog = typeof raw.catalog_id === 'string' && CATALOG_ID_RE.test(raw.catalog_id) ? raw.catalog_id : undefined;
+  if (isUuid(raw.entity_id)) return { entity_id: raw.entity_id, at, ...labels, ...(catalog ? { catalog_id: catalog } : {}) };
+  if (shortStr(raw.window_id, 128) && raw.window_id) return { window_id: raw.window_id, at, ...labels };
+  if (catalog) return { catalog_id: catalog, at, ...labels };
   return null;
 }
 

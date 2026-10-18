@@ -141,3 +141,15 @@ I need from you.
     - **Proposed fix (TDD):** for omni-only sightings, attach by (class, module or zone) with no time limit when
       exactly one live candidate exists; when several exist, ask DiffusionGemma with their descriptions. Add a
       "revisit" scenario to the eval (same scene replayed after a 15 min gap, gate: new entities on the revisit ≤ 5%).
+
+## Answers from Chris (2026-10-17)
+
+- **Target hardware:** a Dell GB10 (DGX Spark class) running on the ISS. This supersedes the GPU-sizing "need" in
+  #2, #15, #16 and #26. Production is a single GB10 node, so every model shares one GPU and 128 GB of unified memory.
+- **OpenClaw:** "Red Hat OpenClaw Enterprise" is an unreleased enterprise edition of OpenClaw, announced through the
+  OpenClaw Foundation. That answers #8/#9. The plan is unchanged: our harness plus the inventory MCP server, so
+  OpenClaw Enterprise can attach when it ships.
+- **Pull secret:** none. Upstream Open Data Hub is fine for now (#1, #13).
+- **Cloud policy:** out of scope. NASA will handle it; the POC targets what NASA asked for (#15, #16, #26).
+- **Licences:** Gemma and NVIDIA Cosmos are accepted, since NASA already partners with Google and NVIDIA (#6). Both
+  are now open as omni or perception options.

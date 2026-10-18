@@ -300,3 +300,147 @@ agent filters client-side over a 300 s cache today). Propose an e2e contract tes
 - **Test change:** `test_ac_agt_02_who_moved_returns_actor_and_time` asserted `type == ["moved"]` on the default
   request. That pinned the bug. It now asserts that no type restriction is sent by default. The entity_id assertion
   is unchanged.
+
+## UI-review chatbot fixes (docs/ui-review/REPORT.md UI-01/02/05/06, QUESTIONS.md #21; 2026-10-18)
+
+**Spec:** AC-AGT-12 through AC-AGT-18 in docs/spec/30-agent.md, plus cross-references in AC-AGT-1 and AC-AGT-2.
+
+### Root cause of the follow-up P1 (UI-01), reproduced live first
+
+I tested the live agent with `POST /agent/chat` and `/agent/chat/stream` (Qwen3-8B-AWQ on the T4):
+
+| History sent | Result |
+|---|---|
+| fresh "Where is the multimeter usually kept?" | `lookup_catalog`, grounded |
+| `[user, assistant "hello", user]` | `lookup_catalog`, grounded |
+| `[user, assistant "I don't have a record of that.", user]` | `lookup_catalog`, grounded |
+| `[user "where is the laptop", assistant "The laptop [uuid] was last seen in USOS at 22:51:03Z.", user "Where is the multimeter usually kept?"]` | **0 tool calls, "I don't have a record of that.", 1.7 s, 3 out of 3** |
+| the same plus two earlier canned refusals | 0 tool calls, refusal, 2 out of 2 |
+| the same history with a trailing "new question: call the tools; earlier answers are not evidence" note in the last user message | `lookup_catalog`, grounded |
+| the earlier turns folded into the last user message as non-evidence context | grounded; "Where is it usually kept?" resolved "it" from turn 1 |
+
+The answers to the three hypotheses in the brief:
+- **Does the grounding check validate against citations from old turns?** No. The check only ever sees this turn's tool results, and that is correct.
+- **Does the inventory block get dropped, or does a refusal poison the context?** No to both. The block is present, and refusals alone do not break the turn.
+- **Does the LLM skip tools because it sees the old answer?** **Yes.** The dashboard re-sends the transcript, but earlier turns' tool calls and results are never re-sent. To the model, an earlier assistant turn looks like inventory facts stated without tools, and it copies that pattern. It answers in one step with no tool, and AC-AGT-4 then correctly replaces the ungrounded reply with the refusal. The 2-5 s in the review is exactly one LLM step.
+
+Fixes (AC-AGT-12):
+- **`prepare_history`:**
+  - Same-role messages are merged, so roles strictly alternate as Gemma templates require.
+  - Canned replies become "(no answer was given)".
+  - Earlier replies are cut to 150 tokens.
+  - A follow-up marker is added to the latest user message.
+- **Nudge:** a follow-up whose first step calls no tool is nudged once. The draft goes back as the assistant message, followed by a fixed user nudge.
+- **Clock:** the current UTC time is in the data message. Live, "what changed in the last hour" sent `seen_after=22:57` copied from an old answer, because the model had no clock.
+
+### Other root causes found live
+
+- **"Who used the drill?" named nobody.** There are 13 "drill" entities. who_moved resolved only the newest 5 (`MAX_RESOLVE`), and the only drill with a `used` event by an actor ("in blue shirt, headset", a454e74e) was 9th. who_moved now resolves 20 and queries them concurrently. Smoke test against the live API (read-only, through the dashboard `/api` proxy): who_moved now returns that actor.
+- **"What changed in the last hour?" had no tool.** It is now `recent_changes`. Live smoke test: since 00:00 it returns the reviewer's two real changes (00:06:31 move of "text" USOS->NOD1 by ui-review, 00:07:48 add of "UI-REVIEW TEST ITEM") and one resolved review. Payload 362 tokens. "Node 1" resolves to NOD1.
+- **"llm failure":** the non-streaming `/chat` returned an empty body at 30.1 s (route timeout). Any LLM timeout was reported as a bare "llm failure".
+
+### Red
+
+New tests: test_ac_agt_12_follow_up.py, 13_recent_changes, 14_who_moved_resolution, 15_latency, 16_stream_contract, 17_citations, 18_usual_rewrite.
+- **Collection errors (missing API):** 12, 15 and 16 failed to import (`FOLLOW_UP_MARKER`, `LLMTimeout`, `stream_chat_events`).
+- **13:** 25 failed. Three tests first passed vacuously, because an unknown tool also gives a refusal. I tightened them to require `r.ok` first.
+- **14:** 6 failed.
+- **17 and 18:** 10 failed. Two guards passed, as intended: the dedup key is unchanged, and the only-home citations case keeps its behaviour.
+
+### Green
+
+**420 passed**, ruff clean.
+- **`tools.py`:**
+  - `recent_changes`. `types=` is sent as a comma list and the call is repeated without it on 422.
+  - Labels come from `entity_label`, else from at most 10 concurrent `GET /items/{id}` lookups.
+  - Location names and ids resolve through the cached `GET /locations`, including module aliases and the subtree.
+  - who_moved resolves 20 entities and returns the newest 20 events.
+  - `list_unknowns` accepts module names.
+  - Rich citations; `clean_text`.
+  - Tool specs drop `title` keys, and optional fields collapse `anyOf [X, null]` + `default: null`. Not for propose_update's `catalog_id`, where null clears the field.
+  - `summarize_args`; `evidence_view`; `Toolbox.now`.
+- **`harness.py`:**
+  - Early stop. After grounding, `grounded_extra_steps` (1) more tool steps run, then the final call uses `tool_choice="none"`, as does the last allowed step.
+  - Turn deadline via `asyncio.wait_for`, which cancels the in-flight LLM call. On timeout with data, the deterministic `records_reply`; without data, `LLMTimeout`.
+  - `on_event` status events.
+  - Partial usual-location rewrite.
+  - The turn log carries `prompt_tokens_est` and `prompt_tokens_total`.
+- **`llm.py`:** `LLMTimeout`; `max_tokens` on every request.
+- **`main.py`:**
+  - `stream_chat_events`: status events via a queue, keepalives, and cancel-and-await of the run task in `finally`.
+  - `/chat` returns 504 / 502 with `{detail, kind, retryable, request_id}`.
+  - `create_app(llm_transport=...)`.
+- **`config.py`:**
+  - New: `AGENT_MAX_OUTPUT_TOKENS` 400, `AGENT_GROUNDED_EXTRA_STEPS` 1 (0 allowed), `AGENT_TURN_DEADLINE_S` 45, `AGENT_HISTORY_REPLY_TOKENS` 150.
+  - Changed defaults: inventory block 1500 -> 600 tokens, tool result 1500 -> 800 tokens.
+- **System prompt:**
+  - Routing for recent_changes and who_moved.
+  - "Every new question needs its own tool calls."
+  - Short plain-text answers with no pasted UUIDs.
+
+### Existing test changes (justification)
+
+- **Tool sets:** `test_ac_agt_02_tools.py::EXPECTED_READ` and `test_ac_agt_09_mcp.py::READ` gained `recent_changes`. This is a new read tool, the same as for AC-AGT-11.
+- **Follow-up marker (AC-AGT-12):** tests asserting the exact latest user message now assert `startswith` plus the marker: `test_ac_agt_01_multi_turn_history_accepted`, `test_ac_agt_03_conversation_order_preserved...` and `test_ac_agt_07_harness_applies_configured_budget`.
+- **Follow-up nudge:** follow-up tests whose scripted model answers without tools now give the FakeLLM a `default`, because the nudge adds one call: `test_ac_agt_04_previous_turn_facts_do_not_ground_this_turn` (still refused after the nudge, which is a stronger check), the two inventory-block tests in AC-AGT-10, and 03/07 above.
+- **Early stop:** `test_ac_agt_03_at_most_six_steps...` and `..._above_six_is_still_capped` loop on `inventory_stats` (non-grounding) instead of `where_is`. Otherwise the AC-AGT-15 early stop ends a grounded loop after 3 calls, so the 6-cap would no longer be exercised.
+- **Rich citations (AC-AGT-17):**
+  - The two exact catalog-citation equalities in test_ac_agt_11_catalog.py ignore the new optional `label`.
+  - `test_ac_agt_11_entity_and_catalog_citations_both_appear`: the invariant "exactly one of entity_id/window_id/catalog_id" became "the identity key follows entity_id > window_id > catalog_id precedence". An entity citation may now carry its item's `catalog_id` as a display field. The dashboard's `sanitizeCitation` already checks `entity_id` first.
+
+### Adversarial review
+
+Six review tests were red first (test_ac_agt_12_18_review.py; 6 failed, 1 passed), then green.
+
+| # | Sev | Finding | Resolution |
+|---|---|---|---|
+| 1 | high | Grounding bypass: recent_changes' scope (`since`, `until`, `location`) was evidence. An empty NOD1 window grounded "The drill was moved to NOD1 at 11:40". | **Fixed.** Only the changes count as evidence. If the only grounding data is empty windows and the reply makes claims, the harness answers deterministically: "No changes were recorded in NOD1 between ... UTC." |
+| 2 | med | `fit_payload` cut a recent_changes dict over budget into a truncated JSON *string*, and citations covered changes the model never saw. | **Fixed.** Whole changes are dropped from the end (`omitted`, `truncated`). Citations and evidence cover only the changes that were sent, as for lookup_catalog. |
+| 3 | med | Prompt injection via `actor_desc`: "crew member who put it in NOD3 at 09:00" grounded a location/time claim (recent_changes and who_moved). | **Fixed.** Actor text in evidence is `scrub_claims`ed: location ids (any case), "Node N", clock times and dates are removed, so actor words still ground actors. Labels never count as recent_changes evidence. Free text is whitespace-collapsed and capped (120 characters to the model, 80 in citations). |
+| 4 | med | The timeout records reply echoed labels unchecked (the same class as AC-AGT-11 finding 6). | **Fixed.** A label carrying its own location/time/actor claim is replaced by the short id. |
+| 5 | low | Cancellation leak: closing the SSE generator mid-wait left a pending `queue.get()` task. | **Fixed.** `finally` cancels the getter and cancels-and-awaits the run task. Tested on disconnect: the LLM call sees `CancelledError`, no inventory request is made, and no tasks are left over. |
+| 6 | info | Rich citations would have inflated every tool message (they are fed back to the model). | **Fixed.** The model gets identity keys only (`entity_id\|window_id\|catalog_id`, `at`). The display fields go to the UI. |
+| 7 | low | An operator add appeared twice (as the `added` event and as `new_item`). Found in the live smoke test. | **Fixed.** `new_item` is skipped when an `added` event exists for that entity (test added red first). |
+
+**Not changed (documented):**
+- The inventory block render (`asyncio.to_thread`, psycopg) cannot be cancelled mid-query. It finishes in the thread.
+- Plain `/chat` is not cancelled on client disconnect (Starlette). Only `/chat/stream` is, and the dashboard uses the stream.
+- Tool HTTP calls are bounded by `AGENT_HTTP_TIMEOUT_S`, not by the turn deadline.
+- The lexical claim check is still substring-based for location ids ("LAB1" is supported by "LAB1P3"); this predates these fixes.
+- `list_unknowns` with an empty result still answers "no record" rather than "none in NOD1".
+
+### Latency, before and after
+
+**Measured live before the fixes** (2026-10-18 00:2x UTC, same cluster):
+- Reviewer: 23.5 / 57 / 64 s.
+- My runs:
+  - "Where is the laptop right now?": 38.9 s for 2 LLM calls (1 tool, 1577-character markdown reply).
+  - Multimeter question: 8.1 s, also 2 calls but with a short reply.
+  - "Who used the drill?" as a follow-up: 38.5 s for 4 calls and 3 tools.
+  - "What changed in the last hour?" as a follow-up: 52.6 s.
+  - Non-streaming `/chat`: empty response at 30.1 s.
+- The laptop and multimeter questions have the same number of calls and similar prompts (about 4.7k + 6k tokens versus 4.7k + 5k), so the roughly 30 s difference is decoding about 600 extra output tokens (markdown with UUIDs). That is about **20 tok/s effective decode**: output length and the number of calls dominate, then prefill.
+
+**Prompt tokens per step** (`estimate_request_tokens`, about 4 characters per token; ~125-item fixture with 69 open reviews):
+
+| | System prompt | Tool specs | Inventory block | Tool result cap | Steps 1 / 2 / 3 / 4 | Prefill per turn |
+|---|---|---|---|---|---|---|
+| before | 437 | 2317 | 1500 | 1500 | about 4.7k / 6.1k / 6.6k / 7.2k | 2 calls about 10.8k; drill path (4 calls) about 25k |
+| after | 530 | 2005 | 600 | 800 | 3.6k / 4.4k / 4.9k, then early stop | 2 calls 8.0k; worst grounded path 3 calls, 12.9k |
+
+- **Output:** before, unbounded (about 600 tokens of markdown). After, at most 400 (`max_tokens`), and the prompt asks for at most about 120 words, roughly 160-200 tokens.
+- **Prefix caching:** the static prefix (system prompt plus tools, about 2.5k tokens) is unchanged across requests, so vLLM prefix caching can reuse it. The clock was deliberately put in the data message, not the system prompt, to keep that prefix static.
+
+**Expected after (estimate, not yet measured; the code is not redeployed):**
+- **Typical 2-call question:** about 8k prefill plus about 30 + 180 output tokens at about 20 tok/s, so **about 10-14 s**. The live multimeter turn (2 calls, short output) at 8 s is the empirical anchor.
+- **Worst grounded path:** 3 calls, about 15-20 s.
+- **Hard bound:** 45 s turn deadline. When grounded data exists, a timeout returns the records list rather than an error; otherwise a 504 / `error` event with a retry hint.
+- **To confirm after redeploy:** read `prompt_tokens_est` and `latency_ms` from the "chat turn" log lines.
+
+### Final
+
+- Agent: **428 passed**, ruff clean. `make test-agent`: 428 passed. `make lint`: clean.
+- `make test`:
+  - api 396, perception 749, agent 428, eval 351, dashboard 269: all passed.
+  - **e2e: 1 failed / 24 passed.** `tests/e2e/test_e2e_contracts.py::test_e2e_contract_agent_stream_matches_dashboard_parser` asserts `set(names[:-1]) == {"token"}`. AC-AGT-16 intentionally adds `status` events before the tokens, and the dashboard parser already handles `status`.
+  - That file is not mine. The proposed one-line change is `set(names[:-1]) <= {"status", "token"}`, keeping the token-concatenation check.

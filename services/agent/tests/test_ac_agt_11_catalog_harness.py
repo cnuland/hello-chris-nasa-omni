@@ -85,7 +85,10 @@ async def test_ac_agt_11_entity_and_catalog_citations_both_appear(make_harness):
     assert E_DRILL in entity_ids(res)
     assert "drill-pistol" in catalog_ids(res)
     for c in res["citations"]:
-        assert sum(bool(c.get(k)) for k in ("entity_id", "window_id", "catalog_id")) == 1, c
+        # identity key precedence entity_id > window_id > catalog_id: since AC-AGT-17 an entity citation may also
+        # carry its item's catalog_id as a display field; a catalog citation has neither entity_id nor window_id
+        assert sum(bool(c.get(k)) for k in ("entity_id", "window_id")) <= 1, c
+        assert c.get("entity_id") or c.get("window_id") or c.get("catalog_id"), c
         if c.get("entity_id") or c.get("window_id"):
             assert c.get("at"), c
 

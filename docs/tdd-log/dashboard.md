@@ -327,3 +327,9 @@ The one inventory test that passed is a negative guard ("no Location set fact wi
   the review list is one column. Below 1100 px the duplicate compare stacks, the review filters use 2 columns and the
   candidate grid auto-fills 180 px tiles. The table stays in `.table-wrap` (`overflow-x: auto`). A Playwright re-run
   of the reviewer's 1024 px pass is recommended.
+
+## AC-UI-24 citation labels (integration 2026-10-18)
+- **Found by:** the agent's handoff note. `sanitizeCitation` dropped the agent's new label and location fields.
+- **Red:** 2 of 3 failed (the pass-through cases); the guard for oversized or non-string labels passed.
+- **Green:** the sanitizer passes the fields through and the chips prefer them. 272 tests pass; typecheck and build
+  are clean.

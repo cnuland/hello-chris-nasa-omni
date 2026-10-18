@@ -179,6 +179,10 @@ export interface Citation {
   window_id?: string;
   catalog_id?: string;
   at?: string;
+  /** AC-UI-24: optional display fields sent by the agent (AC-AGT-17). */
+  label?: string;
+  location?: string;
+  location_name?: string;
 }
 export interface Proposal {
   proposal_id?: string;

@@ -1,0 +1,97 @@
+# Google Gemma 4 12B "Unified" (Apache-2.0, US-origin): images + speech audio in, JSON (incl. box_2d) out.
+# Candidate replacement for Qwen2.5-Omni (research/07-us-models.md). Plain vLLM /v1/chat/completions (no vLLM-Omni
+# pipeline exists for Gemma 4); structured outputs (xgrammar) available. T4 (sm75): fp16, TP4 on its own 4xT4 node,
+# with the same Triton attention / sampler patches as DiffusionGemma (Gemma 4's 512-wide heads, vLLM issue #38918).
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: gemma4, namespace: nasa-inference}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: gemma4-anyuid, namespace: nasa-inference}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: "system:openshift:scc:anyuid"}
+subjects: [{kind: ServiceAccount, name: gemma4, namespace: nasa-inference}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: gemma4, namespace: nasa-inference, labels: {app: gemma4}}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: gemma4}}
+  template:
+    metadata: {labels: {app: gemma4}}
+    spec:
+      serviceAccountName: gemma4   # anyuid: the start-up sm75 patches rewrite files inside site-packages
+      nodeSelector: {nasa-role: gemma}
+      tolerations: [{key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}]
+      terminationGracePeriodSeconds: 60
+      volumes:
+      - {name: cache, emptyDir: {sizeLimit: 80Gi}}
+      - {name: shm, emptyDir: {medium: Memory, sizeLimit: 16Gi}}
+      containers:
+      - name: vllm
+        image: vllm/vllm-openai:v0.31.0
+        command:
+        - /bin/bash
+        - -c
+        - |
+          F=/usr/local/lib/python3.12/dist-packages/vllm/v1/attention/ops/triton_unified_attention.py
+          python3 - "$F" <<'PY'
+          import sys
+          p = sys.argv[1]; s = open(p).read()
+          anchor = "        launch_num_stages = 2\n"
+          patch = anchor + "    if not current_platform.has_device_capability(80):  # T4/sm75: 64KB smem per block\n        launch_num_stages = 1\n"
+          anchor2 = "        TILE_SIZE_DECODE = min(TILE_SIZE_DECODE, block_size)\n"
+          patch2 = anchor2 + "    if not current_platform.has_device_capability(80):  # T4/sm75 tile: head_size 512 x 32-token K/V tiles need 96KB\n        TILE_SIZE_PREFILL = min(TILE_SIZE_PREFILL, 16)\n        TILE_SIZE_DECODE = min(TILE_SIZE_DECODE, 16)\n"
+          if "T4/sm75" not in s:
+              if anchor in s and anchor2 in s:
+                  s = s.replace(anchor, patch, 1).replace(anchor2, patch2, 1); open(p, "w").write(s)
+                  print("patched triton_unified_attention for sm75 (1 stage, 16-token tiles)")
+              else:
+                  print("WARNING: sm75 patch anchors not found in this vLLM build - running unpatched")
+          PY
+          # sm75: keep top-k/top-p sampling off Triton. Only the sampling rank runs it, and its JIT warm-up loads kernels
+          # while the other tensor-parallel ranks sit in collectives: the pod hung in triton _init_handles for 77 min.
+          S=/usr/local/lib/python3.12/dist-packages/vllm/v1/sample/ops/topk_topp_sampler.py
+          python3 - "$S" <<'PY'
+          import sys
+          p = sys.argv[1]; s = open(p).read(); a = "    if HAS_TRITON:\n        return apply_top_k_top_p_triton(logits, k, p)\n"
+          if a in s and "sm75 sampler" not in s:
+              s = s.replace(a, "    from vllm.platforms import current_platform  # sm75 sampler: pytorch path\n"
+                               "    if HAS_TRITON and current_platform.has_device_capability(80):\n        return apply_top_k_top_p_triton(logits, k, p)\n", 1)
+              open(p, "w").write(s); print("patched top-k/top-p sampler: pytorch on sm75")
+          else:
+              print("WARNING: sampler patch anchor not found")
+          PY
+          exec vllm serve "$@"
+        - vllm-serve
+        args:
+        - google/gemma-4-12B-it
+        - --served-model-name=gemma4
+        - --host=0.0.0.0
+        - --port=8000
+        - --tensor-parallel-size=4
+        - --dtype=half
+        - --max-model-len=16384
+        - --max-num-seqs=2
+        - --gpu-memory-utilization=0.85
+        - --limit-mm-per-prompt={"image":8,"audio":1}
+        env:
+        - {name: HOME, value: /cache}
+        - {name: HF_HOME, value: /cache/hf}
+        - {name: VLLM_CACHE_ROOT, value: /cache/vllm}
+        - {name: TRITON_CACHE_DIR, value: /cache/triton}
+        - {name: CUDA_MODULE_LOADING, value: EAGER}   # see dgemma.yaml: lazy loads deadlocked TP ranks on T4
+        ports: [{name: openai, containerPort: 8000}]
+        resources:
+          requests: {cpu: "5", memory: 40Gi, nvidia.com/gpu: "4"}
+          limits: {cpu: "16", memory: 96Gi, nvidia.com/gpu: "4"}
+        volumeMounts: [{name: cache, mountPath: /cache}, {name: shm, mountPath: /dev/shm}]
+        startupProbe: {httpGet: {path: /health, port: 8000}, periodSeconds: 15, failureThreshold: 360}
+        readinessProbe: {httpGet: {path: /health, port: 8000}, periodSeconds: 10}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: gemma4, namespace: nasa-inference}
+spec: {selector: {app: gemma4}, ports: [{name: openai, port: 8000}]}

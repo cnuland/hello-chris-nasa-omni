@@ -11,6 +11,10 @@ class LLMError(RuntimeError):
     """The LLM endpoint failed (transport error, non-200 or malformed response)."""
 
 
+class LLMTimeout(LLMError):
+    """The LLM did not answer in time (HTTP timeout or the turn deadline, AC-AGT-15)."""
+
+
 class LLMClient(Protocol):
     async def complete(
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]], tool_choice: str = "auto"
@@ -30,17 +34,21 @@ class OpenAICompatLLM:
         api_key: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         timeout: float = 60.0,
+        max_tokens: int | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
         self.transport = transport
         self.timeout = timeout
+        self.max_tokens = max_tokens
 
     async def complete(
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]], tool_choice: str = "auto"
     ) -> dict[str, Any]:
         body: dict[str, Any] = {"model": self.model, "messages": messages}
+        if self.max_tokens:
+            body["max_tokens"] = self.max_tokens
         if tools:
             body["tools"] = tools
             body["tool_choice"] = tool_choice
@@ -50,6 +58,8 @@ class OpenAICompatLLM:
         try:
             async with httpx.AsyncClient(transport=self.transport, timeout=self.timeout) as client:
                 resp = await client.post(f"{self.base_url}/chat/completions", json=body, headers=headers)
+        except httpx.TimeoutException as exc:
+            raise LLMTimeout(f"LLM timed out after {self.timeout:g} s") from exc
         except httpx.HTTPError as exc:
             raise LLMError(f"LLM unreachable: {type(exc).__name__}") from exc
         if resp.status_code != 200:

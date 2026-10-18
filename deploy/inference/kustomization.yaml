@@ -1,1 +1,1 @@
-resources: [namespace.yaml, omni.yaml, agent-llm.yaml, dgemma.yaml]
+resources: [namespace.yaml, omni.yaml, agent-llm.yaml, dgemma.yaml, gemma4.yaml]

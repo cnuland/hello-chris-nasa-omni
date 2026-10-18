@@ -138,7 +138,9 @@ async def test_ac_agt_11_home_location_name_null_when_unknown_or_unset(toolbox):
 
 async def test_ac_agt_11_citations_are_catalog_ids(toolbox):
     r = await toolbox.call("lookup_catalog", {"is_fungible": True})
-    assert r.citations == [{"catalog_id": c, "at": CATALOG_CREATED_AT} for c in ("food-pack", "wipes", "ziploc")]
+    # AC-AGT-17 adds an optional display `label`; the identity fields are unchanged
+    ids = [{k: v for k, v in c.items() if k != "label"} for c in r.citations]
+    assert ids == [{"catalog_id": c, "at": CATALOG_CREATED_AT} for c in ("food-pack", "wipes", "ziploc")]
     assert all("entity_id" not in c and "window_id" not in c for c in r.citations)
 
 
@@ -146,7 +148,7 @@ async def test_ac_agt_11_citation_without_created_at_has_no_at(toolbox, fake_inv
     for row in fake_inventory.catalog:
         row.pop("created_at")
     r = await toolbox.call("lookup_catalog", {"q": "multimeter"})
-    assert r.citations == [{"catalog_id": "multimeter"}]
+    assert [{k: v for k, v in c.items() if k != "label"} for c in r.citations] == [{"catalog_id": "multimeter"}]
 
 
 async def test_ac_agt_11_upstream_failure_reported(toolbox, fake_inventory):

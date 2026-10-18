@@ -119,3 +119,9 @@ All new API fields below are optional; every AC holds with and without them (gra
   - The add form shows "Label is required" / "Location is required" once touched, with `aria-invalid`, plus a line
     next to the disabled submit that lists what is missing.
   - The confidence slider has `aria-valuetext`, there is a "Reset filters" button, and a "Skip to content" link.
+
+### AC-UI-24 Citation labels from the agent (integration 2026-10-18)
+- `validateChatResponse` keeps the optional `label`, `location` and `location_name` (plain strings of 200 characters
+  or fewer, else dropped) and an item citation's `catalog_id`, as sent by the agent (AC-AGT-17).
+- Citation chips prefer these fields and fall back to the cached item lookup. Catalog chips read "Catalog: <label>".
+  Tests: tests/ac_ui_24_citation_labels.test.ts.

@@ -145,7 +145,7 @@ def test_ac_agt_10_recent_hours_window_configurable(database_url, world):
 # ---------------------------------------------------------------- harness: every turn, every step
 async def test_ac_agt_10_block_rendered_for_latest_question_each_turn(make_harness):
     block = FakeInventoryBlock("IWS-SENTINEL pouch NOD2O4")
-    llm = FakeLLM([assistant_text("a")])
+    llm = FakeLLM([], default=assistant_text("a"))  # follow-up without tools is nudged once (AC-AGT-12)
     history = [{"role": "user", "content": "old q"}, {"role": "assistant", "content": "old a"},
                {"role": "user", "content": "what is unknown in Node 2?"}]
     await make_harness(llm, inventory_block=block).run(history)
@@ -173,7 +173,7 @@ async def test_ac_agt_10_block_survives_long_history_and_large_memory(make_harne
     for i in range(30):
         history += [{"role": "user", "content": "q " * 200}, {"role": "assistant", "content": "a " * 200}]
     history.append({"role": "user", "content": "LATEST"})
-    llm = FakeLLM([assistant_text("ok")])
+    llm = FakeLLM([], default=assistant_text("ok"))  # follow-up without tools is nudged once (AC-AGT-12)
     await make_harness(llm, inventory_block=block, memory=mem,
                        settings=replace(plain_settings, context_token_budget=1200)).run(history)
     sys_text = context_text(llm.requests[0]["messages"])

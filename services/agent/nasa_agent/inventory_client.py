@@ -9,7 +9,11 @@ import httpx
 
 
 class InventoryError(RuntimeError):
-    """inventory-api unreachable or returned a 5xx / unexpected status."""
+    """inventory-api unreachable or returned a 5xx / unexpected status (``status_code`` None when unreachable)."""
+
+    def __init__(self, message: str, *, status_code: int | None = None):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class InventoryClient:
@@ -31,7 +35,9 @@ class InventoryClient:
         if allow_404 and resp.status_code == 404:
             return None
         if resp.status_code != 200:
-            raise InventoryError(f"inventory-api GET {path} returned HTTP {resp.status_code}")
+            raise InventoryError(
+                f"inventory-api GET {path} returned HTTP {resp.status_code}", status_code=resp.status_code
+            )
         try:
             return resp.json()
         except ValueError as exc:
