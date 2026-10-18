@@ -7,7 +7,7 @@ and anything outside the clothing / colour vocabulary (activities, scenery) are 
 ``appearance_similarity(a, b)`` in [0, 1]: 0 when both name the same garment in incompatible colours ("blue shirt" vs
 "red shirt"; "dark" alone stands for the dark colours, "light"/"pale" for the light ones, so "dark hair" vs "blonde
 hair" clashes); otherwise the weighted overlap coefficient of the descriptor keys (hair weighs half: most crew members
-have dark hair). ``appearance_closeness`` is the two-sided (Dice) version, used to break ties. Approximate by design:
+have dark hair; distinctive accessories such as gloves, headset, visor, helmet, spacesuit weigh double, AC-PER-46). ``appearance_closeness`` is the two-sided (Dice) version, used to break ties. Approximate by design:
 two crew members in similar outfits look the same to it (docs/spec/20-perception.md AC-PER-35).
 
 ``sleep_cue(text)``: the first sleep cue ("sleeping bag", "sleeping", "asleep", ...) in ``text`` as a whole-word match,
@@ -24,6 +24,16 @@ MAX_TEXT = 200  # observation.schema.json people[].appearance maxLength
 
 # multi-word phrases first, rewritten to one token
 _PHRASES: tuple[tuple[str, str], ...] = (
+    # AC-PER-46: sleeve length is neither colour nor garment; dropped so "grey long-sleeve shirt" stays grey
+    (r"\b(?:long|short) ?sleeve[sd]?\b", " "),
+    (r"\bsleeveless\b", " "),
+    (r"\btank tops?\b", "shirt"),
+    (r"\bspace ?suits?\b", "spacesuit"),
+    (r"\beva suits?\b", "spacesuit"),
+    (r"\bemu(?: suits?)?\b", "spacesuit"),
+    (r"\b(?:u\.? ?s\.? ?a?\.?|usa)\s*(?=flags?\b)", "american "),  # "US flag", "U.S. flag" -> American flag
+    (r"\bflags\b", "flag"),
+    (r"\blogos\b", "logo"),
     (r"\bt ?shirts?\b", "shirt"),
     (r"\btees?\b", "shirt"),
     (r"\bflight suits?\b", "suit"),
@@ -44,11 +54,13 @@ _GARMENT_ALIASES = {
     "spectacles": "glasses", "gloves": "gloves", "socks": "socks", "shoes": "shoes", "sneakers": "shoes",
     "patches": "patch", "headband": "headband", "lanyard": "lanyard", "badge": "badge", "hair": "hair",
     "beard": "beard", "skirt": "skirt",
+    "spacesuits": "spacesuit", "helmets": "helmet", "visors": "visor", "watches": "watch", "wristwatch": "watch",
+    "harnesses": "harness",
 }
 GARMENTS = frozenset(
     {"shirt", "pants", "shorts", "suit", "jacket", "hoodie", "sweater", "vest", "cap", "hat", "headset",
      "glasses", "gloves", "socks", "shoes", "patch", "headband", "lanyard", "badge", "hair", "beard", "skirt",
-     "sleepingbag"}
+     "sleepingbag", "spacesuit", "helmet", "visor", "watch", "harness"}
 )
 _COLOUR_ALIASES = {
     "gray": "grey", "silver": "grey", "charcoal": "grey", "navy": "blue", "teal": "blue", "turquoise": "blue",
@@ -69,7 +81,14 @@ DISTINCTIVE = frozenset(
 )
 _BOUNDARIES = frozenset({"with", "plus"})  # "and"/"or" may join colours: "white and blue shirt"
 MAX_GAP = 1  # non-colour words allowed between a colour and its garment ("blue NASA polo")
-WEIGHTS = {"hair": 0.5}
+# AC-PER-46: hair is generic (most crew have dark hair); a distinctive accessory says more than a garment
+ACCESSORY_WEIGHT = 2.0
+ACCESSORIES = frozenset(  # review round: "watch" is common, not distinctive (weight 1, no evidence on its own)
+    {"gloves", "headset", "visor", "helmet", "glasses", "harness", "spacesuit", "lanyard", "badge"}
+)
+WEIGHTS = {"hair": 0.5, **{k: ACCESSORY_WEIGHT for k in ACCESSORIES}}
+INSIGNIA = frozenset({"flag", "patch", "american", "nasa", "esa", "jaxa", "roscosmos", "logo"})
+EVIDENCE_KEYS = ACCESSORIES | INSIGNIA
 
 
 def sanitise_text(value: Any, limit: int = MAX_TEXT) -> str:
@@ -97,9 +116,24 @@ def _normalise(text: str) -> str:
 Colours = frozenset[str] | None  # allowed colours of a descriptor; None = no colour named (compatible with any)
 
 
+MAX_DESCRIPTORS = 8  # review round (AC-PER-46): real Gemma appearances name at most 5
+MAX_GARMENT_COLOURS = 3  # real: at most 2 ("white and blue shirt")
+
+
 def appearance_descriptors(text: str | None) -> dict[str, Colours]:
     """{garment or distinctive word: allowed colours or None}. Specific colours win over a modifier ("light grey" ->
-    grey); a modifier alone gives its family; several colours ("white and blue") are all allowed."""
+    grey); a modifier alone gives its family; several colours ("white and blue") are all allowed. An implausibly
+    broad description (more than MAX_DESCRIPTORS keys, or a garment in more than MAX_GARMENT_COLOURS specific colours)
+    yields {} (featureless): it would otherwise be compatible with, and match, every crew member."""
+    out = _descriptors(text)
+    if len(out) > MAX_DESCRIPTORS:
+        return {}
+    if any(c is not None and c not in (DARK, LIGHT, COLOURS) and len(c) > MAX_GARMENT_COLOURS for c in out.values()):
+        return {}
+    return out
+
+
+def _descriptors(text: str | None) -> dict[str, Colours]:
     out: dict[str, Colours] = {}
     if not text:
         return out
@@ -168,6 +202,20 @@ def appearance_closeness(a: str | None, b: str | None) -> float:
     """Two-sided (Dice) similarity: "headset" is as similar to "blue shirt, headset" as "blue shirt, headset" is
     (overlap 1.0), but less close (0.67 against 1.0). Breaks ties between equally similar candidates."""
     return _compare(a, b)[2]
+
+
+def appearance_evidence(a: str | None, b: str | None) -> bool:
+    """Review round (AC-PER-45/47): a positive, specific shared trait: a garment both texts colour compatibly (hair
+    excluded: generic), or a shared distinctive accessory or insignia. Colourless garments ("a shirt") and a watch are
+    not evidence on their own."""
+    da, db = appearance_descriptors(a), appearance_descriptors(b)
+    for key in da.keys() & db.keys():
+        ca, cb = da[key], db[key]
+        if key in EVIDENCE_KEYS:
+            return True
+        if key != "hair" and ca is not None and cb is not None and ca & cb:
+            return True
+    return False
 
 
 def appearance_conflict(a: str | None, b: str | None) -> bool:

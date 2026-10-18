@@ -61,7 +61,7 @@ import json
 import logging
 import math
 import time
-from collections import Counter
+from collections import Counter, deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -79,6 +79,7 @@ from .people import (
     appearance_closeness,
     appearance_conflict,
     appearance_descriptors,
+    appearance_evidence,
     appearance_similarity,
     find_sleep_cue,
     sanitise_text,
@@ -99,6 +100,7 @@ MAX_DECISION_OPTIONS = 4  # candidates offered to the decision model (+ NEW)
 NEAR_TIE_P = 0.02
 LOW_CONFIDENCE = "low_confidence"
 PLACE_ITEMS_LIMIT = 50  # AC-PER-29: same-class entities of one module (GET /items?catalog_id=&location=)
+PERSON_RECENT_DESCRIPTIONS = 5  # review round (AC-PER-45): a track's latest sighting appearances kept in memory
 UNKNOWN_PLACE_ITEMS_LIMIT = 200  # UNKNOWN has no class filter: every entity of the module is listed
 
 
@@ -382,6 +384,9 @@ class Reconciler:
         self._crop_seq = 0
         # (entity_id, event_type, to_location) -> occurred_at of the last recorded omni event (overlap dedup)
         self._recent_events: dict[tuple[str, str, str | None], datetime] = {}
+        # review round (AC-PER-45): appearance texts of each person track's latest sightings (this process only;
+        # the same text is stored as the sighting description), so a clash with any of them blocks a match
+        self._person_recent: dict[str, deque[str]] = {}
         # AC-PER-37 review: windows starting before this stay private (overlapping windows show the same scene)
         self._private_until: datetime | None = None
         # AC-PER-41: a roaming camera's last own module (resolver and horizon are refreshed per window)
@@ -970,39 +975,81 @@ class Reconciler:
         self._match_people(ctx, persons, taken)
 
     def _match_people(self, ctx: _WindowContext, persons: list[_Observed], taken: set[str]) -> None:
-        """AC-PER-35: person sightings match live person-class entities of the same module (AC-PER-29 candidates,
-        exact location outside modules and then recent only) by appearance text (>= person_match_floor), assigned
-        globally best first: similarity, recent before stale, own zone, most recent. A sighting without appearance
-        descriptors attaches to the most recent recent candidate. Never two sightings of a window on one entity."""
+        """AC-PER-35/45/47: person sightings match live person-class entities by appearance text, assigned globally best
+        first (similarity, closeness, same place before cross-module, recent before stale, own zone, most recent).
+        Candidates: the same module (AC-PER-29 listing; outside modules the exact location, recent only) and, for an
+        observation with appearance descriptors, any module within ``person_cross_module_s`` (AC-PER-45). A sighting
+        without descriptors attaches to the most recent same-place recent candidate. Sightings left over when the
+        live count has reached the class's expected_count may attach to any live person entity (AC-PER-47). Never two
+        sightings of a window on one entity, never a colour clash, always >= ``person_match_floor``."""
+        located = [o for o in persons if o.location is not None and self._place_key(o) is not None]
+        ranked = [(rank, o, item) for o in located for rank, item in self._person_candidates(ctx, o, taken)]
+        had_candidate = {o.index for _, o, _ in ranked}
+        self._assign_people(ranked, taken)
+        # review round: only sightings that found no candidate at all (not those that lost one to another person of
+        # this window: that person is a different one, a stale look-alike elsewhere is no better)
+        left = [o for o in located if o.entity_id is None and o.index not in had_candidate]
+        if left and self.config.person_soft_cap and self._expected_count_reached(ctx, left[0]):
+            ranked = [(rank, o, item) for o in left for rank, item in self._person_candidates(ctx, o, taken, cap=True)]
+            if ranked:
+                logger.info("person soft cap: attaching instead of new tracks", extra={"window": ctx.window.index})
+            self._assign_people(ranked, taken)
+
+    def _person_candidates(
+        self, ctx: _WindowContext, o: _Observed, taken: set[str], *, cap: bool = False
+    ) -> list[tuple[tuple, dict[str, Any]]]:
+        """(rank, item) of the eligible person entities for ``o``; ``cap``: AC-PER-47, any place and any gap."""
         cfg = self.config
-        ranked: list[tuple[tuple, _Observed, dict[str, Any]]] = []
-        for o in persons:
-            key = self._place_key(o)
-            if key is None or o.location is None:
+        key = self._place_key(o)
+        module = self.resolver.module_of(o.location)
+        seen_at = ctx.frame_ts(o.frame_idx)
+        desc = str(o.obj.get("description") or "")
+        featureless = not appearance_descriptors(desc)
+        if cap and featureless:
+            return []
+        pool: dict[str, tuple[dict[str, Any], bool]] = {}  # entity id -> (item, same place)
+        for item in self._place_items(ctx, key, module or o.location) or []:
+            if self._same_place(item.get("last_location"), o.location):
+                pool[str(item.get("entity_id") or "")] = (item, True)
+        if not featureless and (cap or cfg.person_cross_module_s > 0):
+            for eid, item in self._class_items(ctx, o.catalog_id).items():
+                pool.setdefault(eid, (item, False))
+        out: list[tuple[tuple, dict[str, Any]]] = []
+        for eid, (item, same) in pool.items():
+            last_seen = _parse_ts(item.get("last_seen_at"))
+            if not eid or eid in taken or item.get("status") in ("merged", "dismissed") or last_seen is None:
                 continue
-            module = self.resolver.module_of(o.location)
-            items = self._place_items(ctx, key, module or o.location) or []
-            seen_at = ctx.frame_ts(o.frame_idx)
-            desc = str(o.obj.get("description") or "")
-            featureless = not appearance_descriptors(desc)
-            for item in items:
-                eid = str(item.get("entity_id") or "")
-                last_seen = _parse_ts(item.get("last_seen_at"))
-                if not eid or eid in taken or item.get("status") in ("merged", "dismissed") or last_seen is None:
+            if item.get("catalog_id") not in (None, o.catalog_id):
+                continue
+            gap = abs((seen_at - last_seen).total_seconds())
+            recent = gap <= cfg.no_exemplar_match_s
+            if not cap:
+                if same and not recent and (module is None or featureless):
                     continue
-                if not self._same_place(item.get("last_location"), o.location):
+                if not same and gap > cfg.person_cross_module_s:
                     continue
-                recent = abs((seen_at - last_seen).total_seconds()) <= cfg.no_exemplar_match_s
-                if not recent and (module is None or featureless):
+            other = str(item.get("description") or "")
+            sim = close = 0.0
+            if not featureless:
+                if appearance_conflict(desc, other) or any(
+                    appearance_conflict(desc, seen) for seen in self._person_recent.get(eid, ())
+                ):
+                    continue  # a colour clash with the track (first or latest sightings) is a different person
+                sim = appearance_similarity(desc, other)
+                if sim < cfg.person_match_floor:
                     continue
-                other = str(item.get("description") or "")
-                sim = 0.0 if featureless else appearance_similarity(desc, other)
-                if not featureless and sim < cfg.person_match_floor:
+                close = appearance_closeness(desc, other)
+                # review round: another module or the cap is weak spatial evidence; the appearance must carry it
+                # two-sided (Dice >= floor, so a short first description cannot absorb richer outfits) and with a
+                # specific shared trait (a compatibly coloured garment, a distinctive accessory or insignia)
+                if (cap or not same) and (close < cfg.person_match_floor or not appearance_evidence(desc, other)):
                     continue
-                close = 0.0 if featureless else appearance_closeness(desc, other)
-                rank = (featureless, -sim, -close, not recent, item.get("last_location") != o.location,
-                        -last_seen.timestamp(), o.index, eid)
-                ranked.append((rank, o, item))
+            rank = (featureless, -sim, -close, not same, not recent, item.get("last_location") != o.location,
+                    -last_seen.timestamp(), o.index, eid)
+            out.append((rank, item))
+        return out
+
+    def _assign_people(self, ranked: list[tuple[tuple, _Observed, dict[str, Any]]], taken: set[str]) -> set[int]:
         done: set[int] = set()
         for _, o, item in sorted(ranked, key=lambda r: r[0]):
             eid = str(item["entity_id"])
@@ -1011,6 +1058,7 @@ class Reconciler:
             self._attach_item(o, item)
             done.add(o.index)
             taken.add(eid)
+        return done
 
     def _match_without_exemplar(self, ctx: _WindowContext, o: _Observed, taken: set[str]) -> None:
         """AC-PER-22/29 class-and-place match. Candidates: live entities of the same class (UNKNOWN: unclassified, same
@@ -1214,7 +1262,7 @@ class Reconciler:
             try:
                 rows = self.api.list_items(catalog_id=catalog_id, sort="-last_seen_at", limit=PLACE_ITEMS_LIMIT) or []
             except Exception as exc:  # noqa: BLE001
-                logger.warning("listing entities for decision context failed", extra={"error": str(exc)})
+                logger.warning("listing the entities of a class failed (decision context, person cross-module and cap candidates)", extra={"error": str(exc)})
                 rows = []
             ctx.class_items[catalog_id] = {str(r.get("entity_id")): r for r in rows}
         return ctx.class_items[catalog_id]
@@ -1656,6 +1704,15 @@ class Reconciler:
 
         def resolve(entity_id: str | None, ref: str | None) -> str | None:
             return str(entity_id) if entity_id else refs.get(ref or "")
+
+        # 0. latest appearance texts of person tracks (only sightings actually recorded: none in private windows)
+        recorded = {a.get("ref"): a for a in payload.get("assignments", [])}
+        for o in observed:
+            a = recorded.get(o.ref)
+            text = (a or {}).get("sighting", {}).get("description")
+            eid = resolve(o.entity_id, o.ref) if a else None
+            if eid and text and self._is_person(o):
+                self._person_recent.setdefault(eid, deque(maxlen=PERSON_RECENT_DESCRIPTIONS)).append(str(text))
 
         # 1. remember recorded omni events (overlap dedup)
         for ev in payload.get("events", []):

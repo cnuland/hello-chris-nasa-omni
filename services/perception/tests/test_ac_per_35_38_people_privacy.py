@@ -166,7 +166,8 @@ def test_ac_per_35_two_known_people_are_not_swapped(make_reconciler, inv):
 
 
 def test_ac_per_35_person_in_another_module_is_not_attached(make_reconciler, inv):
-    seed_person(inv, GEMMA_FLIGHT_SUIT, location="NOD2")
+    # AC-PER-45: only beyond PERCEPTION_PERSON_CROSS_MODULE_S (600 s); a recent one in another module now attaches
+    seed_person(inv, GEMMA_FLIGHT_SUIT, location="NOD2", ago_s=700)
     payload, _ = run(make_reconciler(LAB_CAM), people=[person("P1", GEMMA_FLIGHT_SUIT)])
     assert person_assignments(payload, inv)[0]["entity_id"] is None
 

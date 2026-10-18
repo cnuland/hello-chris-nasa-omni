@@ -1005,3 +1005,100 @@ No window had the wrong module; all 14 misses stayed at segment level (USOS).
   now null. `PredWindow.privacy_reason` (read from the DB when the column exists, exported only when set) and
   `_sleep_window_ids` also match `privacy_reason == "sleep_cue"`. Committed baseline unchanged; gate PASSED.
 - **Counts:** perception 1040 passed (1032 + 8).
+
+## Person-track over-counting — AC-PER-45..48 (2026-10-18)
+
+- **Problem (measured live):** the Gemma 4 run of the NASA tour created 25 person tracks for 7 to 11 crew (USOS 17,
+  NOD1 2, NOD3 2, ZVEZDA 2, COL1 1, CUP1 1). Person sightings matched only tracks in the same module.
+- **Real data:** when this round started, the live `inventory` DB had 0 person entities: the perception pod had
+  just been redeployed and the run restarted. The raw replies of the Gemma run were read-only downloaded from rustfs
+  (`raw/cam-handheld/2026-10-18/*.878740.json`, 99 stored windows, 03:02:48 to 03:57:48; the tour loops about every
+  15 min; private windows store no reply). Saved as `services/perception/tests/fixtures/gemma4_tour_people_2026-10-18.json`:
+  time, people[] verbatim, the summary/hint/object labels, and per window the `module` that AC-PER-39..42 resolution
+  gives it (72 of 99 still `USOS`).
+- **Normaliser measured before deciding** (72 distinct real appearance strings, 2556 pairs):
+  - 9 strings lost their shirt colour to "long-sleeve"/"short-sleeved" (two words between colour and garment), so
+    "grey long-sleeve shirt, dark pants" vs "blue shirt, dark pants" = 1.00. The AC-PER-35 replay put
+    "grey long-sleeved shirt, black pants" on a blue-shirt track.
+  - "white spacesuit", "spacesuit, dark visor" were featureless (no descriptor). They attached to the most recent
+    track, e.g. "spacesuit, dark visor" joined "white shirt, blue pants".
+  - "orange helmet", "watch", "white harness" were ignored; "US flag" was not "American flag".
+  - Already fine: t-shirt/tee/polo → shirt, flight suit/jumpsuit → suit, navy → blue, "dark blue" → blue, pose and
+    activity words (floating, looking, holding) never count (now tested on the real strings).
+  - The task's examples: "blue flight suit with American flag patch" vs "blue shirt, dark hair" 0.00 and vs "dark blue
+    shirt" 0.00 (different garments); "blue shirt, dark hair" vs "dark blue shirt" 1.00.
+  - Result, old → new normaliser: featureless strings 6 → 4; pairs ≥ floor 812 → 527; colour-clash pairs 738 → 996.
+- **Spec:** AC-PER-45 (cross-module continuity, `PERCEPTION_PERSON_CROSS_MODULE_S` 600 s), AC-PER-46 (normaliser:
+  sleeve length, tank top, spacesuit, helmet/visor/watch/harness, US flag, accessory weight 2), AC-PER-47 (soft cap
+  at the catalog `expected_count`, `PERCEPTION_PERSON_SOFT_CAP`, default on; seed `crew-member` = 7), AC-PER-48 (eval
+  crew transit pass, gate ≤ 1.3; real-data regression).
+- **Red:** `tests/test_ac_per_45_48_person_continuity.py`, 51 tests: 29 failed, and 22 passed as characterisation
+  (safety rules, pose words, below-cap behaviour). One AC-PER-35 test edited (marked AC-PER-45): a track in another
+  module now has to be > 600 s old to stay separate. eval: `tests/test_ac_eval_09_crew_transit.py` (6), and the
+  threshold assertion in `test_ac_eval_09_people_privacy.py` moved 1.5 → 1.3.
+- **Green:** `config.py` (2 vars), `people.py` (phrases, vocabulary, weights), `reconciler.py` (`_match_people` split
+  into `_person_candidates` + `_assign_people`; same-place and cross-module pools; an explicit colour-clash check in
+  every tier, also for a floor of 0; the soft-cap pass only for sightings left over); eval `collaborators.py`
+  (`crew_transit` GoldOmni profile, `transit_with_collaborators`), `runner.py` (transit pass after the revisit,
+  `person_tracks_per_person` re-measured on the final DB, `counts.transit_new_person_tracks`), `thresholds.yaml`.
+- **Eval, before → after (`make eval`, seed 7):** `person_tracks_per_person` **4.0 → 1.0** (gate ≤ 1.3: FAILED →
+  PASSED; reports `20261018T043025Z-synth-7` and `20261018T043300Z-synth-7`). The 2 actors were 2 tracks in LAB1 plus
+  one new track each in Unity, Columbus and Kibo. Every other metric is unchanged.
+- **Real fixture re-scored offline** (the reconciler on cam-handheld, FakeInventory, live 30 s cadence; final code
+  after the review round):
+
+  | matching | person tracks | first seen at USOS | clashing pairs within a track |
+  |---|---|---|---|
+  | AC-PER-35 (old code, HEAD, old normaliser) | **37** | 23 | 51 / 288 |
+  | new normaliser, same module only (cross-module 0, cap off) | 44 | — | 1 / 187 |
+  | + cross-module 600 s, cap off | 35 | — | 4 / 317 |
+  | cap only (cross-module 0) | 24 | — | 1 / 260 |
+  | **defaults (cross-module 600 s + cap at 7)** | **22** | 10 | 4 / 430 |
+
+  *Clashing pairs* is a purity proxy with no ground truth: pairs of sightings on one track whose appearances clash in
+  colour. The old row's 51 comes mostly from the old normaliser dropping colours. The rows that isolate the new
+  matching are rows 2 to 5. Before the review fixes, defaults gave 19 tracks with 32 clashing pairs (cross-module
+  alone: 28). Cross-module matching cannot link the loop's passes (15 min > 600 s); the cap at 7 does. For example,
+  the flag-patch flight suit is 1 track instead of 4. The offline 37 is higher than the live 25: the live run was
+  measured partway through and on older module resolution.
+- **Remaining over-merge (accepted, documented):** the track first described as "blue shirt, dark hair" takes 20
+  sightings in 7 places ("blue shirt, orange helmet", "blue shirt, long hair" in the Cupola, ...). These are probably
+  2 to 4 crew in NASA blue polos whose descriptions never clash.
+- **Adversarial review** (an independent reviewer agent plus my own probes). Findings and fixes (test-first; red
+  first unless marked):
+  1. *High: cross-module matching multiplied clashing pairs inside tracks* (3 → 28, same normaliser). Weak tiers now
+     need Dice ≥ floor plus `appearance_evidence` (a compatibly coloured shared garment, or a shared accessory or
+     insignia). Each track's latest 5 sighting texts are remembered in process, and a clash with any of them blocks
+     the match. Tested on the reviewer's repros and the fixture purity (≤ 5).
+  2. *High/medium: vague or crafted descriptions absorbed everyone* ("astronaut in a shirt"; 8 colourless garments
+     + watch through the cap; "watch" alone). Colourless garments and a watch are no longer evidence; watch weighs 1.
+     My own probe: a "every colour, every garment" text scored 1.0 against all crew; more than 8 keys, or more than 3
+     colours on one garment, now makes the text featureless.
+  3. *Medium: the eval cannot see over-merging* (gate is a max; synthetic shirts always clash; 3 actors < 7, so the
+     cap never runs). `person_track_recall` is now re-measured after the transit pass. Look-alike and cap scenes
+     are left to the unit tests and the real fixture (documented in the spec).
+  4. *Low: the cap took sightings that lost a candidate within the window* (contrary to the spec). Fixed: only
+     sightings with no candidate at all.
+  5. *Low: listing failures and the 50-row limit.* The warning text is fixed; the rest is documented as residual.
+  6. *Low: "long sleeves", "american flags".* Fixed.
+  7. *Low: the spacesuit test accepted "flight suit".* Tightened; it still passes.
+  - Not red first (written after the fix, as regression): the terse cross-module under-merge, the latest-sightings
+    clash test, the private-window memory check.
+  - *Checked fine:*
+    - Private windows record no person sighting and feed no memory.
+    - No log line carries appearance text.
+    - The new regexes are linear (10k chars in under 15 ms; text capped at 200).
+    - Fullwidth "Ｕ.Ｓ." normalises; "bus flag" and "emus" are not mis-mapped.
+    - The ranking matches the spec.
+    - Two people of one window never share a track (in all passes and in the fixture).
+    - The clash check holds with a floor of 0.
+    - The eval transit pass is deterministic and runs last.
+  - *Privacy:* appearance text only, never crops or embeddings of people (AC-PER-36 unchanged). The in-memory text
+    is the stored sighting description.
+- **Final runs:**
+  - perception: 1110 passed (1040 + 70 new test cases, 48 functions in the new file); ruff clean.
+  - `make test`: inventory-api 465, perception 1110, agent 560, eval 408 + 1 skipped (gates PASSED), dashboard 389,
+    e2e 28.
+  - `make eval`: gate PASSED (`person_tracks_per_person` 1.0, `person_track_recall` 1.0).
+  - `make lint`: clean.
+- **New env vars:** `PERCEPTION_PERSON_CROSS_MODULE_S` (600, 0 = off) and `PERCEPTION_PERSON_SOFT_CAP` (true).

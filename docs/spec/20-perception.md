@@ -632,3 +632,114 @@ amends AC-PER-11, AC-PER-36 and AC-PER-37 (inventory-api side: AC-API-39).
   object. Live example fixed: "person 87dbd193 moved by person (spacesuit, dark visor)".
   *Eval:* AC-PER-38's scorer found the sleep-cue window by its stored summary; it now also matches the stored
   `privacy_reason = "sleep_cue"` (the summary is null).
+
+## Amendments: cross-module person continuity (live Gemma 4 run, 2026-10-18)
+
+Measured (live Gemma 4 run on the NASA tour, one handheld camera through about 9 modules, 7 to 11 crew aboard):
+**25 person tracks** (USOS 17, NOD1 2, NOD3 2, ZVEZDA 2, COL1 1, CUP1 1). Two causes:
+- AC-PER-35 matches a person sighting only against tracks last seen in the **same module**. On the ISS the crew float
+  between modules and the handheld camera follows them, so every module starts a new track. Segment-level windows
+  (`USOS`) match only tracks at that exact location seen recently.
+- The appearance normaliser loses evidence on real strings. "grey long-sleeve shirt" loses its colour (two words
+  between colour and garment) and then matches any shirt; "white spacesuit", "orange helmet", "dark visor", "watch"
+  and "harness" are not descriptors; "US flag" is not "American flag".
+
+The raw replies of the run (rustfs `raw/cam-handheld/2026-10-18/*.878740.json`, read-only) are saved as
+`tests/fixtures/gemma4_tour_people_2026-10-18.json`: 99 stored windows, 03:02:48 to 03:57:48 (the tour loops about
+every 15 minutes), people[] verbatim. AC-PER-45 to AC-PER-48 amend AC-PER-35. The safety rules stay: two entries of
+one window never share a track, a colour clash is never a match, private windows track no one (AC-PER-36), and people
+are tracked by appearance text only, never by biometrics.
+
+- AC-PER-45 **Cross-module person continuity** (amends AC-PER-35 *Matching*). The candidates of a person sighting
+  are:
+  - *same place* (AC-PER-35, unchanged): live person-class entities last seen in the observation's module or one of
+    its zones (outside modules: the exact location, recent only);
+  - *cross-module*: any other live person-class entity, last seen **anywhere** within
+    `person_cross_module_s` (`PERCEPTION_PERSON_CROSS_MODULE_S`, default 600 s, 0 = off) of the sighting's time. One
+    cached `GET /items?catalog_id=<class>&sort=-last_seen_at&limit=50` per window (the AC-PER-30 class listing).
+  A cross-module candidate is eligible only when the observation has appearance descriptors and the similarity is
+  ≥ `person_match_floor`; a featureless observation ("astronaut", "hand visible") matches same-place candidates only,
+  as before. Beyond `person_cross_module_s`, only same-place candidates are eligible, as before. Assignment stays
+  global and best first: higher similarity, then closeness (Dice), then **same place before cross-module** (same-module
+  matches win ties), then recent before stale, own zone, most recently seen.
+  A candidate whose description clashes in colour with the observation is never eligible, whatever the floor (also
+  for a floor of 0).
+- AC-PER-46 **Appearance normalisation, real-string round** (amends AC-PER-35 *Appearance similarity*). Measured on
+  the 72 distinct appearance strings of the fixture (docs/tdd-log/perception.md):
+  - *Sleeve length is not a word between colour and garment.* "long sleeve(d)", "short sleeve(d)" and "sleeveless"
+    are dropped before parsing, so "grey long-sleeve shirt" is grey shirt (9 of 72 strings lost their shirt colour).
+  - *Garment synonyms.* "tank top" is a shirt; "spacesuit", "space suit", "EVA suit", "EMU" are `spacesuit` (a
+    garment of its own, not the flight suit `suit`, and not a sleep cue). Already: t-shirt / tee / polo → shirt,
+    flight suit / jumpsuit / coveralls → suit.
+  - *Accessories are descriptors:* helmet, visor, watch, harness (with a colour when one is named: "orange helmet").
+  - *Insignia.* "US flag" / "USA flag" / "U.S. flag" is "American flag".
+  - *Colour families.* Unchanged: navy, teal → blue; "dark blue" is blue (a specific colour wins over the modifier);
+    "dark" alone is the dark family.
+  - *Pose and activity words* (floating, looking, holding, working, standing, reaching, ...) are never descriptors:
+    only the clothing / colour / insignia vocabulary counts (unchanged, now tested on the real strings).
+  - *Weights.* Hair 0.5 (generic: most crew have dark hair), garments 1, **distinctive accessories 2**: gloves,
+    headset, visor, helmet, glasses, watch, harness, spacesuit, lanyard, badge. Insignia words (flag, patch, American,
+    NASA, ...) weigh 1 each; a flag patch is already two or three of them. A distinctive accessory on one side only
+    lowers the similarity ("blue suit, orange gloves" vs "blue flight suit with American flag patch": 0.5 → 0.33).
+- AC-PER-47 **Soft cap at the crew size** (amends AC-PER-35 *New track*). When the person class has an
+  `expected_count` (seed: `crew-member` 7) and the live person-class entity count at the start of the window
+  (`count_live_entities`, cached per window) is already ≥ it, a person sighting that found no candidate under
+  AC-PER-45 may attach to **any** live person-class entity (any place, any gap), still only with appearance
+  descriptors, similarity ≥ `person_match_floor` and no colour clash, best first as AC-PER-45, never two sightings of a
+  window on one entity. Otherwise it starts a new track, as before: the cap prefers attaching but never forces it
+  (more crew than the seed's count, e.g. during a handover, still get tracks). `person_soft_cap`
+  (`PERCEPTION_PERSON_SOFT_CAP`, default true). The crew size is not hard-coded: it is the catalog's `expected_count`.
+- AC-PER-48 **Eval and real-data regression.**
+  - *Eval* (eval/, perception AC-PER-38 extended): after the revisit pass the local runner replays a **crew transit**
+    pass: the scene's frames again, `TRANSIT_GAP_S` (60 s) after the revisit, through the roaming camera
+    `cam-handheld` with GoldOmni profile `crew_transit`: no objects, events or transcript, every gold actor in
+    `people[]` of every window with the Gemma-like varying appearance text, and a `location_hint` naming one of three
+    modules (Unity, Columbus, Kibo) by thirds of the scene. Each actor is thus seen in LAB1 (first pass and revisit)
+    and then in 3 more modules within 5 minutes. `person_tracks_per_person` is measured on the final database (all
+    passes); its gate tightens from ≤ 1.5 to **≤ 1.3**. The transit pass runs only for the `local` target with the
+    default replay (an injected replay measures none; the cluster's omni cannot be scripted).
+  - *Real data* (tests/test_ac_per_45_48_person_continuity.py): the fixture windows replayed through the reconciler
+    (cam-handheld, FakeInventory, the live 30 s cadence) produce at most 60 % of the person tracks of the AC-PER-35
+    matching (measured counts in docs/tdd-log/perception.md), and the replay never puts two entries of one window on
+    one track.
+
+### Review round (AC-PER-45..48): fixes and residual risks accepted
+
+Measured with the new normaliser in every run, so only the matching differs: cross-module matching raised the
+colour-clashing pairs inside tracks from 3 to 28 on the fixture. A track keeps its first, often short, description
+("blue shirt, dark hair"), and the overlap coefficient divides by the shorter side. Fixes (each test-first,
+`test_review_*` in tests/test_ac_per_45_48_person_continuity.py and eval/tests/test_ac_eval_09_crew_transit.py):
+- *Weak tiers need two-sided, specific evidence.* A cross-module or soft-cap candidate also needs closeness (Dice)
+  ≥ `person_match_floor` and a specific shared trait (`people.appearance_evidence`): a garment both texts colour
+  compatibly (hair excluded), or a shared distinctive accessory or insignia. Colourless garments ("astronaut in a
+  shirt") and a watch are not evidence. Same-place matching keeps the lenient AC-PER-35 rule.
+- *Latest-sightings clash.* The reconciler remembers the appearance texts of each person track's last
+  `PERSON_RECENT_DESCRIPTIONS` (5) recorded sightings, in memory, in this process only. The same text is stored as
+  the sighting description, and private windows record none. A candidate whose first description **or** any of these
+  texts clashes in colour with the observation is not eligible, in every tier. The memory is lost on restart, which
+  falls back to the first description only.
+- *Soft-cap entry as specified.* Only sightings that had **no** candidate go to the cap pass. A sighting that lost its
+  candidate to another person of the same window starts a new track; it does not take a stale look-alike.
+- *Over-broad text is featureless* (injection). More than 8 descriptor keys, or one garment in more than 3 specific
+  colours, gives no descriptors. A crafted "every colour, every garment" appearance matched every crew member at 1.0.
+- *Normaliser.* "long sleeves" (plural), "flags"/"logos" (plural); "watch" weighs 1 (common, not distinctive).
+- *Eval.* `person_track_recall` is also re-measured after the transit pass: merged actors lose recall, while
+  `person_tracks_per_person` is a maximum and would pass a merge.
+- *Logs.* The class-listing failure warning names its uses (decision context, person cross-module and cap candidates).
+
+Residual risks accepted:
+- *Blue-polo over-merge.* Crew in the same coloured shirt whose descriptions never clash (no trousers named, or the
+  same trousers) still merge, now station-wide within 600 s, and at any gap once the cap is reached. On the fixture
+  the track "blue shirt, dark hair" takes 20 sightings in 7 places, probably 2 to 4 people. Without faces this is the
+  price of continuity; the alternative is a track per module.
+- *Under-merge.* A terse text in another module ("blue flight suit" against "... with American flag patch", Dice
+  0.4) starts a new track. Gemma's varying trouser colours for one person ("grey"/"black pants") can split a track by
+  the latest-sightings rule.
+- *Listing limits and failures.* Both listings return at most 50 rows: the cap's "any live entity" means the 50 most
+  recently seen. If the class listing fails, cross-module and cap matching are silently off for that window (the
+  warning is logged). If the module listing fails, same-module tracks compete as cross-module ones.
+- *Two cameras.* The same person seen by two cameras in two modules at once can be two tracks, and two similar people
+  seen that way can be one. No transit-time rule: the handheld camera follows crew through hatches within seconds.
+- *Eval coverage.* The synthetic actors' shirts always clash and there are fewer of them than `expected_count`, so
+  the eval exercises cross-module continuity but neither the cap nor look-alike merges. Those are covered by the
+  unit tests and the real-fixture purity check (≤ 5 clashing pairs).

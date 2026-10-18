@@ -3,7 +3,7 @@
 Gemma 4 reports people only in the observation's ``people[]`` (never as "person" objects), and perception silently
 created 0 person tracks. GoldOmni's ``gemma_people`` profile (the default) answers like that, with every gold actor in
 every window; every profile lists a sleeping crew member (the live Gemma text) in one quiet window of the scene.
-Metrics: ``person_track_recall`` (>= 0.99), ``person_tracks_per_person`` (<= 1.5), ``sleep_window_media`` (<= 0)."""
+Metrics: ``person_track_recall`` (>= 0.99), ``person_tracks_per_person`` (<= 1.3 since perception AC-PER-48), ``sleep_window_media`` (<= 0)."""
 from __future__ import annotations
 
 import importlib.util
@@ -179,7 +179,7 @@ def test_ac_eval_09_metrics_are_reported_and_gated(synth_ds):
         assert key in METRIC_KEYS
     th = load_thresholds(EVAL_DIR / "thresholds.yaml")
     assert th["person_track_recall"].min == pytest.approx(0.99)
-    assert th["person_tracks_per_person"].max == pytest.approx(1.5)
+    assert th["person_tracks_per_person"].max == pytest.approx(1.3)  # AC-PER-48 (was 1.5)
     assert th["sleep_window_media"].max == 0
     failed = {f.metric for f in check(score(synth_ds, _snap(synth_ds))["metrics"], th).failures}
     assert {"person_track_recall", "sleep_window_media"} <= failed

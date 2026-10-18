@@ -88,6 +88,8 @@ class PerceptionConfig:
     no_exemplar_match_s: float = 600.0  # AC-PER-22 class-and-place match horizon for sightings without exemplar
     hint_conflict_confidence: float = 0.5  # AC-PER-23 sighting confidence cap when a fixed camera's hint conflicts
     person_match_floor: float = 0.5  # AC-PER-35 appearance-text similarity needed to attach a person sighting
+    person_cross_module_s: float = 600.0  # AC-PER-45 a person track last seen anywhere this recently is a candidate
+    person_soft_cap: bool = True  # AC-PER-47 at the person class's expected_count, prefer attaching (floor-bounded)
     privacy_hold_s: float = 30.0  # AC-PER-37 windows of the camera starting this soon after a private one stay private
     module_carry_s: float = 45.0  # AC-PER-41 a roaming camera's unresolved window inherits the module this long
     module_carry_confidence: float = 0.5  # AC-PER-41 sighting confidence cap in a carried window
@@ -130,6 +132,8 @@ class PerceptionConfig:
             kwargs["device"] = _parse_device(env["PERCEPTION_DEVICE"])
         if env.get("OMNI_REALTIME", "").strip():
             kwargs["omni_realtime"] = _parse_bool("OMNI_REALTIME", env["OMNI_REALTIME"])
+        if env.get("PERCEPTION_PERSON_SOFT_CAP", "").strip():
+            kwargs["person_soft_cap"] = _parse_bool("PERCEPTION_PERSON_SOFT_CAP", env["PERCEPTION_PERSON_SOFT_CAP"])
         cameras = dict(DEFAULT_CAMERA_LOCATIONS)
         if env.get("CAMERA_LOCATIONS", "").strip():
             cameras.update(parse_camera_locations(env["CAMERA_LOCATIONS"]))
@@ -173,6 +177,7 @@ _NUMBER_VARS: dict[str, tuple[str, type]] = {
     "consolidate_iou": ("PERCEPTION_CONSOLIDATE_IOU", float),
     "hint_conflict_confidence": ("PERCEPTION_HINT_CONFLICT_CONFIDENCE", float),
     "person_match_floor": ("PERCEPTION_PERSON_MATCH_FLOOR", float),
+    "person_cross_module_s": ("PERCEPTION_PERSON_CROSS_MODULE_S", float),
     "privacy_hold_s": ("PERCEPTION_PRIVACY_HOLD_S", float),
     "module_carry_s": ("PERCEPTION_MODULE_CARRY_S", float),
     "module_carry_confidence": ("PERCEPTION_MODULE_CARRY_CONFIDENCE", float),

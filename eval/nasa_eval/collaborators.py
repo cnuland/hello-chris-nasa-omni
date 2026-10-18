@@ -67,6 +67,11 @@ OMNI_EVENT_TYPES = ("moved", "added", "removed", "used", "handed_over")  # obser
 OMNI_PROFILES = ("gemma_people", "repeat_per_frame", "once", "truncated")
 TRUNCATED_ECHO = "the transcript echo goes on and on " * 40  # verbose model: cut off at max_tokens inside it
 DEFAULT_OMNI_PROFILE = "gemma_people"  # the deployed omni (Gemma 4) + the Qwen per-frame repeats (worst case)
+# Perception AC-PER-48 crew transit pass: the crew float between modules and the handheld camera follows them.
+TRANSIT_PROFILE = "crew_transit"  # GoldOmni profile of the transit pass only (not selectable by EVAL_OMNI_PROFILE)
+TRANSIT_CAMERA = "cam-handheld"  # roaming camera (seed location USOS): the window module comes from the hint
+TRANSIT_MODULE_HINTS = ("Unity", "Columbus", "Kibo")  # NOD1, COL1, JPM1, one per third of the scene
+TRANSIT_SUMMARY = "Crew moving through the module"
 SLEEPING_CREW = "dark hair, sleeping in a blue sleeping bag"  # Gemma 4, live ISS tour run, Harmony (2026-10-18)
 SLEEP_QUIET_S = 6.0  # no event / transcript line this close to the sleep-cue window (a private window stores neither)
 # Gemma-like rewordings of a gold actor "crew member, <colour> <garment>" between windows ({d} = "<colour> <garment>")
@@ -177,7 +182,7 @@ class GoldOmni:
         profile: str = DEFAULT_OMNI_PROFILE,
         time_offset_s: float = 0.0,
     ):
-        if profile not in OMNI_PROFILES:
+        if profile not in (*OMNI_PROFILES, TRANSIT_PROFILE):
             raise ValueError(f"unknown GoldOmni profile {profile!r}; expected one of {OMNI_PROFILES}")
         self.profile = profile
         self.time_offset_s = float(time_offset_s)  # a revisit replays the dataset shifted by this
@@ -206,6 +211,8 @@ class GoldOmni:
 
         self.calls += 1
         times = [round(self._rel(kf.timestamp), 6) for kf in window.frames]
+        if self.profile == TRANSIT_PROFILE:
+            return self._transit(times)
         objects: dict[str, dict[str, Any]] = {}
         frames_of: dict[str, list[int]] = {}
         for k, t in enumerate(times):
@@ -289,6 +296,35 @@ class GoldOmni:
             return OmniResult(status="invalid", raw=raw, model=self.model, error="; ".join(errors))
         return OmniResult(status="ok", observation=observation, raw=raw, model=self.model)
 
+
+    def _transit(self, times: list[float]) -> Any:
+        """Crew transit (perception AC-PER-48): every gold actor in people[], no objects / events / transcript, and a
+        location hint naming the module of this third of the scene."""
+        import json
+
+        from perception.schema import validate_observation
+        from perception.types import OmniResult
+
+        actors = sorted({e.actor for g in self.dataset.gold for e in g.events if e.actor})
+        n = len(self.dataset.frame_paths())
+        duration = max(n / self.dataset.fps, 1e-6)
+        mid = (min(times) + max(times)) / 2 if times else 0.0
+        third = min(len(TRANSIT_MODULE_HINTS) - 1, max(0, int(len(TRANSIT_MODULE_HINTS) * mid / duration)))
+        observation = {
+            "scene_summary": TRANSIT_SUMMARY,
+            "location_hint": TRANSIT_MODULE_HINTS[third],
+            "objects": [],
+            "people": [{"ref": f"P{i + 1}", "appearance": self._variant(a), "activity": "floating through the hatch"}
+                       for i, a in enumerate(actors)],
+            "events": [],
+            "transcript": "",
+            "audio_events": [],
+        }
+        raw = json.dumps(observation)
+        errors = validate_observation(observation)
+        if errors:  # pragma: no cover - a bug in this fake
+            return OmniResult(status="invalid", raw=raw, model=self.model, error="; ".join(errors))
+        return OmniResult(status="ok", observation=observation, raw=raw, model=self.model)
 
     def _quiet(self, lo: float, hi: float) -> bool:
         """No gold event or transcript line within SLEEP_QUIET_S of [lo, hi] and no unknown object in it."""
@@ -526,6 +562,43 @@ def revisit_with_collaborators(dataset: Dataset, database_url: str, offset_s: fl
     if offset_s <= 0:
         raise ValueError("a revisit needs a positive time offset")
     return replay_with_collaborators(dataset, database_url, target=target, time_offset_s=offset_s)
+
+
+def transit_with_collaborators(dataset: Dataset, database_url: str, offset_s: float, *, target: str) -> Any:
+    """The crew transit pass (perception AC-PER-48, ``local`` only): the dataset's frames shifted by ``offset_s``
+    through the roaming camera ``TRANSIT_CAMERA``, GoldOmni profile ``TRANSIT_PROFILE`` (people only, a module hint
+    per third of the scene), a detector that finds nothing and no ASR."""
+    if target != "local":
+        raise ValueError("the crew transit pass needs the scripted local omni (target 'local')")
+    if offset_s <= 0:
+        raise ValueError("a transit pass needs a positive time offset")
+    _import_perception()
+    from datetime import timedelta
+
+    from perception import replay
+    from perception.config import PerceptionConfig
+
+    shift = timedelta(seconds=offset_s)
+    api, close = bind_inventory_api(database_url)
+    try:
+        collab = build_collaborators(dataset, target, catalog=api.get_catalog(), revisit_offset_s=offset_s)
+        labels = catalog_labels(api.get_catalog())
+        everything = frozenset(g.gold_object_id for g in dataset.gold)
+        collab.update(
+            omni=GoldOmni(dataset, labels, profile=TRANSIT_PROFILE, time_offset_s=offset_s),
+            detector=GoldDetector(dataset, labels, miss=everything),
+            asr=None,
+        )
+        return replay.run(
+            ((ts + shift, frame, chunk) for ts, frame, chunk in dataset.iter_source()),
+            camera_id=TRANSIT_CAMERA,
+            start_time=dataset.manifest.start_time + shift,
+            api=api,
+            config=PerceptionConfig.from_env(dict(os.environ)),
+            **collab,
+        )
+    finally:
+        close()
 
 
 def replay_with_collaborators(dataset: Dataset, database_url: str, *, target: str, time_offset_s: float = 0.0) -> Any:

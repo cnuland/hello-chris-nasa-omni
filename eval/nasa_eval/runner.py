@@ -40,7 +40,7 @@ from nasa_eval.dataset import (
     seed_ids,
     validate_dataset,
 )
-from nasa_eval.scoring import revisit_new_entity_rate, score
+from nasa_eval.scoring import person_track_recall, person_tracks_per_person, revisit_new_entity_rate, score
 from nasa_eval.snapshot import RevisitResult, Snapshot, read_snapshot
 
 log = logging.getLogger(__name__)
@@ -55,6 +55,10 @@ ReplayFn = Callable[[Dataset, str], Any]  # (dataset, database_url) -> stats
 RevisitFn = Callable[[Dataset, str, float], Any]  # (dataset, database_url, time offset s) -> stats
 # Perception AC-PER-32: the looped ISS tour came back to Columbus about 15 min later and duplicated its objects.
 REVISIT_GAP_S = 900.0
+# Perception AC-PER-48: the crew transit pass starts this long after the revisit ends (well inside the 600 s
+# cross-module horizon, so continuity is what is measured, not a revisit).
+TRANSIT_GAP_S = 60.0
+TransitFn = Callable[[Dataset, str, float], Any]  # (dataset, database_url, time offset s) -> stats
 AgentFactory = Callable[[str], Any]  # database_url -> agent with ask(question, session_id=...) -> /chat response
 
 
@@ -214,6 +218,13 @@ def default_revisit(dataset: Dataset, database_url: str, offset_s: float, *, tar
     return revisit_with_collaborators(dataset, database_url, offset_s, target=target)
 
 
+def default_transit(dataset: Dataset, database_url: str, offset_s: float, *, target: str = "local") -> Any:
+    """The crew transit pass through perception (see ``nasa_eval.collaborators.transit_with_collaborators``)."""
+    from nasa_eval.collaborators import transit_with_collaborators
+
+    return transit_with_collaborators(dataset, database_url, offset_s, target=target)
+
+
 def scene_duration_s(dataset: Dataset) -> float:
     """Frames / fps (the time one pass over the dataset takes)."""
     return len(dataset.frame_paths()) / dataset.fps
@@ -316,12 +327,16 @@ def run(
     keep_db: bool = False,
     agent_factory: AgentFactory | None = None,
     revisit: RevisitFn | None = None,
+    transit: TransitFn | None = None,
 ) -> RunResult:
     """Validate the dataset, replay it into a fresh database, score the result, optionally run the QA questions
     against ``agent_factory(database_url)``, replay the revisit (``revisit(dataset, url, duration + REVISIT_GAP_S)``,
     default: through perception when ``replay`` is the default too; an injected ``replay`` without ``revisit``
-    measures none, so ``revisit_new_entity_rate`` is None), write the reports, then drop the database (also on
-    failure) unless ``keep_db``. A replay failure propagates and no report is written."""
+    measures none, so ``revisit_new_entity_rate`` is None), then the crew transit pass (perception AC-PER-48:
+    ``transit(dataset, url, 2 * duration + REVISIT_GAP_S + TRANSIT_GAP_S)``, default: through perception for the
+    ``local`` target with the default replay; ``person_tracks_per_person`` is then re-measured on the final
+    database), write the reports, then drop the database (also on failure) unless ``keep_db``. A replay failure
+    propagates and no report is written."""
     if target not in TARGETS:
         raise ValueError(f"unknown target {target!r}; expected one of {TARGETS}")
     data = load_dataset(resolve_dataset(dataset))  # DatasetValidationError before any DB work
@@ -333,6 +348,9 @@ def run(
     replay_fn = replay or (lambda d, u: default_replay(d, u, target=target))
     revisit_fn = revisit if revisit is not None or replay is not None else (
         lambda d, u, off: default_revisit(d, u, off, target=target)
+    )
+    transit_fn = transit if transit is not None else (
+        (lambda d, u, off: default_transit(d, u, off, target=target)) if replay is None and target == "local" else None
     )
     now = (clock or (lambda: datetime.now(UTC)))()
     if reports_dir is None:
@@ -363,6 +381,19 @@ def run(
             result["counts"]["revisit_new_entities"] = len(snapshot.revisit.new_entity_ids)
             log.info("revisit dataset=%s new_entities=%d rate=%s", data.name, len(snapshot.revisit.new_entity_ids),
                      result["metrics"]["revisit_new_entity_rate"])
+        if transit_fn is not None:  # last: crew seen in more modules; person tracks re-measured on the final database
+            before = set(read_snapshot(url).entities)
+            offset_s = 2 * scene_duration_s(data) + REVISIT_GAP_S + TRANSIT_GAP_S
+            extra["transit_stats"] = _jsonable(transit_fn(data, url, offset_s))
+            after = read_snapshot(url)
+            added = [e for e, pe in after.entities.items() if e not in before and pe.kind == "person"]
+            result["metrics"]["person_tracks_per_person"] = person_tracks_per_person(data, after)
+            # review round: merged actors lose recall (the merged track describes one of them); the tracks gate is
+            # a max only and would pass a merge
+            result["metrics"]["person_track_recall"] = person_track_recall(data, after)
+            result["counts"]["transit_new_person_tracks"] = len(added)
+            log.info("transit dataset=%s new_person_tracks=%d person_tracks_per_person=%s", data.name, len(added),
+                     result["metrics"]["person_tracks_per_person"])
         report = build_report(
             data,
             result,
