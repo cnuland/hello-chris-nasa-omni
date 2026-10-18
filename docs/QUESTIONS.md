@@ -230,3 +230,9 @@ I need from you.
       dropped, along with a structure denylist.
     - **Need:** NASA's policy on whole frames that show faces. They are stored today, as the system's evidence of
       record; crops of faces are never allowed.
+38. **Unknowns restored (AC-PER-53), live 2026-10-18 06:32 UTC.** With the new prompt, the first 8 windows produced 3
+    real loose unknowns and no structure: "orange tool" (COL1), "orange sphere" (JPM1, plausibly a SPHERES/Astrobee
+    robot in Kibo) and "white wrapped object" (JPM1). The review images are whole frames with no faces; the objects
+    are visible and NASA's caption confirms Kibo.
+    **Next (under TDD):** open-vocabulary OWLv2 queries with the unknown's own label, so unknowns get real detector
+    boxes and crops. Every query box goes through the person-overlap guard.
