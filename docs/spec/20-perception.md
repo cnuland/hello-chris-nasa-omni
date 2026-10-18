@@ -850,3 +850,10 @@ Residual risks accepted:
 - *Recall cost.* Any object held in front of a crew member loses its exemplar (matched by class and place instead).
 - *Broad heads that remain* (handle, panel, rack, light, port): an unknown "bag handle" or "rack of tools" is dropped
   silently as structure.
+
+### AC-PER-53 Unknown objects stay visible (final Gemma run, 2026-10-18)
+- The omni prompt uses catalog names only when an item *clearly* matches. It asks explicitly for loose non-catalog
+  items with a short plain label, saying that NASA must classify them, and forbids forcing an item into a catalog
+  class. The structure rule (AC-PER-50) is scoped to fixed station parts, not loose items.
+- **Measured before:** 99 object listings, 2 non-catalog labels (both structure), 0 unknowns in the review queue.
+  Tests: tests/test_ac_per_53_unknowns_prompt.py.

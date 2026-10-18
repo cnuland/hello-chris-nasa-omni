@@ -1144,3 +1144,9 @@ No window had the wrong module; all 14 misses stayed at segment level (USOS).
 - **Final runs:** perception **1228 passed** (1110 → +118 cases in the new file); ruff clean. `make test` all suites
   passed (inventory-api 506, perception 1228, agent 632, eval 408 + 1 skipped, dashboard 422, e2e 29). `make eval`
   gate PASSED.
+
+## AC-PER-53 unknowns prompt (final Gemma run, 2026-10-18)
+- **Found live:** after AC-PER-50 ("skip structure"), plus "use catalog names when they fit", Gemma produced 0
+  non-structure unknowns in a full first pass, which defeats the unknown-classification requirement.
+- **Red:** 4 of 4 failed. **Green:** 1232 passed; ruff is clean. **Live effect:** measured on the next run (see
+  QUESTIONS #38).
