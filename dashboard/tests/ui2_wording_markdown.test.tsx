@@ -87,7 +87,8 @@ describe('UI-04 legacy history event summaries are rewritten', () => {
 
   test('moves, missing actor and operator source', () => {
     expect(legacyEventSummary('moved NOD3 -> NOD1 by ui-review-2', { source: 'operator' })).toBe('Moved by operator ui-review-2 from NOD3 to NOD1');
-    expect(legacyEventSummary('moved ? -> NOD1')).toBe('Moved by an unknown person to NOD1');
+    // Amended (UI5-09): a pipeline move with no origin is the first sighting.
+    expect(legacyEventSummary('moved ? -> NOD1')).toBe('First seen in NOD1');
     expect(legacyEventSummary('used')).toBe('Used by an unknown person');
   });
 

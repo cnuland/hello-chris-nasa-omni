@@ -142,7 +142,8 @@ describe('AC-UI-18 overview feed shows labels and location names', () => {
     renderApp('/overview');
     const feed = await screen.findByRole('list', { name: /recent events/i });
     const items = await within(feed).findAllByRole('listitem');
-    expect(within(items[0]).getByRole('link', { name: /laptop/ })).toHaveAttribute('href', `/items/${ID.drill}`);
+    // Amended (UI5-10): item labels are shown in sentence case.
+    expect(within(items[0]).getByRole('link', { name: /Laptop/ })).toHaveAttribute('href', `/items/${ID.drill}`);
     expect(items[0]).toHaveTextContent('by person (sleeping, wearing a headset)');
     // Amended (UI2-09): "from A to B" instead of "A → B".
     expect(items[0]).toHaveTextContent('from Node 2 deck bay 4 (NOD2D4) to Lab starboard rack 2 (LAB1S2)');

@@ -46,6 +46,38 @@ type CatalogName = (id: string) => string;
 /** Person text shown when a person review frame has no box (UI3-05). */
 export const PERSON_NO_BOX = 'Whole frame, several people may be visible';
 
+/**
+ * UI5-01: the short name of what an unknown review describes: the "label:" prefix of the description ("orange bag: a
+ * small orange bag" -> "orange bag"), else the model guess, else the description (cut at 40 characters).
+ */
+export function unknownLabel(review: Pick<ReviewItem, 'description' | 'model_guess'>): string {
+  const d = (review.description ?? '').replace(/\s+/g, ' ').trim();
+  const head = /^([^:]{1,40}):/.exec(d)?.[1].trim();
+  if (head) return head;
+  const guess = review.model_guess?.trim();
+  if (guess) return guess;
+  return d.length > 40 ? `${d.slice(0, 40).trimEnd()}…` : d || 'the object';
+}
+
+/** UI5-01: caption for an unknown with no box: what to look for, and nothing is highlighted. */
+export const unknownNoBox = (review: Pick<ReviewItem, 'description' | 'model_guess'>) =>
+  `No box: look for ${unknownLabel(review)} in the frame`;
+
+/** UI5-01: for each unknown review, the labels of the other open unknowns that share its frame (same image_url). */
+export function sameFrameOthers(reviews: ReviewItem[]): Map<string, string[]> {
+  const byFrame = new Map<string, ReviewItem[]>();
+  for (const r of reviews) {
+    if (r.kind !== 'unknown_object' || !r.image_url) continue;
+    byFrame.set(r.image_url, [...(byFrame.get(r.image_url) ?? []), r]);
+  }
+  const out = new Map<string, string[]>();
+  for (const group of byFrame.values()) {
+    if (group.length < 2) continue;
+    for (const r of group) out.set(r.review_id, group.filter((o) => o !== r).map(unknownLabel));
+  }
+  return out;
+}
+
 /** UI3-05: colour + garment chips from the appearance, so outfits can be compared side by side. */
 function AppearanceChips({ text }: { text: string }) {
   const chips = appearanceChips(text);
@@ -374,6 +406,10 @@ interface CardProps {
   nameOf: (id?: string | null) => string;
   canAct: boolean;
   resolve: Resolve;
+  /** UI5-01: labels of the other unknowns on the same frame. */
+  sameFrame?: string[];
+  /** UI5-02: bulk selection on the unknown tab (absent elsewhere). */
+  selection?: { checked: boolean; onChange: (checked: boolean) => void };
 }
 
 function dismissConsequence(review: ReviewItem): string {
@@ -392,7 +428,7 @@ function dismissConsequence(review: ReviewItem): string {
 /** UI4-05: the standard dismiss note for "Not inventory (station structure)" (the resolve contract takes a free `note`). */
 export const NOT_INVENTORY_NOTE = 'not_inventory';
 
-function ReviewCard({ review, catalog, nameOf, canAct, resolve }: CardProps) {
+function ReviewCard({ review, catalog, nameOf, canAct, resolve, sameFrame, selection }: CardProps) {
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState('');
@@ -425,6 +461,8 @@ function ReviewCard({ review, catalog, nameOf, canAct, resolve }: CardProps) {
   const locName = locationLabel(review.location_id, nameOf(review.location_id));
   const disabled = !canAct || busy;
   const keepCatalog = subject?.catalog_id || chosen;
+  // UI5-01: an unknown with no box says what to look for (nothing is highlighted).
+  const noBoxCaption = person ? PERSON_NO_BOX : review.kind === 'unknown_object' ? unknownNoBox(review) : undefined;
 
   const run = async (body: ResolveBody, outcome: ResolveOutcome) => {
     if (disabled) return;
@@ -623,7 +661,17 @@ function ReviewCard({ review, catalog, nameOf, canAct, resolve }: CardProps) {
     <article className={`card review-card${isDup ? ' review-card-wide' : ''}`} data-testid={`review-${review.review_id}`}
       aria-labelledby={`${p}-h`}>
       <header className="review-head">
-        <h2 id={`${p}-h`} className={`kind kind-${review.kind}`}>{humanize(review.kind)}</h2>
+        <span className="review-head-title">
+          {selection && (
+            <span className="bulk-select">
+              <input id={`${p}-sel`} type="checkbox" checked={selection.checked} onChange={(e) => selection.onChange(e.target.checked)} />
+              <label htmlFor={`${p}-sel`}>
+                {'Select '}<span className="sr-only">{`${unknownLabel(review)} (${shortId(review.review_id)}) for bulk action`}</span>
+              </label>
+            </span>
+          )}
+          <h2 id={`${p}-h`} className={`kind kind-${review.kind}`}>{humanize(review.kind)}</h2>
+        </span>
         <span className="review-head-meta">
           <span className="muted">Observed </span>
           <Timestamp iso={review.observed_at} />
@@ -650,7 +698,12 @@ function ReviewCard({ review, catalog, nameOf, canAct, resolve }: CardProps) {
         ) : (
           <div className="review-media">
             <FrameImage src={review.image_url} alt={`Review image: ${text}`} bbox={review.image_bbox}
-              bboxSource={review.image_bbox_source} caption person={person} noBoxCaption={person ? PERSON_NO_BOX : undefined} />
+              bboxSource={review.image_bbox_source} caption person={person} noBoxCaption={noBoxCaption} />
+            {sameFrame && sameFrame.length > 0 && (
+              <p className="same-frame-note small">
+                {`Same frame as ${sameFrame.length} other unknown${sameFrame.length === 1 ? '' : 's'} (${sameFrame.join(', ')})`}
+              </p>
+            )}
           </div>
         )}
         <div className="review-info">
@@ -668,6 +721,109 @@ function ReviewCard({ review, catalog, nameOf, canAct, resolve }: CardProps) {
       </div>
       {isDup && <div className="review-footer">{dupFooter}</div>}
     </article>
+  );
+}
+
+// ---------------------------------------------------------------- bulk "Not inventory" (UI5-02)
+/**
+ * UI5-02: multi-select unknowns (structure the denylist missed) and dismiss them with the note "not_inventory" after a
+ * confirm step. Native checkboxes and buttons (keyboard by default); Esc closes the confirm and returns focus.
+ */
+function BulkNotInventory({ reviews, selected, setSelected, operator, onDone }: {
+  reviews: ReviewItem[];
+  selected: Set<string>;
+  setSelected: (s: Set<string>) => void;
+  operator: string;
+  /** Called with the review ids that are closed (resolved now, or already resolved by someone else). */
+  onDone: (ids: string[]) => void;
+}) {
+  const toasts = useToasts();
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const openRef = useRef<HTMLButtonElement>(null);
+  const confirmRef = useRef<HTMLButtonElement>(null);
+  const allRef = useRef<HTMLInputElement>(null);
+  const unknowns = reviews.filter((r) => r.kind === 'unknown_object');
+  const chosen = unknowns.filter((r) => selected.has(r.review_id));
+  const n = chosen.length;
+  const all = n > 0 && n === unknowns.length;
+  useEffect(() => {
+    if (allRef.current) allRef.current.indeterminate = n > 0 && !all;
+  }, [n, all]);
+  useEffect(() => {
+    if (confirming) confirmRef.current?.focus();
+  }, [confirming]);
+  useEffect(() => {
+    if (n === 0) setConfirming(false);
+  }, [n]);
+  const close = () => {
+    setConfirming(false);
+    setTimeout(() => openRef.current?.focus(), 0);
+  };
+  const run = async () => {
+    if (!operator || busy || !n) return;
+    setBusy(true);
+    const done: string[] = [];
+    let failed = 0;
+    for (const r of chosen) {
+      try {
+        await resolveReview(r.review_id, { action: 'dismiss', note: NOT_INVENTORY_NOTE, operator });
+        done.push(r.review_id);
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 409) done.push(r.review_id);
+        else failed += 1;
+      }
+    }
+    setBusy(false);
+    setConfirming(false);
+    onDone(done);
+    const ok = n - failed;
+    if (ok > 0) {
+      toasts.success(`Marked ${ok} item${ok === 1 ? '' : 's'} as station structure (not inventory): hidden from the default inventory.`);
+    }
+    if (failed > 0) {
+      toasts.push('error', `${failed} of ${n} could not be marked as not inventory. Their cards stay in the queue.`);
+    }
+  };
+  return (
+    <div className="bulk-bar card" role="group" aria-label="Bulk actions">
+      <div className="bulk-row">
+        <span className="bulk-select">
+          <input ref={allRef} id="rv-bulk-all" type="checkbox" checked={all}
+            onChange={(e) => setSelected(new Set(e.target.checked ? unknowns.map((r) => r.review_id) : []))} />
+          <label htmlFor="rv-bulk-all">Select all shown unknowns</label>
+        </span>
+        <span className="muted" aria-live="polite">{`${n} selected`}</span>
+        <button ref={openRef} type="button" disabled={!n || !operator || busy} aria-expanded={confirming}
+          aria-controls="rv-bulk-confirm" onClick={() => setConfirming((v) => !v)}>
+          {`Not inventory (${n} selected)…`}
+        </button>
+        {!operator && <span className="muted small">Enter an operator name to use bulk actions.</span>}
+      </div>
+      {confirming && n > 0 && (
+        <div id="rv-bulk-confirm" className="confirm-dismiss" role="group" aria-label={`Confirm not inventory for ${n} items`}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              e.stopPropagation();
+              close();
+            }
+          }}>
+          <p>
+            {`Station structure is not inventory. This closes ${n} review${n === 1 ? '' : 's'} with the note ` +
+              '"not_inventory" and marks any attached items as dismissed (hidden from the default inventory):'}
+          </p>
+          <ul className="bulk-list">
+            {chosen.map((r) => <li key={r.review_id}>{`${unknownLabel(r)} (${shortId(r.review_id)})`}</li>)}
+          </ul>
+          <div className="actions">
+            <button ref={confirmRef} type="button" className="danger" disabled={busy || !operator} onClick={() => void run()}>
+              {busy ? 'Marking…' : `Confirm: not inventory (${n})`}
+            </button>
+            <button type="button" onClick={close}>Cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -739,6 +895,16 @@ export default function ReviewPage() {
   const sortValue = `${filters.sort ?? 'created_at'}:${filters.order ?? 'desc'}`;
 
   const op = operator.trim();
+  const sameFrame = useMemo(() => sameFrameOthers(reviews ?? []), [reviews]);
+  const bulkTab = filters.kind === 'unknown_object';
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const setOne = (id: string, on: boolean) =>
+    setSelected((cur) => {
+      const next = new Set(cur);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
   const drop = (id: string) =>
     setLoaded((cur) => (cur ? { items: cur.items.filter((r) => r.review_id !== id), total: cur.total === null ? null : Math.max(0, cur.total - 1) } : cur));
   /** UI2-05: Undo from the merge toast: unmerge the subject, then reload the queue (the review may reopen). */
@@ -832,9 +998,21 @@ export default function ReviewPage() {
         <p className="empty">{filtered ? 'No open review items match these filters.' : 'No open review items. All clear.'}</p>
       )}
       {countLine && <p className="muted review-count" aria-live="polite">{countLine}</p>}
+      {bulkTab && reviews && reviews.length > 0 && (
+        <BulkNotInventory reviews={reviews} selected={selected} setSelected={setSelected} operator={op}
+          onDone={(ids) => {
+            ids.forEach(drop);
+            setSelected((cur) => new Set([...cur].filter((x) => !ids.includes(x))));
+            refreshCount();
+          }} />
+      )}
       <div className="review-list">
         {reviews?.map((r) => (
-          <ReviewCard key={r.review_id} review={r} catalog={catalog} nameOf={nameOf} canAct={!!op} resolve={makeResolve(r)} />
+          <ReviewCard key={r.review_id} review={r} catalog={catalog} nameOf={nameOf} canAct={!!op} resolve={makeResolve(r)}
+            sameFrame={sameFrame.get(r.review_id)}
+            selection={bulkTab && r.kind === 'unknown_object'
+              ? { checked: selected.has(r.review_id), onChange: (on) => setOne(r.review_id, on) }
+              : undefined} />
         ))}
       </div>
     </div>

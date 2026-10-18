@@ -6,12 +6,11 @@ import type { Event, Item, ItemDetail, ItemPatch, Sighting, TimelineEntry } from
 import { ConfidenceBar } from '../components/ConfidenceBar';
 import { EditItemForm } from '../components/EditItemForm';
 import { FrameImage, isCropUrl, validBBox } from '../components/FrameImage';
-import { Thumb } from '../components/Thumb';
 import { Timestamp } from '../components/Timestamp';
 import { UUID_RE } from '../lib/agent';
-import { eventSentence, formatUtc, formatUtcMinute, legacyEventSummary, shortId } from '../lib/format';
+import { eventSentence, formatUtc, formatUtcMinute, legacyEventSummary, sentenceCase, shortId } from '../lib/format';
 import { LastHandledCell } from '../components/LastHandled';
-import { displayLabel, displayLabelWithId, isPerson, safePersonImage } from '../lib/person';
+import { PERSON_FRAME_CAPTION, displayLabel, displayLabelWithId, isPerson, safePersonImage } from '../lib/person';
 import { useCatalog, useLocations } from '../state/reference';
 import { useOperator } from '../state/operator';
 import { errorMessage, useToasts } from '../state/toasts';
@@ -77,12 +76,13 @@ const AUDIT_OPS: Record<string, string> = {
 /**
  * UI3-11: history wording in sentence case: "merge by X" reads "Merged by X", "split by X" reads "Unmerged by X",
  * "create by pipeline" reads "Created by pipeline", and "update by pipeline" reads "Pipeline update". Any detail
- * after the actor (changes, note) is kept.
+ * after the actor (changes, note) is kept. UI5-10: "split" always reads "Unmerged", with or without an actor.
  */
 export function auditText(summary: string | null | undefined): string {
   const s = (summary ?? '').trim();
   if (/^update by pipeline$/i.test(s)) return 'Pipeline update';
-  const m = /^([a-z_]+)(?= by\b)/i.exec(s);
+  // UI5-10: the op may stand alone ("split") or be followed by " by X", ": note" or " (changes)".
+  const m = /^([a-z_]+)(?=$| by\b|:| \()/i.exec(s);
   const label = m ? AUDIT_OPS[m[1].toLowerCase()] : undefined;
   if (m && label) return `${label}${s.slice(m[1].length)}`;
   return s ? s[0].toUpperCase() + s.slice(1) : s;
@@ -170,12 +170,12 @@ function TimelineRow({ g, ctx }: { g: TimelineGroup; ctx: RowContext }) {
           )}
         </>
       )}
-      {e.image_url && (sighting && validBBox(sighting.bbox) ? (
-        <FrameImage src={e.image_url} alt={`Evidence for ${label}: ${text || e.kind}`} bbox={sighting.bbox}
-          bboxSource={sighting.bbox_source} size="md" person={ctx.person} />
-      ) : (
-        <Thumb src={e.image_url} alt={`Evidence for ${label}: ${text || e.kind}`} size="md" person={ctx.person} />
-      ))}
+      {/* UI5-06: every frame opens the lightbox; with no box it says "whole frame" (persons: the privacy caption). */}
+      {e.image_url && (
+        <FrameImage src={e.image_url} alt={`Evidence for ${label}: ${text || e.kind}`} bbox={sighting?.bbox}
+          bboxSource={sighting?.bbox_source} size="md" person={ctx.person}
+          noBoxCaption={ctx.person ? PERSON_FRAME_CAPTION : undefined} />
+      )}
     </li>
   );
 }
@@ -296,7 +296,9 @@ function MergedFromList({ item }: { item: ItemDetail }) {
       <ul className="merged-from" aria-labelledby="merged-from-h">
         {from.map((m) => (
           <li key={m.entity_id}>
-            <Link to={`/items/${m.entity_id}`}>{m.label?.trim() || `item ${shortId(m.entity_id)}`}</Link>{' '}
+            <Link to={`/items/${m.entity_id}`} title={m.label?.trim() || undefined}>
+              {sentenceCase(m.label?.trim()) || `item ${shortId(m.entity_id)}`}
+            </Link>{' '}
             <code className="loc-code">{shortId(m.entity_id)}</code>
             {m.merged_at && (
               <>
@@ -338,12 +340,14 @@ function DetailHero({ item, title, person }: { item: ItemDetail; title: string; 
   const small = crop && !!natural && Math.max(natural[0], natural[1]) > 0 && Math.max(natural[0], natural[1]) < SMALL_CROP_PX;
   const frame = small ? bestFrame(item.sightings, person) : null;
   const withheld = item.snapshot_withheld_reason ? WITHHELD_TEXT[item.snapshot_withheld_reason] : undefined;
+  // UI5-10: a person's frame is never boxed: say why instead of "there is no box for this object".
+  const noBox = person ? PERSON_FRAME_CAPTION : undefined;
   if (small && frame) {
     return (
       <>
         <div className="hero-frame">
           <FrameImage src={frame.frame_url as string} alt={`${title}: whole frame`} size="lg" bbox={frame.bbox}
-            bboxSource={frame.bbox_source} caption person={person} />
+            bboxSource={frame.bbox_source} caption person={person} noBoxCaption={noBox} />
         </div>
         <div className="hero-inset">
           <FrameImage src={item.snapshot_url} alt={`${title}: close-up`} size="md" crop person={person} />
@@ -356,7 +360,7 @@ function DetailHero({ item, title, person }: { item: ItemDetail; title: string; 
   }
   return (
     <FrameImage src={item.snapshot_url} alt={title} size="lg" bbox={item.snapshot_bbox} bboxSource={item.snapshot_bbox_source}
-      caption person={person} emptyText={withheld}
+      caption person={person} emptyText={withheld} noBoxCaption={noBox}
       upscale={crop ? (w, h) => Math.max(w, h) < SMALL_CROP_PX && !bestFrame(item.sightings, person) : false}
       captionText={small ? 'Small close-up (shown at up to 2×; no whole frame is available). Click to enlarge.' : undefined}
       onNaturalSize={crop ? (w, h) => setNatural((cur) => (cur && cur[0] === w && cur[1] === h ? cur : [w, h])) : undefined} />
@@ -481,7 +485,7 @@ export default function ItemDetailPage() {
       <div className="page-head">
         <div>
           <Link to="/" className="muted">← Inventory</Link>
-          <h1>{title}</h1>
+          <h1 title={!person && item.label && item.label !== title ? item.label : undefined}>{title}</h1>
         </div>
         {!editing && (
           <button type="button" className="primary" onClick={() => setEditing(true)}>Edit item</button>
@@ -513,7 +517,8 @@ export default function ItemDetailPage() {
             </dd>
             <dt>Last sighting</dt>
             <dd><Timestamp iso={item.last_seen_at} /></dd>
-            <dt>Last handled</dt>
+            {/* UI5-09: a person track is never "handled": it is last seen somewhere. */}
+            <dt>{person ? 'Last seen' : 'Last handled'}</dt>
             <dd><LastHandledCell item={item} /></dd>
             {item.location_set_at && (
               <>
@@ -561,7 +566,8 @@ export default function ItemDetailPage() {
               return (
                 <li key={m.event_id ?? i} className="activity">
                   <span>{`${sentence} · ${formatUtc(m.occurred_at) || 'unknown time'}`}</span>
-                  {m.evidence_url && <FrameImage src={m.evidence_url} alt={`Evidence: ${sentence}`} size="md" person={person} />}
+                  {m.evidence_url && <FrameImage src={m.evidence_url} alt={`Evidence: ${sentence}`} size="md" person={person}
+                    noBoxCaption={person ? PERSON_FRAME_CAPTION : undefined} />}
                 </li>
               );
             })}

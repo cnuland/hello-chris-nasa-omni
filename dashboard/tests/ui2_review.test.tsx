@@ -167,7 +167,7 @@ describe('UI2-06 match reasons and score', () => {
     const card = await findReviewCard(ID.rvDup);
     // Direct children only: the reason chips are nested list items.
     const tiles = Array.from(within(card).getByRole('list', { name: /candidates/i }).children) as HTMLElement[];
-    expect(tiles.map((t) => within(t).getAllByRole('link')[0].textContent)).toEqual(['high', 'low', 'unscored']);
+    expect(tiles.map((t) => within(t).getAllByRole('link')[0].textContent)).toEqual(['High', 'Low', 'Unscored']) // Amended (UI5-10): sentence case;
     expect(tiles[0]).toHaveTextContent(/match score\s*92%/i);
     const chips = within(tiles[0]).getByRole('list', { name: /why it matched/i });
     expect(within(chips).getAllByRole('listitem').map((c) => c.textContent)).toEqual(['same module', 'similar description']);
@@ -212,7 +212,8 @@ describe('UI2-07 / UI-08 boxes on review images and candidate tiles', () => {
     renderApp('/review');
     const unk = await findReviewCard(ID.rvUnknown);
     expect(within(unk).queryByTestId('bbox')).toBeNull();
-    expect(unk).toHaveTextContent(/whole frame/i);
+    // Amended (UI5-01): an unknown with no box says what to look for instead of "whole frame".
+    expect(unk).toHaveTextContent(/No box: look for flashlight in the frame/);
   });
 
   test('a candidate with snapshot_bbox shows its snapshot with the box; one without says whole frame', async () => {

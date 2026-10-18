@@ -45,7 +45,8 @@ describe('AC-UI-7 review queue cards', () => {
     expect(within(card).getByText(/Small yellow cylinder with a red cap/)).toBeInTheDocument();
     expect(within(card).getByText(/2026-10-17[ T]10:15/)).toBeInTheDocument();
     expect(within(card).getByText(/NOD2D4|Node 2 deck bay 4/)).toBeInTheDocument();
-    expect(within(card).getByText(/flashlight/i)).toBeInTheDocument();
+    // Amended (UI5-01): the no-box hint also names the guess ("No box: look for flashlight in the frame").
+    expect(within(card).getByText(/^flashlight$/i)).toBeInTheDocument();
     expect(within(card).getByText(/unknown[ _]object/i)).toBeInTheDocument();
   });
 

@@ -61,7 +61,8 @@ describe('AC-UI-13 possible-duplicate cards support a merge decision', () => {
     renderApp('/review');
     const card = await findReviewCard(ID.rvDup);
     const subject = within(card).getByRole('region', { name: /^subject/i }) /* amended (UI2-14): names are unique per card */;
-    expect(within(subject).getByRole('link', { name: 'headset' })).toHaveAttribute('href', `/items/${SUBJECT_ID}`);
+    // Amended (UI5-10): item labels are shown in sentence case.
+    expect(within(subject).getByRole('link', { name: 'Headset' })).toHaveAttribute('href', `/items/${SUBJECT_ID}`);
     expect(within(subject).getByText('Node 1 Unity (NOD1)')).toBeInTheDocument();
     expect(within(subject).getByText('2026-10-17 22:56 UTC')).toBeInTheDocument();
     expect(within(subject).getByRole('progressbar', { name: /confidence/i })).toHaveAttribute('aria-valuenow', '64');
@@ -71,8 +72,8 @@ describe('AC-UI-13 possible-duplicate cards support a merge decision', () => {
     const tiles = within(cands).getAllByRole('listitem');
     expect(tiles).toHaveLength(2);
     const first = tiles[0];
-    expect(within(first).getByRole('img', { name: 'headset' })).toHaveAttribute('src', '/api/media/thumbs/c1.jpg');
-    expect(within(first).getByRole('link', { name: 'headset' })).toHaveAttribute('href', `/items/${ID.drill}`);
+    expect(within(first).getByRole('img', { name: 'Headset' })).toHaveAttribute('src', '/api/media/thumbs/c1.jpg');
+    expect(within(first).getByRole('link', { name: 'Headset' })).toHaveAttribute('href', `/items/${ID.drill}`);
     expect(within(first).getByText('Lab starboard rack 2 (LAB1S2)')).toBeInTheDocument();
     expect(within(first).getByText('2026-10-17 22:43 UTC')).toBeInTheDocument();
     expect(within(first).getByText(/ago|in the future/)).toBeInTheDocument();
@@ -98,7 +99,7 @@ describe('AC-UI-13 possible-duplicate cards support a merge decision', () => {
     expect(buttons).toHaveLength(2);
     const names = buttons.map((b) => b.getAttribute('aria-label'));
     expect(new Set(names).size).toBe(2);
-    expect(names[0]).toMatch(/headset 11111111 \(LAB1S2\)/);
+    expect(names[0]).toMatch(/Headset 11111111 \(LAB1S2\)/); // Amended (UI5-10)
     await user.click(buttons[1]);
     // Amended (UI2-05): merge now has a confirm step.
     expect(requestsTo('POST', resolvePath(ID.rvDup))).toHaveLength(0);

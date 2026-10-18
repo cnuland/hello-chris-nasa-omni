@@ -113,7 +113,7 @@ describe('UI4-06 overview object events state a place', () => {
       occurred_at: '2026-10-18T04:41:00Z', source: 'pipeline' }]);
     renderApp('/overview');
     const [row] = await feedRows(1);
-    expect(row.textContent).toMatch(/laptop d977201c\s*used in Node 1 Unity \(NOD1\) by person \(grey t-shirt\)/);
+    expect(row.textContent).toMatch(/Laptop d977201c\s*used in Node 1 Unity \(NOD1\) by person \(grey t-shirt\)/);
   });
 
   test('an event without a place uses entity_last_location, else says the place was not seen', async () => {
@@ -125,7 +125,7 @@ describe('UI4-06 overview object events state a place', () => {
     renderApp('/overview');
     const [a, b] = await feedRows(2);
     expect(a).toHaveTextContent(/used \(last seen in Node 1 Unity \(NOD1\)\) by person \(grey t-shirt\)/);
-    expect(b).toHaveTextContent(/camera cb9268bb\s*moved \(place not seen\)/);
+    expect(b).toHaveTextContent(/Camera cb9268bb\s*moved \(place not seen\)/);
   });
 });
 

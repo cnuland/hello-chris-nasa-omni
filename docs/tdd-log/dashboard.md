@@ -612,3 +612,84 @@ Viewports: **1024×768** and **1440×1000**.
   line was in scope.
 - **UI4-10 sightings:** per-sighting private-window captions in the history need an `is_private` flag on sightings,
   which does not exist yet. Only the hero uses `snapshot_withheld_reason`.
+
+## UI review round 5 fixes (2026-10-18, docs/ui-review/round5/)
+
+Strict red → green. `tests/ui5_round5.test.tsx` was written first and run against the unchanged code, and each
+failure reason was checked. Suite: **422 → 471** tests (28 files). `tsc --noEmit` and `npm run build` are clean.
+
+### Red evidence
+
+| Cycle | Test file | Red | Failure reason (checked) | Passed on red (why) |
+|---|---|---|---|---|
+| 1 | `tests/ui5_round5.test.tsx` | **37 / 47** | Failures on unchanged code:<br>- No enlarge button on boxless history sightings (plain `Thumb`).<br>- The person row read "Seen moving" and the person detail said "Last handled".<br>- `eventSentence` / `objectEventSentence` / `legacyEventSummary` gave "Moved by an unknown person to …".<br>- The overview tag said "moved", and the inventory "First seen" heuristic was missing.<br>- The person hero said "there is no box for this object".<br>- `auditText` gave "Split", "Split: restored", "Split (…)" and "Unmerge".<br>- `sentenceCase` was not exported; `displayLabel` returned "laptop"; there was no tooltip, the h1 read "m-bag" and the overview row read "laptop".<br>- There was no "No box: look for …" hint and no "Same frame as" note (2 tests).<br>- The bulk bar and checkboxes were missing (7 tests). | 10 guards: object Last handled wording; operator first placement keeps "Moved by operator"; two-sided moves; a later move keeps "Moved by"; the object hero keeps the whole-frame wording; "split by X" and "Split by X" were already mapped (round 3), so the folded raw list already read "Unmerged"; boxed unknowns keep the box caption; no checkboxes outside the unknown tab |
+| 2 | same file, after the first implementation | 5 / 47 | Every bulk test failed to find the checkbox. Its accessible name was "Selectgrey object (…)": the leading space inside the `sr-only` span is dropped by accname. Fixed with an explicit `'Select '` text node. | – |
+| 3 | `tests/ui5_layout_css.test.tsx` | 2 / 2 | `.review-head` had no `flex-wrap` / `gap`; `.same-frame-note` and `.bulk-list` were missing. Playwright found this: at 1440 px, the two-column cards read "UNKNOWN OBJECTObserved" and "History" wrapped under the title. **Caveat:** the CSS was written before this test. The red was recorded by stripping the round-5 CSS block, then restoring it. | – |
+
+The deliberate behaviour changes failed **13 existing tests**. Each one is amended in place with an `Amended (UI5-xx)`
+comment:
+- UI5-10, sentence-case labels:
+  - `ac_ui_12_17_18` overview link `/Laptop/`;
+  - `ac_ui_13_16` ×2: "Headset" link / img / merge name;
+  - `ui2_detail_overview` and `ui3_pages` merged banner "Cargo transfer bag 44444444";
+  - `ui2_review` candidate order `['High', 'Low', 'Unscored']`;
+  - `ui3_wording` `displayLabel` → "Laptop";
+  - `ui4_round4` ×2: "Laptop d977201c …", "Camera cb9268bb …".
+- UI5-01:
+  - `ac_ui_07`: `/flashlight/` now also matches the no-box hint, so the query is anchored as `^flashlight$`;
+  - `ui2_review`: an unknown with no box says "No box: look for flashlight in the frame", not "whole frame".
+- UI5-09:
+  - `ui2_wording_markdown`: legacy "moved ? -> NOD1" now reads "First seen in NOD1";
+  - `ui3_pages`: a person row reads "Last seen in US Orbital Segment (USOS)", not "Seen moving".
+
+### Findings → fix → tests
+
+| Finding | Fix | Tests |
+|---|---|---|
+| UI5-06 boxless history frames (P3) | `TimelineRow` always renders `FrameImage`: the box when the sighting has one, else a whole-frame lightbox. Persons get the privacy caption, and crop URLs are still placeholders (`safePersonImage`). | `ui5_round5` ×2 |
+| UI5-09 person "Seen moving" (P3, display) | `LastHandledCell`: persons read "Last seen in <place> · <UTC>" (from `last_location` / `last_seen_at`), else "Last seen (place not recorded)". The detail fact is labelled "Last seen" for persons. | ×4 |
+| UI5-09 first sighting as a move (P3, display) | `isFirstSighting` in `format.ts`: a pipeline `moved` event with a destination, no `from_location` and no operator. It reads "First seen in X" in `eventSentence`, `objectEventSentence`, the legacy summary, and the overview tag "first seen". Inventory Last handled: a `moved` event with no actor, not from an operator, within 5 s of `first_seen_at`. | ×7 |
+| UI5-10 copy (P3) | <ul><li>`PERSON_FRAME_CAPTION` on person heroes, history frames and evidence.</li><li>`auditText` maps the op when it stands alone, or is followed by " by", ":" or " (".</li><li>`sentenceCase` (first letter only; first words that already have a capital are unchanged) in `displayLabel`, overview object rows and merged-from links, with the raw label in `title`.</li></ul> | ×20 |
+| UI5-01 boxless unknowns (P2, UI side) | `unknownLabel` (the "label:" prefix, else `model_guess`, else the description), `unknownNoBox` caption (card + lightbox), and `sameFrameOthers` → "Same frame as N other unknown(s) (labels)". | ×6 |
+| UI5-02 structure flood (P2, UI side) | `BulkNotInventory` on `?kind=unknown_object`: <ul><li>labelled native checkboxes per card, plus Select all (indeterminate when partial) and a live count;</li><li>a confirm group lists the labels; focus moves to Confirm, and Esc / Cancel return focus;</li><li>dismiss + `not_inventory` + operator are posted in sequence; 409 counts as closed;</li><li>failures keep their cards, with an error toast.</li></ul> | ×8, `ui5_layout_css` ×2 |
+
+### Playwright measurements (vite preview, mocked routes, `scripts/ui_check.py` `round5`)
+
+New fixtures: three boxless unknowns sharing `/media/frames/063303.png` and a first-sighting `moved` event.
+Viewports: 1024×768 and 1440×1000. Results were the same at both sizes:
+- **UI5-01:**
+  - The captions read "No box: look for grey object / orange bag / blue container in the frame. Click to enlarge.", and
+    0 boxes are drawn.
+  - The notes read "Same frame as 2 other unknowns (orange bag, blue container)" and so on.
+  - Overflow-x is 0.
+- **UI5-02, keyboard only:**
+  - Space on two checkboxes gives "2 selected". Enter on the bulk button moves focus to "Confirm: not inventory (2)".
+  - Overflow-x is 0 with the confirm open.
+  - Esc closes the confirm and focus returns to the button.
+  - Enter, Enter: toast "Marked 2 items as station structure (not inventory) …", and 1 of the 3 cards is left.
+- **UI5-06:** the boxless history sighting opens the dialog, captioned "Whole frame: there is no box for this object.
+  Press Esc to close."
+- **UI5-10:**
+  - The person hero reads "Whole frame (person tracks are not boxed or cropped, for crew privacy). Click to enlarge."
+  - The audit rows read "Unmerged by ui-review-3", "Merged by ui-review-4" and "Created by pipeline".
+  - Inventory titles read "Camera 1" (tooltip "camera 1").
+- **UI5-09:** person rows read "Last seen in US Orbital Segment (USOS) · 2026-10-17 22:57 UTC", and the overview reads
+  "first seen in US Orbital Segment (USOS)".
+- **Regressions:** the round-4 checks (no horizontal scroll, every card button on screen) still pass.
+- **axe-core:** 0 violations on 50 page states. The new states are the shared-frame queue, the bulk confirm, the
+  history lightbox and the person detail, at both sizes.
+
+### Deferred / not dashboard-side
+
+- **UI5-01 boxes:** grounding unknown labels to a box (OWLv2 queries) is perception work, in progress. The dashboard
+  only explains a missing box. An "I can't tell which object" dismiss reason was not added, because it would need a
+  reason enum in the resolve contract.
+- **UI5-02 data side:** the denylist additions (latch, insulation, foil, treadmill, "cover" as head noun, mounted
+  qualifiers) and the per-frame cap belong to perception. The bulk action only makes cleanup faster.
+- **UI5-09 data side:** perception and inventory-api are to stop emitting a `moved` event with no `from_location`. The
+  inventory "First seen" rule is a heuristic (`last_handled` carries no locations). If the API adds
+  `from_location` / `to_location` to `last_handled`, the rule can use them directly.
+- **UI5-03, UI5-04, UI5-05** (re-ID teleport, Cupola sightings query, segment overwrite): perception, inventory-api and
+  agent.
+- **UI5-07, UI5-08** (chat paging, empty answers and citations): agent.
+- **Label casing in chat:** citation chips and chat text keep the agent's labels. Only rows and card titles changed.

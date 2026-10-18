@@ -3,7 +3,7 @@
 //          images are scene frames only (never a crop, exemplar or face URL);
 //   UI3-05 readable duplicate reasons and appearance-attribute chips (colours + garments) for side-by-side comparison.
 // Everything here returns plain text: callers render it as React text nodes, never as HTML.
-import { shortId } from './format';
+import { sentenceCase, shortId } from './format';
 
 export const PERSON_CATALOG_ID = 'crew-member';
 /** Longest appearance shown in a label before it is cut with "…". */
@@ -55,16 +55,22 @@ function clip(s: string, max = APPEARANCE_MAX): string {
   return s.length > max ? `${s.slice(0, max).trimEnd()}…` : s;
 }
 
+/** UI5-10: caption for a person's boxless frame (person tracks are never boxed or cropped). */
+export const PERSON_FRAME_CAPTION = 'Whole frame (person tracks are not boxed or cropped, for crew privacy)';
+
 /** "Person: black shirt, grey pants" (cut at about 40 characters), else "Person 87dbd193". */
 export function personLabel(e: Entityish): string {
   const a = appearanceOf(e);
   return a ? `Person: ${clip(a)}` : `Person ${shortId(e.entity_id)}`;
 }
 
-/** The label to show for any entity: the person label for persons, else the label, else "item <short id>". */
+/**
+ * The label to show for any entity: the person label for persons, else the label in sentence case (UI5-10), else
+ * "item <short id>".
+ */
 export function displayLabel(e: Entityish): string {
   if (isPerson(e)) return personLabel(e);
-  return e.label?.trim() || `item ${shortId(e.entity_id)}`;
+  return sentenceCase(e.label?.trim()) || `item ${shortId(e.entity_id)}`;
 }
 
 /** displayLabel plus the short id, without repeating the id when the label already ends with it. */

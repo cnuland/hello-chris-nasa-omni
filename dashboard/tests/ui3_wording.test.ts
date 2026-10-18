@@ -53,7 +53,7 @@ describe('UI3-03 person display label', () => {
 
   test('displayLabel: persons get the person label, objects keep their label', () => {
     expect(displayLabel({ entity_id: PID, kind: 'person', label: 'person', description: 'grey t-shirt' })).toBe('Person: grey t-shirt');
-    expect(displayLabel({ entity_id: PID, kind: 'object', label: 'laptop', description: 'grey t-shirt' })).toBe('laptop');
+    expect(displayLabel({ entity_id: PID, kind: 'object', label: 'laptop', description: 'grey t-shirt' })).toBe('Laptop'); // Amended (UI5-10)
     expect(displayLabel({ entity_id: PID, label: '' })).toBe('item 87dbd193');
   });
 

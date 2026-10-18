@@ -5,6 +5,9 @@
 # Round 4 adds a 1000×280 unknown-object crop (UI4-02: no horizontal scroll, Classify / Dismiss on screen), a 76×62
 # crop hero (UI4-11), a private-window item (UI4-10), the structure quick action (UI4-05), the new event / stats fields
 # (UI4-06 / UI4-07) and an axe pass over each of those page states.
+# Round 5 adds three boxless unknowns sharing one frame (UI5-01 hint + "Same frame as" note), the bulk "Not inventory"
+# bar driven by keyboard (UI5-02), a boxless history frame opening the lightbox (UI5-06), the person hero caption and
+# "Last seen in" (UI5-09 / UI5-10), a first-sighting move event, and axe on each of those states.
 #   npm run build && npx vite preview --port 4179 --strictPort &
 #   python3 -m venv /tmp/pw2 && /tmp/pw2/bin/pip install playwright && /tmp/pw2/bin/playwright install chromium
 #   npm i --prefix /tmp/axe axe-core
@@ -150,6 +153,18 @@ HISTORY += [
     {'at': '2026-10-17T22:10:00Z', 'kind': 'audit', 'summary': 'merge by ui-review-4', 'image_url': None},
     {'at': '2026-10-17T22:00:00Z', 'kind': 'audit', 'summary': 'create by pipeline', 'image_url': None},
 ]
+
+# ---------------- round 5 fixtures: boxless unknowns sharing a frame, a first-sighting move
+for n, (lab, desc) in enumerate([('grey object', 'large smooth grey object in the foreground'),
+                                 ('orange bag', 'a small orange bag strapped to the wall'),
+                                 ('blue container', 'a blue box behind the handrail')]):
+    REVIEWS.append({'review_id': U(330 + n), 'kind': 'unknown_object', 'entity_id': U(740 + n), 'image_url': '/media/frames/063303.png',
+                    'image_bbox': None, 'description': f'{lab}: {desc}', 'observed_at': '2026-10-18T06:33:03Z',
+                    'created_at': '2026-10-18T06:33:03Z', 'location_id': 'NOD1', 'model_guess': None, 'status': 'open', 'candidates': []})
+STATS['open_reviews_by_kind']['unknown_object'] = 5
+EVENTS.append({'event_id': U(430), 'event_type': 'moved', 'entity_id': U(750), 'entity_label': 'camera', 'actor_desc': None,
+               'from_location': None, 'to_location': 'USOS', 'to_location_name': 'US Orbital Segment', 'location_role': 'from_to',
+               'occurred_at': '2026-10-18T06:20:00Z', 'source': 'pipeline'})
 
 def handler(route):
     url = route.request.url
@@ -366,6 +381,71 @@ def round4(page, width, H, axe_results):
     axe(page, f'/overview r4 @{width}', axe_results)
     return r
 
+def round5(page, width, H, axe_results):
+    r = {}
+    page.goto(f'{BASE}/review?kind=unknown_object')
+    cards = [f'[data-testid="review-{U(330 + n)}"]' for n in range(3)]
+    page.wait_for_selector(f'{cards[2]} img')
+    r['captions'] = [page.inner_text(f'{c} .frame-caption') for c in cards]
+    r['same-frame notes'] = [page.inner_text(f'{c} .same-frame-note') for c in cards]
+    r['boxes drawn on boxless cards'] = sum(page.locator(f'{c} [data-testid="bbox"]').count() for c in cards)
+    r['overflowX'] = page.evaluate(OVERFLOW)['overflowX']
+    page.evaluate(f"document.querySelector('{cards[0]}').scrollIntoView({{block: 'start'}})")
+    page.screenshot(path=f'{OUT}/r5-shared-frame-{width}.png')
+    axe(page, f'/review r5 unknowns @{width}', axe_results)
+    # UI5-02 by keyboard: Space on two checkboxes, Enter on the bulk button, Escape, then confirm
+    for c in cards[:2]:
+        page.focus(f'{c} input[type=checkbox]')
+        page.keyboard.press('Space')
+    bar = '[role="group"][aria-label="Bulk actions"]'
+    r['bulk count'] = page.inner_text(f'{bar} [aria-live]')
+    page.focus(f'{bar} button[aria-controls="rv-bulk-confirm"]')
+    page.keyboard.press('Enter')
+    page.wait_for_selector('#rv-bulk-confirm')
+    r['confirm focused'] = page.evaluate("document.activeElement.textContent")
+    r['confirm text'] = page.inner_text('#rv-bulk-confirm').replace('\n', ' | ')
+    r['overflowX confirm open'] = page.evaluate(OVERFLOW)['overflowX']
+    page.evaluate("document.querySelector('[aria-label=\"Bulk actions\"]').scrollIntoView({block: 'start'})")
+    page.screenshot(path=f'{OUT}/r5-bulk-confirm-{width}.png')
+    axe(page, f'/review r5 bulk confirm @{width}', axe_results)
+    page.keyboard.press('Escape')
+    page.wait_for_timeout(50)
+    r['escape closes, focus back'] = page.locator('#rv-bulk-confirm').count() == 0 and page.evaluate(
+        "document.activeElement.getAttribute('aria-controls')") == 'rv-bulk-confirm'
+    page.keyboard.press('Enter')
+    page.wait_for_selector('#rv-bulk-confirm')
+    page.keyboard.press('Enter')
+    page.wait_for_selector('.toast')
+    page.wait_for_timeout(100)
+    r['bulk toast'] = page.inner_text('.toasts')
+    r['cards left of the three'] = sum(page.locator(c).count() for c in cards)
+    # UI5-06: a boxless history sighting opens the lightbox
+    page.goto(f'{BASE}/items/{U(1)}')
+    page.wait_for_selector('ol.timeline .tl-sighting button.frame-trigger')
+    page.click('ol.timeline .tl-sighting button.frame-trigger')
+    page.wait_for_selector('[role="dialog"]')
+    r['history lightbox'] = page.inner_text('[role="dialog"] .lightbox-bar .muted')
+    r['audit labels'] = page.eval_on_selector_all('ol.timeline .tl-audit .tl-summary', 'ps => ps.map(p => p.textContent)')
+    axe(page, f'/items history lightbox @{width}', axe_results)
+    page.keyboard.press('Escape')
+    # UI5-10 / UI5-09: person hero caption, "Last seen" fact; person inventory rows
+    page.goto(f'{BASE}/items/{U(501)}')
+    page.wait_for_selector('.detail-media .frame-caption')
+    r['person hero caption'] = page.inner_text('.detail-media .frame-caption')
+    r['person facts'] = page.inner_text('dl.facts').replace('\n', ' | ')
+    page.screenshot(path=f'{OUT}/r5-person-detail-{width}.png')
+    axe(page, f'/items person r5 @{width}', axe_results)
+    page.goto(f'{BASE}/?kind=person')
+    page.wait_for_selector('[data-testid^="item-"]')
+    r['person last seen'] = page.eval_on_selector_all('.handled', 'es => es.map(e => e.textContent)')
+    page.goto(f'{BASE}/')
+    page.wait_for_selector('.item-link')
+    r['inventory titles'] = page.eval_on_selector_all('.item-link', 'es => es.slice(0, 3).map(e => [e.textContent, e.title])')
+    page.goto(f'{BASE}/overview')
+    page.wait_for_selector('ul.events li')
+    r['first-sighting row'] = [t for t in page.inner_text('ul.events').split('\n') if 'first seen' in t]
+    return r
+
 def main():
     report = {}
     axe_results = {}
@@ -461,6 +541,7 @@ def main():
             axe(page, f'/overview @{width}', axe_results)
             report[f'{width} round3'] = round3(page, width, H, axe_results)
             report[f'{width} round4'] = round4(page, width, H, axe_results)
+            report[f'{width} round5'] = round5(page, width, H, axe_results)
             report[f'{width} console errors'] = [e for e in errors if '404' not in e]
             ctx.close()
         b.close()
@@ -468,6 +549,12 @@ def main():
     print('AXE', json.dumps({k: v for k, v in axe_results.items()}, indent=1))
     bad = {k: v for k, v in axe_results.items() if v}
     checks = {f'{w} {k}': report[f'{w} round4'][k] for w in (1024, 1440) for k in ('no horizontal scroll', 'all card buttons on screen')}
+    for w in (1024, 1440):
+        r5 = report[f'{w} round5']
+        checks[f'{w} r5 no overflow'] = r5['overflowX'] == 0 and r5['overflowX confirm open'] == 0
+        checks[f'{w} r5 escape'] = r5['escape closes, focus back']
+        checks[f'{w} r5 bulk removed 2'] = r5['cards left of the three'] == 1
+        checks[f'{w} r5 no boxes'] = r5['boxes drawn on boxless cards'] == 0
     print('ROUND4 CHECKS', json.dumps(checks), 'AXE VIOLATIONS', len(bad))
     if bad or not all(checks.values()):
         sys.exit(1)

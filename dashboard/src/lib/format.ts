@@ -101,6 +101,17 @@ export function capitalize(s: string): string {
   return s ? s[0].toUpperCase() + s.slice(1) : s;
 }
 
+/**
+ * UI5-10: an item label in sentence case for titles ("laptop" -> "Laptop", "m-bag" -> "M-bag"). Only the first letter
+ * changes; a first word that already has a capital ("iPad", "CTB") is left alone. Search and tooltips keep the raw label.
+ */
+export function sentenceCase(label: string | null | undefined): string {
+  const s = label ?? '';
+  const first = s.split(/\s/, 1)[0];
+  if (!first || /[A-Z]/.test(first)) return s;
+  return capitalize(s);
+}
+
 /** "Used by astronaut in blue suit" (no time; callers render the time as a <time>). */
 export function handledPhrase(type: string | null | undefined, actor: string | null | undefined): string {
   return `${capitalize(eventVerb(type))} by ${actorPhrase(actor)}`;
@@ -130,11 +141,23 @@ export interface EventWording {
 
 const OPERATOR_SOURCES = new Set(['operator', 'api']);
 
+function isOperatorEvent(e: Pick<EventWording, 'actor_kind' | 'source'>): boolean {
+  const kind = (e.actor_kind ?? '').toLowerCase();
+  return kind ? kind === 'operator' : OPERATOR_SOURCES.has((e.source ?? '').toLowerCase());
+}
+
+/**
+ * UI5-09: a pipeline "moved" event with a destination but no origin is the item's first sighting, not a move
+ * ("First seen in X"). Operator placements keep "Moved by operator …". Perception / inventory-api are to stop emitting
+ * these; the dashboard rewords any that remain.
+ */
+export function isFirstSighting(e: EventWording): boolean {
+  return (e.event_type ?? '').toLowerCase() === 'moved' && !e.from_location && !!e.to_location && !isOperatorEvent(e);
+}
+
 /** "operator ui-review-2" for operator actions, else the person phrasing of actorPhrase (AC-UI-12). */
 export function eventActor(e: Pick<EventWording, 'actor_desc' | 'actor_kind' | 'source'>): string {
-  const kind = (e.actor_kind ?? '').toLowerCase();
-  const isOperator = kind ? kind === 'operator' : OPERATOR_SOURCES.has((e.source ?? '').toLowerCase());
-  if (!isOperator) return actorPhrase(e.actor_desc);
+  if (!isOperatorEvent(e)) return actorPhrase(e.actor_desc);
   const d = (e.actor_desc ?? '').replace(/\s+/g, ' ').trim();
   if (!d) return 'an operator';
   if (/^operator\b/i.test(d)) return `operator${d.slice('operator'.length)}`;
@@ -207,6 +230,7 @@ export function personEventSentence(e: EventWording, opts: LastLocation = {}): s
  * "used (last seen in X) by …" when the event has no place, "moved (place not seen)" when nothing is known.
  */
 export function objectEventSentence(e: EventWording): string {
+  if (isFirstSighting(e)) return `first seen in ${locationLabel(e.to_location, e.to_location_name)}`;
   const place = eventPlace(e).replace(/^at /, 'in ');
   const last = lastLocationOf(e, {});
   const where = place || (last ? `(last seen in ${last.label})` : '(place not seen)');
@@ -222,6 +246,7 @@ export function objectEventSentence(e: EventWording): string {
  */
 export function eventSentence(e: EventWording, opts: { person?: boolean } & LastLocation = {}): string {
   if (opts.person || isPersonEvent(e)) return capitalize(personEventSentence(e, opts));
+  if (isFirstSighting(e)) return `First seen in ${locationLabel(e.to_location, e.to_location_name)}`;
   const place = eventPlace(e);
   return `${capitalize(eventVerb(e.event_type))} by ${eventActor(e)}${place ? ` ${place}` : ''}`;
 }

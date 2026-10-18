@@ -41,7 +41,9 @@ function ItemRow({ item }: { item: Item }) {
         <Thumb src={item.snapshot_url} alt={label} person={isPerson(item)} />
       </td>
       <td>
-        <Link className="item-link" to={`/items/${item.entity_id}`}>{label}</Link>
+        {/* UI5-10: the title is in sentence case; the raw pipeline label stays in the tooltip. */}
+        <Link className="item-link" to={`/items/${item.entity_id}`}
+          title={!isPerson(item) && item.label && item.label !== label ? item.label : undefined}>{label}</Link>
         <div className="muted">{item.catalog_name || 'Uncatalogued'}</div>
       </td>
       <td>

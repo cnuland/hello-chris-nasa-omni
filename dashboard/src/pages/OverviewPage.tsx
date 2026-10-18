@@ -5,7 +5,7 @@ import { Link } from 'react-router-dom';
 import { getStats, listEvents, listItems } from '../api/client';
 import type { Event, Stats } from '../api/types';
 import { Timestamp } from '../components/Timestamp';
-import { eventPlace, humanize, isPersonEvent, objectEventSentence, personEventSentence, shortId } from '../lib/format';
+import { eventPlace, humanize, isFirstSighting, isPersonEvent, objectEventSentence, personEventSentence, sentenceCase, shortId } from '../lib/format';
 import { isPerson, personLabel } from '../lib/person';
 import { useCachedItem } from '../state/itemCache';
 import { useToasts } from '../state/toasts';
@@ -65,12 +65,16 @@ function PersonEventLine({ e }: { e: Event }) {
 /** UI4-06: "USED laptop d977201c used in Node 1 Unity (NOD1) by person (grey t-shirt)": always with a place. */
 function EventLine({ e }: { e: Event }) {
   if (isPersonEvent(e)) return <PersonEventLine e={e} />;
-  const label = e.entity_label?.trim() || (e.entity_id ? `item ${shortId(e.entity_id)}` : '');
+  const raw = e.entity_label?.trim();
+  // UI5-10: sentence case in the row, raw label in the tooltip.
+  const label = sentenceCase(raw) || (e.entity_id ? `item ${shortId(e.entity_id)}` : '');
+  // UI5-09: a "move" with no origin is the first sighting.
+  const type = isFirstSighting(e) ? 'first seen' : humanize(e.event_type) || 'event';
   return (
     <li className={`event event-${e.event_type ?? 'other'}`}>
-      <span className="event-type">{humanize(e.event_type) || 'event'}</span>{' '}
+      <span className="event-type">{type}</span>{' '}
       {e.entity_id && (
-        <Link to={`/items/${e.entity_id}`} className="event-entity">
+        <Link to={`/items/${e.entity_id}`} className="event-entity" title={raw && raw !== label ? raw : undefined}>
           {label}
           {e.entity_label?.trim() && <span className="muted">{` ${shortId(e.entity_id)}`}</span>}
         </Link>

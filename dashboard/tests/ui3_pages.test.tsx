@@ -138,7 +138,8 @@ describe('UI3-04 person events', () => {
     renderApp('/?kind=person');
     const row = await findItem(P1);
     expect(row.textContent).not.toMatch(/by person|spacesuit/);
-    expect(row).toHaveTextContent(/Seen moving/);
+    // Amended (UI5-09): person tracks read "Last seen in <place>", never "Seen moving".
+    expect(row).toHaveTextContent(/Last seen in US Orbital Segment \(USOS\)/);
   });
 });
 
@@ -272,7 +273,8 @@ describe('UI3-11 wording', () => {
     );
     const { user } = renderApp(`/items/${ID.drill}`);
     const banner = await screen.findByRole('region', { name: /merged/i });
-    expect(banner).toHaveTextContent(/Merged into cargo transfer bag 44444444 at 2026-10-18 00:07 UTC/);
+    // Amended (UI5-10): item labels are shown in sentence case.
+    expect(banner).toHaveTextContent(/Merged into Cargo transfer bag 44444444 at 2026-10-18 00:07 UTC/);
     await user.click(within(banner).getByRole('button', { name: /^unmerge/i }));
     expect(await findToast(/Unmerged: Pistol-grip drill 11111111 is a separate item again\./)).toBeInTheDocument();
   });

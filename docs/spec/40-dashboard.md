@@ -264,3 +264,50 @@ Every API field added in this round is optional; without it the round-3 behaviou
 - AC-UI-49 **Chat timer** (UI4-09, UI part): the elapsed counter is reset to 0 at send time, in the same render that
   shows the new status. The previous question's seconds are never painted.
   Tests: tests/ui4_round4.test.tsx, tests/ui4_layout_css.test.tsx, scripts/ui_check.py `round4`.
+
+## UI review round 5 amendments (2026-10-18, from docs/ui-review/round5/)
+
+No API field is added or required in this round.
+
+- AC-UI-50 **Every history frame opens the lightbox** (UI5-06, amends AC-UI-14): every History image is a `FrameImage`
+  (enlarge button + lightbox), with the sighting box when it has one. Without a box, the lightbox says "Whole frame";
+  for persons it gives the AC-UI-52 caption. Person crop / exemplar / face URLs are still never requested.
+- AC-UI-51 **Person tracks and first sightings** (UI5-09, display side; amends AC-UI-12, AC-UI-28, AC-UI-34):
+  - A person never shows "handled" wording. The Inventory column and the detail fact (labelled "Last seen" for
+    persons) read "Last seen in <place> · <UTC minute>", from `last_location` and `last_seen_at`; with no location,
+    "Last seen (place not recorded)".
+  - A pipeline `moved` event with a destination and no `from_location` is the item's first sighting. It reads "First
+    seen in X" in Activity, History (also the legacy "moved ? -> X" summary) and the overview ("first seen in X", type
+    tag "first seen"). It has no actor. Operator moves (actor_kind / source operator) keep "Moved by operator …".
+  - Inventory Last handled: `last_handled` has no locations, so a `moved` with no actor, not from an operator, within
+    5 s of `first_seen_at` reads "First seen in <last location>".
+  - This is a display stop-gap. Perception and inventory-api are to stop emitting these events.
+- AC-UI-52 **Copy** (UI5-10, amends AC-UI-46 and AC-UI-33):
+  - Person heroes, person history frames and person Activity evidence with no box are captioned "Whole frame (person
+    tracks are not boxed or cropped, for crew privacy)". Object heroes keep "Whole frame: there is no box for this
+    object".
+  - The audit op `split` reads "Unmerged" in every form ("split", "split by X", "split: note", "split (…)"), including
+    the folded raw-entry list. `unmerge` reads "Unmerged" too.
+  - Item labels are shown in sentence case where the label is a title: inventory rows, the detail h1, review entity
+    and candidate links, merged-from links, banners and toasts, and overview object rows. Only the first letter changes,
+    and a first word that already has a capital ("iPad", "CTB") is unchanged. Inventory, overview, merged-from and
+    detail titles keep the raw label in the `title` tooltip. Search and the API still use raw labels; person labels are
+    unchanged.
+- AC-UI-53 **Boxless unknowns** (UI5-01, UI side): an unknown-object card with no valid box is captioned "No box: look
+  for <label> in the frame", in the card and in the lightbox, and nothing is highlighted. <label> is the description's
+  "label:" prefix (up to 40 characters), else `model_guess`, else the description, cut at 40 characters. When several
+  open unknown cards on the page share an `image_url`, each says "Same frame as N other unknown(s) (<their labels>)".
+- AC-UI-54 **Bulk Not inventory** (UI5-02, UI side; extends AC-UI-44):
+  - The bulk bar appears only on the Unknown objects tab (`?kind=unknown_object`). It is a group named "Bulk actions"
+    with:
+    - a "Select all shown unknowns" checkbox, which is indeterminate when only some are selected;
+    - a live "N selected" count;
+    - "Not inventory (N selected)…", disabled with no selection or no operator.
+  - Each unknown card has a native checkbox labelled "Select <label> (<short review id>) for bulk action"; "Select" is
+    visible and the rest is screen-reader text.
+  - The button opens a confirm group, "Confirm not inventory for N items", that lists the selected labels. Focus moves
+    to "Confirm: not inventory (N)"; Esc or Cancel closes the group and returns focus to the button.
+  - Confirming posts `{action: "dismiss", note: "not_inventory", operator}` for each selected review, one after another.
+    Resolved reviews (and 409, already resolved) leave the queue. A success toast reads "Marked N items as station
+    structure (not inventory) …"; failures keep their cards and give an error toast "F of N could not be marked …".
+  Tests: tests/ui5_round5.test.tsx, scripts/ui_check.py `round5`.
