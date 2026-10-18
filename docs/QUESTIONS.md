@@ -250,3 +250,7 @@ I need from you.
       speech.
     - **Need:** NASA's camera inventory (fixed vs handheld, positions). That is the real location source for
       production.
+41. **Structure memory and resets.** `scripts/reset-observations.sh` truncates with CASCADE, which also clears
+    `structure_memory` (it references dismissed entities). Fine for demo resets. In production, operators'
+    "Not inventory" knowledge should survive observation resets: decouple the FK, or exclude the table from resets.
+    Follow-up.
