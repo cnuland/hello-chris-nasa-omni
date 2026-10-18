@@ -35,6 +35,8 @@ export interface Item {
   /** UI2-07: box of the object on snapshot_url, and where the box came from. */
   snapshot_bbox?: BBox | null;
   snapshot_bbox_source?: BBoxSource;
+  /** UI4-10: why there is no snapshot ("private_window": first seen in a private area). Optional. */
+  snapshot_withheld_reason?: 'private_window' | null;
 }
 
 export interface MergedFrom {
@@ -83,6 +85,10 @@ export interface Event {
   /** UI3-04: the subject's kind / appearance, when the API joins them. Optional. */
   entity_kind?: Kind | null;
   entity_description?: string | null;
+  /** UI4-06: a person subject's appearance, and the subject's current location. Optional. */
+  entity_appearance?: string | null;
+  entity_last_location?: string | null;
+  entity_last_location_name?: string | null;
 }
 
 export interface Sighting {
@@ -222,6 +228,8 @@ export interface Stats {
   by_kind: Record<string, number>;
   by_module: Record<string, number>;
   open_reviews_by_kind: Record<string, number>;
+  /** UI4-07: live items located to a module vs. only to a segment (USOS/ROS) vs. no location. Optional. */
+  by_location_level?: { module?: number; segment?: number; unknown?: number } | null;
 }
 
 // ---- agent (services/agent) ----

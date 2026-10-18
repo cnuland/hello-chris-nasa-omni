@@ -1,7 +1,7 @@
 // AC-UI-14: evidence image with an optional bounding-box overlay and click-to-enlarge (accessible lightbox).
 // The box is positioned with percentages through React's style prop (CSSOM), which the CSP (style-src 'self')
 // allows; no inline <style> or style attribute strings are emitted.
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type SyntheticEvent } from 'react';
 import type { BBox, BBoxSource } from '../api/types';
 import { mediaUrl } from '../lib/format';
 import { safePersonImage } from '../lib/person';
@@ -151,10 +151,22 @@ interface FrameImageProps {
   person?: boolean;
   /** UI3-05: caption text used instead of "Whole frame" when there is no box. */
   noBoxCaption?: string;
+  /** UI4-10: readable text shown instead of the bare "no image" placeholder (e.g. why the image is withheld). */
+  emptyText?: string;
+  /** UI4-11: called with the natural size once the image has loaded. */
+  onNaturalSize?: (width: number, height: number) => void;
+  /** UI4-11: enlarge the image to fill the space, but never past 2× its natural width (small crops); a function decides
+   * from the natural size once the image has loaded. */
+  upscale?: boolean | ((width: number, height: number) => boolean);
+  /** Caption text that replaces the computed one. */
+  captionText?: string;
 }
 
 /** Thumbnail-sized frame (bbox drawn when given) that opens the Lightbox; focus returns to it on close. */
-export function FrameImage({ src, alt, bbox, bboxSource, size = 'review', caption = false, crop, person = false, noBoxCaption }: FrameImageProps) {
+export function FrameImage({
+  src, alt, bbox, bboxSource, size = 'review', caption = false, crop, person = false, noBoxCaption, emptyText, onNaturalSize, upscale = false,
+  captionText,
+}: FrameImageProps) {
   const url = mediaUrl(person ? safePersonImage(src) : src);
   const isCrop = crop ?? isCropUrl(url);
   const box = validBBox(bbox);
@@ -166,22 +178,34 @@ export function FrameImage({ src, alt, bbox, bboxSource, size = 'review', captio
     setTimeout(() => triggerRef.current?.focus(), 0);
   }, []);
   if (!url) {
+    const cls = `thumb thumb-${size === 'review' ? 'md' : size} thumb-empty`;
+    if (emptyText) return <div className={`${cls} thumb-withheld`}>{emptyText}</div>;
     return (
-      <div className={`thumb thumb-${size === 'review' ? 'md' : size} thumb-empty`} aria-hidden="true">
+      <div className={cls} aria-hidden="true">
         no image
       </div>
     );
   }
+  const onLoad = onNaturalSize || upscale ? (e: SyntheticEvent<HTMLImageElement>) => {
+    const img = e.currentTarget;
+    const up = typeof upscale === 'function' ? upscale(img.naturalWidth, img.naturalHeight) : upscale;
+    if (up && img.naturalWidth > 0) {
+      // UI4-11: same rule as the lightbox (UI3-07): fill the space, at most 2× the natural width.
+      const avail = img.closest('.detail-media, .review-media, .candidate')?.clientWidth || img.naturalWidth * 2;
+      img.style.width = `${cropDisplayWidth(img.naturalWidth, avail)}px`;
+    }
+    onNaturalSize?.(img.naturalWidth, img.naturalHeight);
+  } : undefined;
   return (
     <>
       <button ref={triggerRef} type="button" className={`frame-trigger frame-${size}${isCrop ? ' frame-crop' : ''}`} aria-label={`Enlarge image: ${alt}${box && bboxSource === 'omni' ? ' (approximate box)' : ''}`}
         aria-haspopup="dialog" onClick={() => setOpen(true)}>
         <span className="frame">
-          <img src={url} alt={alt} loading="lazy" />
+          <img src={url} alt={alt} loading="lazy" onLoad={onLoad} />
           {box && <BoxOverlay box={box} source={bboxSource} />}
         </span>
       </button>
-      {caption && <p className="frame-caption muted small">{boxCaption(box, bboxSource, caption === 'compact', isCrop, noBoxCaption)}</p>}
+      {caption && <p className="frame-caption muted small">{captionText ?? boxCaption(box, bboxSource, caption === 'compact', isCrop, noBoxCaption)}</p>}
       {open && <Lightbox src={url} alt={alt} box={box} source={bboxSource} onClose={close} crop={isCrop} noBox={noBoxCaption} />}
     </>
   );

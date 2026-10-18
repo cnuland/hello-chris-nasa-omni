@@ -111,7 +111,7 @@ describe('UI2-11 history label has no double count', () => {
     // Amended (UI3-11): pipeline updates use one label ("N pipeline updates"); other folded summaries keep "N ×".
     expect(timelineLabel(g)).toBe('2 pipeline updates');
     const o: TimelineEntry = { at, kind: 'audit', summary: 'update by ui-review-3' };
-    expect(timelineLabel(groupTimeline([o, { ...o, at: '2026-10-17T11:00:00Z' }])[0])).toBe('2 × update by ui-review-3');
+    expect(timelineLabel(groupTimeline([o, { ...o, at: '2026-10-17T11:00:00Z' }])[0])).toBe('2 × Updated by ui-review-3'); // Amended (UI4 / UI3-11): sentence case
   });
 
   test('two adjacent server-collapsed runs add up and the leading number is the total', () => {
@@ -123,7 +123,7 @@ describe('UI2-11 history label has no double count', () => {
 
   test('single entries are unchanged', () => {
     const [g] = groupTimeline([{ at, kind: 'audit', summary: 'edit by alice' }]);
-    expect(timelineLabel(g)).toBe('edit by alice');
+    expect(timelineLabel(g)).toBe('Edit by alice'); // Amended (UI4 / UI3-11): sentence case
   });
 });
 

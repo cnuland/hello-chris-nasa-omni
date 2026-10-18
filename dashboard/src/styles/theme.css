@@ -149,7 +149,7 @@ table.items { width: 100%; border-collapse: collapse; }
 .review-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(560px, 1fr)); gap: 16px; }
 .review-head { display: flex; justify-content: space-between; align-items: baseline; }
 .review-head h2 { margin: 0; color: var(--warn); }
-.review-body { display: grid; grid-template-columns: max-content 1fr; gap: 16px; }
+.review-body { display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); gap: 16px; }
 .review-media { display: flex; flex-direction: column; gap: 8px; }
 .candidates { list-style: none; display: flex; gap: 8px; padding: 0; margin: 0; }
 .candidate { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
@@ -227,7 +227,7 @@ table.items { width: 100%; border-collapse: collapse; }
 .actions-inline button { padding: 4px 8px; font-size: 12px; }
 
 /* evidence frames with bbox overlay + lightbox */
-.frame-trigger { padding: 0; border: 1px solid var(--border); background: var(--bg-sunken); border-radius: 4px; display: block; cursor: zoom-in; }
+.frame-trigger { padding: 0; border: 1px solid var(--border); background: var(--bg-sunken); border-radius: 4px; display: block; cursor: zoom-in; max-width: 100%; min-width: 0; }
 .frame-trigger:hover:not(:disabled) { border-color: var(--accent); }
 .frame { position: relative; display: block; line-height: 0; }
 .frame img { display: block; width: 100%; height: auto; border-radius: 4px; }
@@ -376,3 +376,23 @@ table.items { width: 100%; border-collapse: collapse; }
   .dup-subject .frame-review { width: 100%; }
   .dup-candidates .candidates { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
 }
+
+/* ---- UI review round 4 ---- */
+/* UI4-02: a 915 px crop made the unknown card (and the page) 1890 px wide. Every image now shrinks to its container
+   (review card, candidate tile, detail hero; .frame-trigger above); a small crop keeps its natural size (the 2x limit
+   is applied in code). */
+.frame img { max-width: 100%; height: auto; }
+.review-card { min-width: 0; }
+.review-media { min-width: 0; max-width: 340px; }
+.review-info { min-width: 0; overflow-wrap: anywhere; }
+.candidate { min-width: 0; max-width: 100%; }
+.detail-media { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+/* UI4-11: a crop under 200 px is shown as an inset close-up next to the whole frame. */
+.hero-frame { max-width: 100%; }
+.hero-inset { max-width: 100%; display: flex; gap: 12px; align-items: flex-start; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-sunken); }
+.hero-inset-text { margin: 0; }
+.hero-inset .frame-trigger { flex: none; }
+/* UI4-10: the reason an image is withheld (crew privacy) is readable text, not a 10 px placeholder. */
+.thumb-withheld { font-size: 13px; padding: 16px; text-align: center; line-height: 1.4; }
+/* UI4-07: module vs segment-only distribution under the tiles. */
+.location-levels { margin: 0 0 16px; }

@@ -198,6 +198,9 @@ export default function ChatPage() {
     const replyId = nextId.current++;
     setMessages([...base, { id: userId, role: 'user', content: text }, { id: replyId, role: 'assistant', content: '', streaming: true }]);
     setDraft('');
+    // UI4-09: reset the counter in the same render that shows the new status (an effect would paint the previous
+    // question's seconds first).
+    setElapsed(0);
     setStreaming(true);
     const ctrl = new AbortController();
     abortRef.current = ctrl;

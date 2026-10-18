@@ -389,12 +389,16 @@ function dismissConsequence(review: ReviewItem): string {
   return 'Dismissing closes this review AND marks the item as dismissed, which hides it from the default inventory.';
 }
 
+/** UI4-05: the standard dismiss note for "Not inventory (station structure)" (the resolve contract takes a free `note`). */
+export const NOT_INVENTORY_NOTE = 'not_inventory';
+
 function ReviewCard({ review, catalog, nameOf, canAct, resolve }: CardProps) {
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState('');
   const [showNew, setShowNew] = useState(false);
   const [confirmDismiss, setConfirmDismiss] = useState(false);
+  const [confirmStructure, setConfirmStructure] = useState(false);
   const [showClassify, setShowClassify] = useState(false);
   const [mergeTarget, setMergeTarget] = useState<ReviewCandidate | null>(null);
   const [newId, setNewId] = useState('');
@@ -485,11 +489,22 @@ function ReviewCard({ review, catalog, nameOf, canAct, resolve }: CardProps) {
     <button type="button" className="danger" disabled={disabled} aria-expanded={confirmDismiss}
       aria-controls={`${p}-dismiss`} onClick={() => {
         setMergeTarget(null);
+        setConfirmStructure(false);
         setConfirmDismiss((v) => !v);
       }}>
       Dismiss…
     </button>
   );
+  // UI4-05: unknowns that are station structure (window, hatch, handrail…) are closed in one step, with a standard note.
+  const structureButton = review.kind === 'unknown_object' ? (
+    <button type="button" disabled={disabled} aria-expanded={confirmStructure} aria-controls={`${p}-structure`}
+      onClick={() => {
+        setConfirmDismiss(false);
+        setConfirmStructure((v) => !v);
+      }}>
+      Not inventory (station structure)…
+    </button>
+  ) : null;
   const keepHint = keepCatalog
     ? `Keep both: closes this review and keeps the subject as its own item (catalog ${catalogName(keepCatalog)}).`
     : 'Keep both needs a catalog item for the subject: open "Choose catalog…" and pick one first.';
@@ -511,6 +526,26 @@ function ReviewCard({ review, catalog, nameOf, canAct, resolve }: CardProps) {
               Confirm dismiss
             </button>
             <button type="button" onClick={() => setConfirmDismiss(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
+      {confirmStructure && (
+        <div id={`${p}-structure`} className="confirm-dismiss" role="group" aria-label="Confirm not inventory">
+          <p>
+            {'Station structure (a window, hatch, handrail, panel or visiting vehicle) is not inventory. This closes the ' +
+              'review with the note "not_inventory"' +
+              (review.entity_id ? ' AND marks the item as dismissed, which hides it from the default inventory.' : '. No inventory item is attached to it.')}
+          </p>
+          <div className="actions">
+            <button type="button" className="danger" disabled={disabled}
+              onClick={() => run({ action: 'dismiss', note: NOT_INVENTORY_NOTE }, {
+                message: review.entity_id
+                  ? `Marked ${subj} as station structure (not inventory): it is hidden from the default inventory.`
+                  : 'Marked as station structure (not inventory): the review is closed.',
+              })}>
+              Confirm: not inventory
+            </button>
+            <button type="button" onClick={() => setConfirmStructure(false)}>Cancel</button>
           </div>
         </div>
       )}
@@ -552,6 +587,7 @@ function ReviewCard({ review, catalog, nameOf, canAct, resolve }: CardProps) {
       <div className="actions">
         {classifyButton}
         {newButton}
+        {structureButton}
         {dismissButton}
       </div>
       {confirms}

@@ -115,7 +115,7 @@ describe('UI3-04 person events', () => {
     expect(personEventSentence({ event_type: 'moved', ...cup })).toBe('arrived in Cupola (CUP1)');
     expect(personEventSentence({ event_type: 'moved', ...nod1, ...cup })).toBe('moved from Node 1 Unity (NOD1) to Cupola (CUP1)');
     expect(personEventSentence({ event_type: 'added', ...cup })).toBe('seen in Cupola (CUP1)');
-    expect(personEventSentence({ event_type: 'moved' })).toBe('seen');
+    expect(personEventSentence({ event_type: 'moved' })).toBe('seen (place not seen)'); // Amended (UI4-06): always a place
   });
 
   test('eventSentence with the person flag never says "by"', () => {
@@ -154,9 +154,10 @@ describe('UI3-07 crops', () => {
 
 describe('UI3-11 history wording', () => {
   const at = '2026-10-17T12:00:00Z';
-  test('the audit op "split" reads "Unmerge"', () => {
-    expect(auditText('split by ui-review-3')).toBe('Unmerge by ui-review-3');
-    expect(auditText('merge by ui-review-3')).toBe('merge by ui-review-3');
+  // Amended (UI4 / UI3-11 casing): sentence-case past tense, "Unmerged by" / "Merged by".
+  test('the audit op "split" reads "Unmerged"', () => {
+    expect(auditText('split by ui-review-3')).toBe('Unmerged by ui-review-3');
+    expect(auditText('merge by ui-review-3')).toBe('Merged by ui-review-3');
   });
 
   test('pipeline updates use one label: "Pipeline update" / "N pipeline updates"', () => {

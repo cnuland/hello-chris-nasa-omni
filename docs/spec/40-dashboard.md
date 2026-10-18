@@ -216,3 +216,51 @@ Every new API field below is optional (`entity_kind` / `entity_description` on e
 - AC-UI-41 **Not-found pages** (UI3-12): /<unknown route> renders `<h1>Page not found</h1>`. /items/<missing>
   renders `<h1>Item not found</h1>` (and `<h1>Item unavailable</h1>` on a load error).
   Tests: tests/ui3_wording.test.ts, tests/ui3_pages.test.tsx, tests/ui3_layout_css.test.tsx.
+
+## UI review round 4 amendments (2026-10-18, from docs/ui-review/round4/)
+
+Every API field added in this round is optional; without it the round-3 behaviour is kept.
+
+- AC-UI-42 **Images fit their container** (UI4-02, amends AC-UI-37):
+  - Applies to review cards, candidate tiles and the item detail hero.
+  - Every frame and crop is capped at its container (`max-width: 100%`, `height: auto`). The unknown-card media column is
+    `minmax(0, 340px)`, not `max-content`.
+  - Small crops are still never upscaled by CSS; the 2× limit is applied in code.
+  - Playwright (scripts/ui_check.py) uses a 1000×280 crop on an unknown card at 1024×768 and at 1440×1000. It checks that:
+    - `documentElement.scrollWidth` equals the viewport width;
+    - each card button (Classify, New catalog item, Not inventory, Dismiss) is on screen and is the hit target.
+- AC-UI-43 **Small crop hero** (UI4-11):
+  - A `/crops/` snapshot whose natural long side is under 200 px is not the detail hero. The hero is the item's best
+    whole frame: the newest sighting frame with a valid box, else the newest sighting frame, never a crop. For persons,
+    only safe scene frames are used.
+  - The crop is shown as an inset "close-up" (natural size, click to enlarge).
+  - With no frame, the crop fills the space up to 2× its natural width, with the caption "Small close-up (shown at up to
+    2×; no whole frame is available)".
+- AC-UI-44 **Not inventory (station structure)** (UI4-05, UI side):
+  - Unknown-object cards have a "Not inventory (station structure)…" button. It needs the operator name, like the
+    other actions.
+  - The button opens a confirm step that says what happens. Confirming posts
+    `{action: "dismiss", note: "not_inventory", operator}`; the resolve contract has a free `note` and no reason enum.
+  - Opening this step closes the plain Dismiss step, and the reverse. Duplicate cards do not have this action.
+- AC-UI-45 **Overview events** (UI4-06, amends AC-UI-34 and AC-UI-18):
+  - Person events:
+    - The label is "Person: <appearance>", taken from `entity_appearance`, else `entity_description`, else the cached
+      GET /items/{id} description (only when that item is a person), else `actor_desc`.
+    - The event always states a place: "seen in X", using the event location, else `entity_last_location`, else the
+      cached item's location, else "seen (place not seen)".
+    - "left X" reads "seen in X" while the subject's last location is still X. This also applies on the item page
+      (Activity and history rows).
+  - Object events read "<verb> in X by <actor>" (for example "used in Node 1 Unity (NOD1) by person (grey t-shirt)")
+    or "<verb> from A to B by …".
+    - With no event location they read "<verb> (last seen in X)" from `entity_last_location`, else "<verb> (place not
+      seen)".
+- AC-UI-46 **Audit labels** (UI3-11 casing, amends AC-UI-40): sentence-case past tense: "Merged by X", "Unmerged by X"
+  (op `split`), "Created by pipeline", "Updated by X", "Dismissed by X", "Classified by X"; "update by pipeline"
+  stays "Pipeline update". Any other summary is capitalised. Detail after the actor is kept.
+- AC-UI-47 **Module distribution** (UI4-07): when `/stats` has `by_location_level`, the overview shows "Located to a
+  module: n · Segment only (USOS/ROS): n" (plus " · No location: n" when that count is above 0).
+- AC-UI-48 **Withheld image reason** (UI4-10): `snapshot_withheld_reason: "private_window"` replaces the hero's "no
+  image" with the readable text "No image: first seen in a private area (crew privacy)"; null keeps "no image".
+- AC-UI-49 **Chat timer** (UI4-09, UI part): the elapsed counter is reset to 0 at send time, in the same render that
+  shows the new status. The previous question's seconds are never painted.
+  Tests: tests/ui4_round4.test.tsx, tests/ui4_layout_css.test.tsx, scripts/ui_check.py `round4`.

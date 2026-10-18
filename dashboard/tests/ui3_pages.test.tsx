@@ -237,11 +237,12 @@ describe('UI3-06 / UI3-07', () => {
 
 // ---------------------------------------------------------------- UI3-11
 describe('UI3-11 wording', () => {
-  test('history shows the audit op "split" as "Unmerge"', async () => {
+  // Amended (UI4 / UI3-11 casing): "Unmerged by".
+  test('history shows the audit op "split" as "Unmerged"', async () => {
     detailIs(drillDetail, [{ at: '2026-10-18T03:30:00Z', kind: 'audit', summary: 'split by ui-review-3' }]);
     renderApp(`/items/${ID.drill}`);
     const hist = await screen.findByRole('list', { name: /^history$/i });
-    expect(hist).toHaveTextContent('Unmerge by ui-review-3');
+    expect(hist).toHaveTextContent('Unmerged by ui-review-3');
     expect(hist.textContent).not.toMatch(/split/);
   });
 

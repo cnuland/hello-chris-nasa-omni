@@ -123,6 +123,9 @@ export interface EventWording {
   /** UI3-04: the subject's catalog entry / kind; "crew-member" / "person" marks a person's own track event. */
   entity_catalog_id?: string | null;
   entity_kind?: string | null;
+  /** UI4-06: the subject's current location (optional). */
+  entity_last_location?: string | null;
+  entity_last_location_name?: string | null;
 }
 
 const OPERATOR_SOURCES = new Set(['operator', 'api']);
@@ -166,28 +169,59 @@ export function isPersonEvent(e: Pick<EventWording, 'entity_catalog_id' | 'entit
   return e.entity_catalog_id === 'crew-member' || e.entity_kind === 'person' || itemKind === 'person';
 }
 
+/** Where the subject is now: the event's entity_last_location, else a caller-supplied one (e.g. the cached item). */
+export interface LastLocation {
+  lastLocation?: string | null;
+  lastLocationName?: string | null;
+}
+
+function lastLocationOf(e: EventWording, opts: LastLocation): { code: string; label: string } | null {
+  const code = e.entity_last_location || opts.lastLocation || '';
+  if (!code) return null;
+  const name = e.entity_last_location ? e.entity_last_location_name : opts.lastLocationName;
+  return { code, label: locationLabel(code, name) };
+}
+
 /**
- * UI3-04: a person's own track event, with no actor (the person is the subject, not someone moving it):
- * "seen in Cupola (CUP1)", "left Node 1 Unity (NOD1)", "arrived in …", "moved from A to B"; "seen" with no place.
+ * UI3-04 / UI4-06: a person's own track event, with no actor (the person is the subject, not someone moving it):
+ * "seen in Cupola (CUP1)", "left Node 1 Unity (NOD1)", "arrived in …", "moved from A to B".
+ * Always a place: "seen" with no place uses the subject's last location, else "seen (place not seen)". "left X"
+ * reads "seen in X" when the subject's last location is still X.
  */
-export function personEventSentence(e: EventWording): string {
+export function personEventSentence(e: EventWording, opts: LastLocation = {}): string {
   const from = e.from_location ? locationLabel(e.from_location, e.from_location_name) : '';
   const to = e.to_location ? locationLabel(e.to_location, e.to_location_name) : '';
   const type = (e.event_type ?? '').toLowerCase();
   const route = e.location_role === 'from_to' || (e.location_role !== 'at' && type === 'moved');
+  const last = lastLocationOf(e, opts);
   if (route && from && to && e.from_location !== e.to_location) return `moved from ${from} to ${to}`;
-  if (route && from && !to) return `left ${from}`;
+  if (route && from && !to) return last?.code === e.from_location ? `seen in ${from}` : `left ${from}`;
   if (route && to && !from) return `arrived in ${to}`;
-  const at = to || from;
-  return at ? `seen in ${at}` : 'seen';
+  const at = to || from || last?.label;
+  return at ? `seen in ${at}` : 'seen (place not seen)';
+}
+
+/**
+ * UI4-06: an object event for the overview feed, always with a place:
+ * "used in Node 1 Unity (NOD1) by person (grey t-shirt)", "moved from A to B by operator x",
+ * "used (last seen in X) by …" when the event has no place, "moved (place not seen)" when nothing is known.
+ */
+export function objectEventSentence(e: EventWording): string {
+  const place = eventPlace(e).replace(/^at /, 'in ');
+  const last = lastLocationOf(e, {});
+  const where = place || (last ? `(last seen in ${last.label})` : '(place not seen)');
+  const who = eventActor(e);
+  // A person with no description adds nothing ("by an unknown person"); an operator is always named (UI2-10).
+  const actor = e.actor_desc?.trim() || who === 'an operator' ? ` by ${who}` : '';
+  return `${eventVerb(e.event_type)} ${where}${actor}`;
 }
 
 /**
  * "Used by person (blue shirt) at US Orbital Segment (USOS)", "Moved by operator ui-review-2 from A to B".
  * With `person` (the subject is a person, UI3-04): "Left Node 1 Unity (NOD1)", never "by <actor>".
  */
-export function eventSentence(e: EventWording, opts: { person?: boolean } = {}): string {
-  if (opts.person || isPersonEvent(e)) return capitalize(personEventSentence(e));
+export function eventSentence(e: EventWording, opts: { person?: boolean } & LastLocation = {}): string {
+  if (opts.person || isPersonEvent(e)) return capitalize(personEventSentence(e, opts));
   const place = eventPlace(e);
   return `${capitalize(eventVerb(e.event_type))} by ${eventActor(e)}${place ? ` ${place}` : ''}`;
 }

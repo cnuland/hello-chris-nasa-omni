@@ -249,15 +249,16 @@ describe('UI2-09 / UI-13 / UI2-10 overview feed wording', () => {
     server.use(http.get('*/api/events', () => HttpResponse.json(feed)));
     renderApp('/overview');
     const items = await within(await screen.findByRole('list', { name: /recent events/i })).findAllByRole('listitem');
-    expect(items[0]).toHaveTextContent('at Node 3 Tranquility (NOD3)');
+    // Amended (UI4-06): the overview reads "<verb> in X" for one-place events.
+    expect(items[0]).toHaveTextContent('added in Node 3 Tranquility (NOD3)');
     expect(items[0]).toHaveTextContent(/by an operator|by operator/);
     expect(items[0].textContent).not.toMatch(/from Node 3/);
-    expect(items[1]).toHaveTextContent('at US Orbital Segment (USOS)');
+    expect(items[1]).toHaveTextContent('in US Orbital Segment (USOS)');
     expect(items[1].textContent).not.toMatch(/from US Orbital/);
     expect(items[2]).toHaveTextContent('by operator ui-review-2');
     expect(items[2]).toHaveTextContent('from Node 3 (NOD3) to Node 1 (NOD1)');
     expect(items[3]).toHaveTextContent('by operator ui-review-2'); // source fallback
-    expect(items[4]).toHaveTextContent('at Node 1 Unity (NOD1)');
+    expect(items[4]).toHaveTextContent('in Node 1 Unity (NOD1)');
     for (const li of items) expect(li.textContent).not.toMatch(/person \(ui-review|\?|unknown location/);
   });
 });

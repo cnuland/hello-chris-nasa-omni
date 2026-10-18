@@ -520,3 +520,95 @@ move, a person duplicate review (internal reason, no box, 3 person candidates), 
   recounted.
 - **UI3-11 server fold:** sighting-refresh audit rows are hidden client-side when they mirror a sighting. Folding them
   in `/items/{id}/history` itself is left to inventory-api.
+
+## UI review round 4 fixes (2026-10-18, docs/ui-review/round4/)
+
+This round was strict red → green again. Each new test file was written first and run against the unchanged code, and
+each failure was checked to fail for the expected reason. The suite went from 389 to **422** tests (26 files).
+`npx tsc --noEmit -p .` and `npm run typecheck` are clean, and `npm run build` succeeds.
+
+Every new API field is optional: `entity_appearance`, `entity_last_location(_name)`, `by_location_level` and
+`snapshot_withheld_reason`. Each behaviour is tested with the field and without it.
+
+### Red evidence
+
+| Cycle | Test file | Red | Failure reason (checked) | Passed on red (why) |
+|---|---|---|---|---|
+| 1 | `tests/ui4_round4.test.tsx` | 19 / 24 | The overview events failed on several counts: "Person 737f632b" (`entity_appearance` and the cached description were ignored); "seen" with no place; "left US Orbital Segment (USOS)" while still in USOS; "used laptop … by person (…)" with no place; "moved camera" with nothing after it. Also: no module/segment line; "merge by …" and "split by …" not in sentence case; a 76×62 crop stayed the hero (no `.hero-frame`); no 2× fallback or "small close-up"; a bare "no image" for a private-window item; no "Not inventory" button (4 tests); the timer test saw **[7]**, the previous question's 7 s painted before the reset. | 5 guards: older events keep the round-3 wording; older stats show no line; a crop ≥ 200 px stays the hero; a null withheld reason keeps "no image"; duplicate cards have no structure action |
+| 1 | `tests/ui4_layout_css.test.tsx` | 5 / 6 | No `max-width`/`min-width` on `.frame-trigger`; `.frame img` had no `max-width`; `.review-body` was `max-content 1fr`; no `min-width: 0` on `.candidate`, `.review-card`, `.review-info` or `.detail-media`; no `.hero-inset` | guard: `.frame-crop img` keeps `width: auto` (no CSS upscaling) |
+| 2 | `ui4_round4` +1 (found by Playwright) | 1 / 1 | The overview borrowed a cached **object's** description as a person's appearance ("Person: black, handheld"). The mock's catch-all /items/{id} returned a camera. The fix only uses the cached description when that item is a person. | – |
+| 2 | `ui4_layout_css` +2 (found by Playwright) | 2 / 2 | Two CSS problems. An appended `.frame-trigger { max-width: 100% }` beat `.frame-lg`'s 640 px cap: the hero frame was 686 px at 1440. Also, `min-width: 0` let the inset close-up shrink to 64×52 in its flex row at 1024. The generic cap now sits in the original `.frame-trigger` rule, and the inset has `.hero-inset .frame-trigger { flex: none }`. | – |
+
+**Playwright red** (`scripts/ui_check.py` `round4`, HEAD `theme.css` with the new fixtures): `/review?kind=unknown_object`
+with a 1000×280 crop had `scrollWidth` **1256** at 1024 px and **1960** at 1440 px. The review measured 1186 and 1890
+with a 915 px crop. The crop rendered 1000 px wide in a 976 / 688 px card, and "New catalog item" was off screen. The
+script exits 1 on this.
+
+**Amended existing tests** (intended behaviour changes, 7 tests in 5 files):
+- `ui3_wording` ×2: "Unmerged by", "Merged by"; `personEventSentence({event_type: 'moved'})` → "seen (place not
+  seen)".
+- `ui3_pages` ×1: "Unmerged by ui-review-3".
+- `ui2_wording_markdown` ×2: "2 × Updated by …", "Edit by alice".
+- `ac_ui_12_17_18` ×1 and `ui2_detail_overview` ×1: the overview reads "in X" instead of "at X" for one-place events
+  (Activity and history keep "at X").
+
+### Findings → fix → tests
+
+| Finding | Fix | Tests |
+|---|---|---|
+| UI4-02 wide crops overflow the card (P2) | The original `.frame-trigger` rule gets `max-width: 100%; min-width: 0`. `.frame img` gets `max-width: 100%; height: auto`. `.review-body` becomes `minmax(0, 340px) minmax(0, 1fr)` and `.review-media` gets `max-width: 340px`. `.candidate`, `.review-card`, `.review-info` and `.detail-media` get `min-width: 0`; `.candidate` also gets `max-width: 100%`. Crops still render at natural size; the 2× limit stays in code. | `ui4_layout_css` ×8; Playwright `round4` |
+| UI4-11 76×62 crop as the hero (P3) | `DetailHero` reads the natural size on load (`FrameImage onNaturalSize`). If the long side is under 200 px, the hero is `bestFrame(sightings)`: the newest frame with a valid box, else the newest frame, never a crop, and only safe scene frames for persons. The crop becomes an inset "Close-up of the object (76×62 px …)". With no frame: `upscale` → `cropDisplayWidth` (≤ 2×) and "Small close-up …". | `ui4_round4` ×4 |
+| UI4-05 structure unknowns (P2, UI side) | "Not inventory (station structure)…" on unknown cards. It needs the operator and has a confirm step; confirming posts `{action: 'dismiss', note: 'not_inventory', operator}` (the contract has a free `note`). It closes the plain Dismiss step, and the reverse. The toast reads "Marked … as station structure (not inventory)". | `ui4_round4` ×5 |
+| UI4-06 overview events (P2) | Person rows: `entity_appearance`, else `entity_description`, else the cached item description (only for person items), else `actor_desc`. `personEventSentence(e, {lastLocation})` always gives a place ("seen (place not seen)" as the last resort) and turns "left X" into "seen in X" while the subject is still in X; this is also used for Activity and history rows. Object rows: `objectEventSentence`, "<verb> in X by <actor>" / "<verb> (last seen in X)" / "<verb> (place not seen)". | `ui4_round4` ×8 |
+| UI3-11 casing | `auditText`: `AUDIT_OPS` gives sentence-case past tense ("Merged by", "Unmerged by", "Created by pipeline", "Updated by", "Dismissed by", "Classified by"); "Pipeline update" is kept; other summaries are capitalised. | `ui4_round4` ×2 (+3 amended) |
+| UI4-07 module distribution (P3) | `locationLevelsText(stats)`: "Located to a module: n · Segment only (USOS/ROS): n" (+ "· No location: n" when above 0), shown under the tiles only when `by_location_level` is sent. | `ui4_round4` ×3 |
+| UI4-10 private-window "no image" (P3) | `snapshot_withheld_reason: 'private_window'` → `FrameImage emptyText`. The hero shows "No image: first seen in a private area (crew privacy)" as readable text (`.thumb-withheld`, not aria-hidden). | `ui4_round4` ×2 |
+| UI4-09 stale timer (P3, UI part) | `setElapsed(0)` in `send()`, batched with `setStreaming(true)`. The old effect-only reset painted the previous value first. | `ui4_round4` ×1 (MutationObserver records every painted counter value) |
+
+### Playwright measurements (vite preview, mocked routes, `dashboard/scripts/ui_check.py`)
+
+New fixtures:
+- a 1000×280 "window" crop on an unknown card;
+- a 76×62 crop item with two sighting frames (one boxed), and one with no frames;
+- a 1000×280 crop hero and a private-window item;
+- 4 events with the new fields, `by_location_level`, and "merge" / "create" audit rows.
+
+Viewports: **1024×768** and **1440×1000**.
+
+- **UI4-02, unknown queue:** `scrollWidth` 1024 / 1440 (overflow-x 0 at both sizes). The 1000 px crop renders 338 px
+  wide, inside the card (976 / 688 px). Classify, New catalog item, Not inventory and Dismiss are all on screen and are
+  the `elementFromPoint` hit. At 1024 they sit in one row, x = 397–971. Overflow-x is still 0 with the structure confirm
+  open.
+- **Wide crop hero:** 478×134 at 1024 and 686×192 at 1440 (scale 0.48 / 0.69), inside the column, overflow-x 0.
+- **UI4-11:**
+  - Tiny crop with frames: the hero is the boxed frame (478×269 at 1024; 638×359 at 1440, within the 640 px cap). The
+    inset crop stays 76×62 (scale 1).
+  - With no frame: 152×124 (scale 2), captioned "Small close-up …".
+  - Round 3's 220×140 crop hero is unchanged (scale 1).
+- **UI4-10:** the hero reads "No image: first seen in a private area (crew privacy)".
+- **UI3-11:** the history shows "Unmerged by ui-review-3", "Merged by ui-review-4" and "Created by pipeline".
+- **UI4-06 / UI4-07:**
+  - Module line: "Located to a module: 35 · Segment only (USOS/ROS): 30".
+  - Person rows: "Person: blue shirt and white gloves … seen in US Orbital Segment (USOS)" (was "left USOS") and
+    "Person: grey shirt, black shorts … seen in Cupola (CUP1)".
+  - Object rows: "laptop … used in Node 1 Unity (NOD1) by person (grey t-shirt, black shorts)" and "camera … moved
+    (place not seen)".
+- **Regression checks:** every duplicate Merge button is still reachable at both sizes, and the round-2 review page
+  overflow-x is 0.
+- **axe-core:** 0 violations on 42 page states. The new states are the unknown queue with the wide crop, the structure
+  confirm, the three crop heroes, the private item and the overview, at both sizes.
+
+### Deferred / not dashboard-side
+
+- **UI4-01 (P1 face crop):** purged by the orchestrator. Prevention (no object crop overlapping a person box; no
+  exemplar from such a crop) is perception / inventory-api work. The dashboard already never requests crops for person
+  items.
+- **UI4-05 server side:** a structural-class denylist in perception, and seeding real loose unknowns for the demo. The
+  `not_inventory` note is free text in the contract. A reason enum, if one is added, would be a contract change.
+- **UI4-03, UI4-04, UI4-08, UI4-09 latency:** agent (services/agent). Only the timer reset is dashboard-side.
+- **UI4-06 server side:** the dashboard renders "left X" as "seen in X" when `entity_last_location` (or the cached item)
+  is still X. Not emitting those events at all is the reconciler's job.
+- **UI4-07 inventory chip:** a per-row "module not resolved" chip in the inventory table was not added. Only the overview
+  line was in scope.
+- **UI4-10 sightings:** per-sighting private-window captions in the history need an `is_private` flag on sightings,
+  which does not exist yet. Only the hero uses `snapshot_withheld_reason`.

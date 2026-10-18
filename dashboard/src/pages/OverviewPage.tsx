@@ -5,8 +5,9 @@ import { Link } from 'react-router-dom';
 import { getStats, listEvents, listItems } from '../api/client';
 import type { Event, Stats } from '../api/types';
 import { Timestamp } from '../components/Timestamp';
-import { eventActor, eventPlace, humanize, isPersonEvent, personEventSentence, shortId } from '../lib/format';
-import { personLabel } from '../lib/person';
+import { eventPlace, humanize, isPersonEvent, objectEventSentence, personEventSentence, shortId } from '../lib/format';
+import { isPerson, personLabel } from '../lib/person';
+import { useCachedItem } from '../state/itemCache';
 import { useToasts } from '../state/toasts';
 
 export const REFRESH_MS = 10_000;
@@ -31,13 +32,21 @@ export function eventRoute(e: Event): string {
 }
 
 /**
- * UI3-04: a person's own track event: "Person: grey t-shirt seen in Cupola (CUP1)", with no "by <actor>" (the actor
- * description of a person's own event is that person's appearance, used for the label when nothing better is sent).
+ * UI3-04 / UI4-06: a person's own track event: "Person: grey t-shirt seen in Cupola (CUP1)", with no "by <actor>".
+ * The label uses `entity_appearance`, else `entity_description`, else the cached item's description, else the actor
+ * description (on a person's own event that is the person's appearance). The place falls back to the subject's last
+ * location (event field, else the cached item).
  */
 function PersonEventLine({ e }: { e: Event }) {
+  const appearance = e.entity_appearance?.trim() || e.entity_description?.trim() || '';
+  const needItem = !!e.entity_id && (!appearance || !e.entity_last_location);
+  const fetched = useCachedItem(needItem ? e.entity_id : null);
+  // Only a person item's description is an appearance (never borrow an object's description).
+  const item = fetched && isPerson(fetched) ? fetched : null;
   const label = personLabel({
-    entity_id: e.entity_id ?? '', label: e.entity_label, description: e.entity_description || e.actor_desc,
+    entity_id: e.entity_id ?? '', label: e.entity_label, description: appearance || item?.description || e.actor_desc,
   });
+  const sentence = personEventSentence(e, { lastLocation: item?.last_location, lastLocationName: item?.last_location_name });
   return (
     <li className={`event event-person event-${e.event_type ?? 'other'}`}>
       <span className="event-type">person</span>{' '}
@@ -47,19 +56,16 @@ function PersonEventLine({ e }: { e: Event }) {
           {!label.endsWith(shortId(e.entity_id)) && <span className="muted">{` ${shortId(e.entity_id)}`}</span>}
         </Link>
       ) : label}{' '}
-      <span className="event-route">{personEventSentence(e)}</span>{' '}
+      <span className="event-route">{sentence}</span>{' '}
       <Timestamp iso={e.occurred_at} empty="unknown time" />
     </li>
   );
 }
 
+/** UI4-06: "USED laptop d977201c used in Node 1 Unity (NOD1) by person (grey t-shirt)": always with a place. */
 function EventLine({ e }: { e: Event }) {
   if (isPersonEvent(e)) return <PersonEventLine e={e} />;
-  const route = eventRoute(e);
   const label = e.entity_label?.trim() || (e.entity_id ? `item ${shortId(e.entity_id)}` : '');
-  const who = eventActor(e);
-  // A person with no description adds nothing ("by an unknown person"); an operator is always named (UI2-10).
-  const actor = e.actor_desc?.trim() || who === 'an operator' ? `by ${who}` : '';
   return (
     <li className={`event event-${e.event_type ?? 'other'}`}>
       <span className="event-type">{humanize(e.event_type) || 'event'}</span>{' '}
@@ -69,11 +75,20 @@ function EventLine({ e }: { e: Event }) {
           {e.entity_label?.trim() && <span className="muted">{` ${shortId(e.entity_id)}`}</span>}
         </Link>
       )}{' '}
-      {actor && <span className="event-actor">{actor}</span>}{' '}
-      {route && <span className="event-route">{route}</span>}{' '}
+      <span className="event-route">{objectEventSentence(e)}</span>{' '}
       <Timestamp iso={e.occurred_at} empty="unknown time" />
     </li>
   );
+}
+
+/** UI4-07: "Located to a module: 35 · Segment only (USOS/ROS): 30" (+ "No location: n" when any); null when not sent. */
+export function locationLevelsText(stats: Stats | null): string | null {
+  const l = stats?.by_location_level;
+  if (!l || typeof l !== 'object') return null;
+  const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  const parts = [`Located to a module: ${n(l.module)}`, `Segment only (USOS/ROS): ${n(l.segment)}`];
+  if (n(l.unknown) > 0) parts.push(`No location: ${n(l.unknown)}`);
+  return parts.join(' · ');
 }
 
 export default function OverviewPage() {
@@ -123,6 +138,7 @@ export default function OverviewPage() {
   // (including person tracks), so it must not be used here.
   const items = stats ? Number(stats.by_kind?.object ?? 0) || 0 : null;
   const open = stats?.open_reviews_by_kind ?? {};
+  const levels = locationLevelsText(stats);
 
   return (
     <div className="page overview">
@@ -133,6 +149,7 @@ export default function OverviewPage() {
         <Tile label="Possible duplicates" value={stats ? open.possible_duplicate ?? 0 : null} hint="open duplicate reviews" />
         <Tile label="Person tracks seen (last hour)" value={people} hint="tracks, not people: one person can have several" />
       </div>
+      {levels && <p className="muted location-levels">{levels}</p>}
       <section className="card">
         <h2 id="events-h">Recent events</h2>
         {events === null ? (

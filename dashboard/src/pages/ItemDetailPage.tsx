@@ -5,13 +5,13 @@ import { ApiError, getHistory, getItem, unmergeItem } from '../api/client';
 import type { Event, Item, ItemDetail, ItemPatch, Sighting, TimelineEntry } from '../api/types';
 import { ConfidenceBar } from '../components/ConfidenceBar';
 import { EditItemForm } from '../components/EditItemForm';
-import { FrameImage, validBBox } from '../components/FrameImage';
+import { FrameImage, isCropUrl, validBBox } from '../components/FrameImage';
 import { Thumb } from '../components/Thumb';
 import { Timestamp } from '../components/Timestamp';
 import { UUID_RE } from '../lib/agent';
 import { eventSentence, formatUtc, formatUtcMinute, legacyEventSummary, shortId } from '../lib/format';
 import { LastHandledCell } from '../components/LastHandled';
-import { displayLabel, displayLabelWithId, isPerson } from '../lib/person';
+import { displayLabel, displayLabelWithId, isPerson, safePersonImage } from '../lib/person';
 import { useCatalog, useLocations } from '../state/reference';
 import { useOperator } from '../state/operator';
 import { errorMessage, useToasts } from '../state/toasts';
@@ -68,12 +68,24 @@ export function groupTimeline(entries: TimelineEntry[]): TimelineGroup[] {
   return out;
 }
 
-/** UI3-11: history wording: the audit op "split" reads "Unmerge"; "update by pipeline" reads "Pipeline update". */
+/** Audit ops (inventory-api audit_log.op) as sentence-case past-tense labels (UI3-11). */
+const AUDIT_OPS: Record<string, string> = {
+  merge: 'Merged', split: 'Unmerged', unmerge: 'Unmerged', create: 'Created', update: 'Updated', dismiss: 'Dismissed',
+  classify: 'Classified', delete: 'Deleted', purge: 'Purged',
+};
+
+/**
+ * UI3-11: history wording in sentence case: "merge by X" reads "Merged by X", "split by X" reads "Unmerged by X",
+ * "create by pipeline" reads "Created by pipeline", and "update by pipeline" reads "Pipeline update". Any detail
+ * after the actor (changes, note) is kept.
+ */
 export function auditText(summary: string | null | undefined): string {
   const s = (summary ?? '').trim();
-  if (/^split\b/i.test(s)) return `Unmerge${s.slice('split'.length)}`;
   if (/^update by pipeline$/i.test(s)) return 'Pipeline update';
-  return s;
+  const m = /^([a-z_]+)(?= by\b)/i.exec(s);
+  const label = m ? AUDIT_OPS[m[1].toLowerCase()] : undefined;
+  if (m && label) return `${label}${s.slice(m[1].length)}`;
+  return s ? s[0].toUpperCase() + s.slice(1) : s;
 }
 
 /** Seconds within which a pipeline update counts as the mirror of a sighting (the sighting refresh it records). */
@@ -111,6 +123,9 @@ interface RowContext {
   label: string;
   /** UI3-04: the item is a person: its own events read "left X" / "seen in X", with no actor. */
   person: boolean;
+  /** UI4-06: the item's current location ("left X" reads "seen in X" while the person is still in X). */
+  lastLocation?: string | null;
+  lastLocationName?: string | null;
   events: Map<string, Event>;
   sightings: Map<string, Sighting>;
 }
@@ -120,7 +135,7 @@ function rowText(g: TimelineGroup, ctx: RowContext): string {
   const e = g.entry;
   if (e.kind !== 'event' || g.count > 1) return timelineLabel(g);
   const ev = e.id ? ctx.events.get(e.id) : undefined;
-  if (ev) return eventSentence(ev, { person: ctx.person });
+  if (ev) return eventSentence(ev, { person: ctx.person, lastLocation: ctx.lastLocation, lastLocationName: ctx.lastLocationName });
   return legacyEventSummary(e.summary, { source: e.source, actor_kind: e.actor_kind, location_role: e.location_role }, { person: ctx.person })
     ?? e.summary ?? '';
 }
@@ -296,6 +311,58 @@ function MergedFromList({ item }: { item: ItemDetail }) {
   );
 }
 
+/** UI4-11: a crop whose long side is under this many pixels is too small to be the hero image. */
+export const SMALL_CROP_PX = 200;
+
+/** UI4-10: text shown instead of "no image" when the API says why the snapshot is withheld. */
+export const WITHHELD_TEXT: Record<string, string> = {
+  private_window: 'No image: first seen in a private area (crew privacy)',
+};
+
+/** The best whole frame of the item: a sighting frame with a box first, else the most recent frame (never a crop). */
+export function bestFrame(sightings: Sighting[] | null | undefined, person: boolean): Sighting | null {
+  const frames = (sightings ?? []).filter((x) => x && typeof x.frame_url === 'string' && x.frame_url && !isCropUrl(x.frame_url)
+    && (!person || safePersonImage(x.frame_url)));
+  const newest = (a: Sighting, b: Sighting) => (Date.parse(b.seen_at ?? '') || 0) - (Date.parse(a.seen_at ?? '') || 0);
+  const boxed = frames.filter((x) => validBBox(x.bbox)).sort(newest);
+  return boxed[0] ?? [...frames].sort(newest)[0] ?? null;
+}
+
+/**
+ * The detail hero (UI3-07, UI4-10, UI4-11). A crop under SMALL_CROP_PX on its long side is shown as an inset
+ * "close-up" under the item's best whole frame; with no frame it is shown at up to 2× with a "small close-up" caption.
+ */
+function DetailHero({ item, title, person }: { item: ItemDetail; title: string; person: boolean }) {
+  const [natural, setNatural] = useState<[number, number] | null>(null);
+  const crop = isCropUrl(item.snapshot_url);
+  const small = crop && !!natural && Math.max(natural[0], natural[1]) > 0 && Math.max(natural[0], natural[1]) < SMALL_CROP_PX;
+  const frame = small ? bestFrame(item.sightings, person) : null;
+  const withheld = item.snapshot_withheld_reason ? WITHHELD_TEXT[item.snapshot_withheld_reason] : undefined;
+  if (small && frame) {
+    return (
+      <>
+        <div className="hero-frame">
+          <FrameImage src={frame.frame_url as string} alt={`${title}: whole frame`} size="lg" bbox={frame.bbox}
+            bboxSource={frame.bbox_source} caption person={person} />
+        </div>
+        <div className="hero-inset">
+          <FrameImage src={item.snapshot_url} alt={`${title}: close-up`} size="md" crop person={person} />
+          <p className="hero-inset-text muted small">
+            {`Close-up of the object (${natural![0]}×${natural![1]} px, too small to show on its own). Click to enlarge.`}
+          </p>
+        </div>
+      </>
+    );
+  }
+  return (
+    <FrameImage src={item.snapshot_url} alt={title} size="lg" bbox={item.snapshot_bbox} bboxSource={item.snapshot_bbox_source}
+      caption person={person} emptyText={withheld}
+      upscale={crop ? (w, h) => Math.max(w, h) < SMALL_CROP_PX && !bestFrame(item.sightings, person) : false}
+      captionText={small ? 'Small close-up (shown at up to 2×; no whole frame is available). Click to enlarge.' : undefined}
+      onNaturalSize={crop ? (w, h) => setNatural((cur) => (cur && cur[0] === w && cur[1] === h ? cur : [w, h])) : undefined} />
+  );
+}
+
 export default function ItemDetailPage() {
   const { id = '' } = useParams();
   const toasts = useToasts();
@@ -388,6 +455,8 @@ export default function ItemDetailPage() {
   const rowCtx: RowContext = {
     label: title,
     person,
+    lastLocation: item.last_location,
+    lastLocationName: item.last_location_name,
     events: new Map((item.events ?? []).filter((e) => e.event_id).map((e) => [e.event_id as string, e])),
     sightings: new Map(
       (item.sightings ?? []).filter((x) => x && typeof x.sighting_id === 'string').map((x) => [x.sighting_id as string, x]),
@@ -423,8 +492,7 @@ export default function ItemDetailPage() {
 
       <div className="detail-grid">
         <div className="detail-media" data-testid="detail-media">
-          <FrameImage src={item.snapshot_url} alt={title} size="lg" bbox={item.snapshot_bbox}
-            bboxSource={item.snapshot_bbox_source} caption person={person} />
+          <DetailHero key={item.snapshot_url ?? ''} item={item} title={title} person={person} />
         </div>
         <div className="card">
           <dl className="facts">
@@ -489,7 +557,7 @@ export default function ItemDetailPage() {
         {activity.length ? (
           <ul className="moves" aria-label="Activity">
             {activity.map((m, i) => {
-              const sentence = eventSentence(m, { person });
+              const sentence = eventSentence(m, { person, lastLocation: item.last_location, lastLocationName: item.last_location_name });
               return (
                 <li key={m.event_id ?? i} className="activity">
                   <span>{`${sentence} · ${formatUtc(m.occurred_at) || 'unknown time'}`}</span>

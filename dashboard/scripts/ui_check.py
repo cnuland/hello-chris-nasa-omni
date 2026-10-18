@@ -2,6 +2,9 @@
 # /agent routes (page.route), at 1024×768 and 1440×1000. Prints measurements as JSON, then the axe violations per page.
 # Round 3 adds person items / events / a person duplicate review, a crop snapshot, the not-found pages, and the
 # 1024×768 check that every Merge button can be reached (scrolled into view and not covered by the sticky footer).
+# Round 4 adds a 1000×280 unknown-object crop (UI4-02: no horizontal scroll, Classify / Dismiss on screen), a 76×62
+# crop hero (UI4-11), a private-window item (UI4-10), the structure quick action (UI4-05), the new event / stats fields
+# (UI4-06 / UI4-07) and an axe pass over each of those page states.
 #   npm run build && npx vite preview --port 4179 --strictPort &
 #   python3 -m venv /tmp/pw2 && /tmp/pw2/bin/pip install playwright && /tmp/pw2/bin/playwright install chromium
 #   npm i --prefix /tmp/axe axe-core
@@ -114,6 +117,40 @@ HISTORY += [
     {'at': '2026-10-17T22:20:00Z', 'kind': 'audit', 'summary': 'split by ui-review-3', 'image_url': None},
 ]
 
+# ---------------- round 4 fixtures: a wide crop on an unknown card, a tiny crop hero, a private-window item
+WIDE = png(1000, 280)
+TINY = png(76, 62)
+REVIEWS.append({'review_id': U(320), 'kind': 'unknown_object', 'entity_id': U(700), 'image_url': '/media/crops/wide-700.png', 'image_bbox': None,
+                'description': 'window: circular window showing Earth below', 'observed_at': '2026-10-18T04:36:00Z',
+                'created_at': '2026-10-18T04:36:00Z', 'location_id': 'NOD1', 'model_guess': 'window', 'status': 'open', 'candidates': []})
+TINY_ITEM = dict(item(710, 'camera', snapshot_url='/media/crops/tiny-710.png'), events=[], sightings=[
+    {'sighting_id': 's710a', 'seen_at': '2026-10-18T04:40:00Z', 'location_id': 'NOD1', 'frame_url': '/media/frames/710a.png',
+     'bbox': [0.4, 0.4, 0.6, 0.6], 'bbox_source': 'detector'},
+    {'sighting_id': 's710b', 'seen_at': '2026-10-18T04:41:00Z', 'location_id': 'NOD1', 'frame_url': '/media/frames/710b.png'}])
+TINY_NOFRAME = dict(item(711, 'camera', snapshot_url='/media/crops/tiny-711.png'), events=[], sightings=[])
+WIDE_ITEM = dict(item(712, 'window', snapshot_url='/media/crops/wide-712.png'), events=[], sightings=[])
+PRIVATE_ITEM = dict(item(720, 'laptop', snapshot_url=None, snapshot_withheld_reason='private_window'), events=[], sightings=[])
+EVENTS += [
+    {'event_id': U(420), 'event_type': 'moved', 'entity_id': U(730), 'entity_label': 'person', 'entity_catalog_id': 'crew-member',
+     'entity_appearance': 'blue shirt and white gloves', 'from_location': 'USOS', 'from_location_name': 'US Orbital Segment',
+     'to_location': None, 'entity_last_location': 'USOS', 'entity_last_location_name': 'US Orbital Segment',
+     'occurred_at': '2026-10-18T04:38:00Z', 'source': 'pipeline'},
+    {'event_id': U(421), 'event_type': 'seen', 'entity_id': U(731), 'entity_label': 'person', 'entity_catalog_id': 'crew-member',
+     'entity_appearance': 'grey shirt, black shorts', 'location_role': 'at', 'entity_last_location': 'CUP1',
+     'entity_last_location_name': 'Cupola', 'occurred_at': '2026-10-18T04:31:00Z', 'source': 'pipeline'},
+    {'event_id': U(422), 'event_type': 'used', 'entity_id': U(732), 'entity_label': 'laptop', 'actor_desc': 'grey t-shirt, black shorts',
+     'actor_kind': 'person', 'from_location': 'NOD1', 'from_location_name': 'Node 1 Unity', 'location_role': 'at',
+     'occurred_at': '2026-10-18T04:41:00Z', 'source': 'pipeline'},
+    {'event_id': U(423), 'event_type': 'moved', 'entity_id': U(733), 'entity_label': 'camera', 'occurred_at': '2026-10-18T04:34:00Z',
+     'source': 'pipeline'},
+]
+STATS['by_location_level'] = {'module': 35, 'segment': 30, 'unknown': 0}
+STATS['open_reviews_by_kind']['unknown_object'] = 2
+HISTORY += [
+    {'at': '2026-10-17T22:10:00Z', 'kind': 'audit', 'summary': 'merge by ui-review-4', 'image_url': None},
+    {'at': '2026-10-17T22:00:00Z', 'kind': 'audit', 'summary': 'create by pipeline', 'image_url': None},
+]
+
 def handler(route):
     url = route.request.url
     path = re.sub(r'^https?://[^/]+', '', url).split('?')[0]
@@ -121,7 +158,8 @@ def handler(route):
     def j(body, status=200, headers=None):
         route.fulfill(status=status, content_type='application/json', body=json.dumps(body), headers=headers or {})
     if path.startswith('/api/media/'):
-        return route.fulfill(status=200, content_type='image/png', body=CROP if '/crops/' in path else IMG)
+        body = WIDE if '/crops/wide' in path else TINY if '/crops/tiny' in path else CROP if '/crops/' in path else IMG
+        return route.fulfill(status=200, content_type='image/png', body=body)
     if path == '/api/items' and m == 'GET':
         if 'kind=person' in url:
             return j({'items': PERSONS, 'total': len(PERSONS)})
@@ -130,6 +168,9 @@ def handler(route):
         return j(PERSON_DETAIL)
     if path == f'/api/items/{U(600)}':
         return j(CROP_ITEM)
+    for extra in (TINY_ITEM, TINY_NOFRAME, WIDE_ITEM, PRIVATE_ITEM):
+        if path == f"/api/items/{extra['entity_id']}":
+            return j(extra)
     if path == '/api/items/00000000-0000-4000-8000-000000000000':
         return j({'detail': 'not found'}, 404)
     if path == f'/api/items/{U(200)}':
@@ -252,6 +293,79 @@ def round3(page, width, H, axe_results):
         axe(page, f'{path} @{width}', axe_results)
     return r
 
+OVERFLOW = "() => ({scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth, overflowX: document.documentElement.scrollWidth - document.documentElement.clientWidth})"
+
+ON_SCREEN = """(sel) => {
+  const out = [];
+  for (const b of document.querySelectorAll(sel)) {
+    b.scrollIntoView({block: 'center', inline: 'nearest'});
+    const r = b.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    out.push({name: b.textContent.trim().slice(0, 40), left: Math.round(r.left), right: Math.round(r.right), innerWidth: window.innerWidth,
+              onScreen: r.left >= 0 && r.right <= window.innerWidth && r.top >= 0 && r.bottom <= window.innerHeight,
+              hit: !!hit && (hit === b || b.contains(hit))});
+  }
+  return out;
+}"""
+
+def round4(page, width, H, axe_results):
+    r = {}
+    # UI4-02: the 1000 px crop on an unknown card
+    page.goto(f'{BASE}/review?kind=unknown_object')
+    card = f'[data-testid="review-{U(320)}"]'
+    page.wait_for_selector(f'{card} img')
+    page.wait_for_function(f"document.querySelector('{card} img').complete")
+    r['unknown queue overflow'] = page.evaluate(OVERFLOW)
+    r['no horizontal scroll'] = r['unknown queue overflow']['overflowX'] == 0
+    r['wide crop'] = page.evaluate(f"""() => {{ const i = document.querySelector('{card} img'); const c = document.querySelector('{card}');
+        return {{natural: [i.naturalWidth, i.naturalHeight], rendered: Math.round(i.getBoundingClientRect().width),
+                 card: Math.round(c.getBoundingClientRect().width), insideCard: i.getBoundingClientRect().right <= c.getBoundingClientRect().right + 0.5}}; }}""")
+    sel = f'{card} .review-actions .actions button'
+    r['card buttons'] = page.evaluate(ON_SCREEN, sel)
+    r['all card buttons on screen'] = all(b['onScreen'] and b['hit'] for b in r['card buttons'])
+    page.evaluate(f"document.querySelector('{card}').scrollIntoView({{block: 'start'}})")
+    page.screenshot(path=f'{OUT}/r4-wide-crop-{width}.png')
+    axe(page, f'/review unknown wide crop @{width}', axe_results)
+    # UI4-05: structure quick action confirm
+    page.locator(card).get_by_role('button', name=re.compile('^Not inventory')).click()
+    page.wait_for_selector(f'{card} [aria-label="Confirm not inventory"]')
+    r['structure confirm'] = page.inner_text(f'{card} [aria-label="Confirm not inventory"] p')
+    r['overflow with confirm open'] = page.evaluate(OVERFLOW)['overflowX']
+    axe(page, f'/review structure-confirm @{width}', axe_results)
+    # UI4-02 on the detail hero (a wide crop) and UI4-11 (a tiny crop with / without a frame)
+    for label, ent in (('wide crop hero', WIDE_ITEM), ('tiny crop hero', TINY_ITEM), ('tiny crop, no frame', TINY_NOFRAME)):
+        page.goto(f"{BASE}/items/{ent['entity_id']}")
+        page.wait_for_selector('.detail-media img')
+        page.wait_for_timeout(250)
+        page.wait_for_function("[...document.querySelectorAll('.detail-media img')].every(i => i.complete)")
+        r[label] = page.evaluate("""() => { const m = document.querySelector('.detail-media');
+            return {imgs: [...m.querySelectorAll('img')].map(i => ({src: i.getAttribute('src'), natural: [i.naturalWidth, i.naturalHeight],
+                      rendered: [Math.round(i.getBoundingClientRect().width), Math.round(i.getBoundingClientRect().height)],
+                      scale: +(i.getBoundingClientRect().width / (i.naturalWidth || 1)).toFixed(2),
+                      insideColumn: i.getBoundingClientRect().right <= m.getBoundingClientRect().right + 0.5})),
+                    text: m.innerText.replace(/\\s+/g, ' ').trim()}; }""")
+        r[label]['overflowX'] = page.evaluate(OVERFLOW)['overflowX']
+        page.screenshot(path=f"{OUT}/r4-{label.replace(' ', '-').replace(',', '')}-{width}.png")
+        axe(page, f'/items {label} @{width}', axe_results)
+    # UI4-10
+    page.goto(f"{BASE}/items/{PRIVATE_ITEM['entity_id']}")
+    page.wait_for_selector('.detail-media')
+    r['private item hero'] = page.inner_text('.detail-media')
+    axe(page, f'/items private @{width}', axe_results)
+    # UI3-11 casing
+    page.goto(f'{BASE}/items/{U(1)}')
+    page.wait_for_selector('ol.timeline')
+    r['audit labels'] = page.eval_on_selector_all('ol.timeline .tl-audit .tl-summary', 'ps => ps.map(p => p.textContent)')
+    # UI4-06 / UI4-07
+    page.goto(f'{BASE}/overview')
+    page.wait_for_selector('.location-levels')
+    r['location levels'] = page.inner_text('.location-levels')
+    r['overview events'] = page.inner_text('ul.events')
+    r['overview overflowX'] = page.evaluate(OVERFLOW)['overflowX']
+    page.screenshot(path=f'{OUT}/r4-overview-{width}.png')
+    axe(page, f'/overview r4 @{width}', axe_results)
+    return r
+
 def main():
     report = {}
     axe_results = {}
@@ -346,10 +460,16 @@ def main():
             page.screenshot(path=f'{OUT}/07-overview-{width}.png')
             axe(page, f'/overview @{width}', axe_results)
             report[f'{width} round3'] = round3(page, width, H, axe_results)
+            report[f'{width} round4'] = round4(page, width, H, axe_results)
             report[f'{width} console errors'] = [e for e in errors if '404' not in e]
             ctx.close()
         b.close()
     print(json.dumps(report, indent=1))
     print('AXE', json.dumps({k: v for k, v in axe_results.items()}, indent=1))
+    bad = {k: v for k, v in axe_results.items() if v}
+    checks = {f'{w} {k}': report[f'{w} round4'][k] for w in (1024, 1440) for k in ('no horizontal scroll', 'all card buttons on screen')}
+    print('ROUND4 CHECKS', json.dumps(checks), 'AXE VIOLATIONS', len(bad))
+    if bad or not all(checks.values()):
+        sys.exit(1)
 
 main()

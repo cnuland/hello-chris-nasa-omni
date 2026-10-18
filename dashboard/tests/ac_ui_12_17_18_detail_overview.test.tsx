@@ -147,7 +147,8 @@ describe('AC-UI-18 overview feed shows labels and location names', () => {
     // Amended (UI2-09): "from A to B" instead of "A → B".
     expect(items[0]).toHaveTextContent('from Node 2 deck bay 4 (NOD2D4) to Lab starboard rack 2 (LAB1S2)');
     expect(items[0]).toHaveTextContent('2026-10-17 11:00 UTC');
-    expect(items[1]).toHaveTextContent('at Node 2 overhead bay 4 (NOD2O4)');
+    // Amended (UI4-06): the overview reads "<verb> in X" for one-place events.
+    expect(items[1]).toHaveTextContent('in Node 2 overhead bay 4 (NOD2O4)');
   });
 
   test('AC-UI-18 fallbacks: short id when no label, code when no name, one-sided "from X", no route when both missing', async () => {
