@@ -689,3 +689,10 @@ duplicates, people only in `people[]`). The NASA tour captions give free module-
   `window_location_acc` 0.391 (9/23 scored), `module_coverage` 0.667 (6/9). All 14 misses are `unresolved`: the
   window's sightings sit at segment level `USOS`. No window predicted a wrong module. The bottleneck is resolving
   the location hint to a module, not confusing modules. Target 0.7 missed (report-only).
+
+## UI review round 6: real-video per-pass accuracy (2026-10-18)
+- `make eval-real` on the live API (run 07:48:35 → 08:44:30, 4 passes of the looping tour, API mode): window_location_acc
+  0.473 (26/55), coverage 1.0. Per pass: 11/15 (0.733), 6/14 (0.429), 5/13 (0.385, 1 wrong), 4/13 (0.308). The decline
+  is the title-caption sampling phase (perception AC-PER-67), not a regression; the code under test is the deployed
+  image (this round's perception changes are not live yet). No eval code changed; `make eval` gate PASSED after the
+  perception changes (person_tracks_per_person 1.0 with the AC-PER-66 spread rule, after a fix it exposed).

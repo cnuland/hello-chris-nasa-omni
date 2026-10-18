@@ -42,7 +42,7 @@ LOOSE = [  # real loose items the queue must keep
     ("orange tool", "an orange handled tool"),
     ("white wrapped object", "large white bundle wrapped in protective material"),
     ("pen", "a black pen floating"),
-    ("wristwatch", "black watch with a yellow face"),
+    ("green bag", "green fabric bag"),  # AC-PER-69 amendment: the wristwatch is a worn item now (UI6-07)
 ]
 
 
@@ -222,7 +222,7 @@ def test_at_most_two_unknowns_per_frame(make_reconciler):
 
 def test_at_most_four_unknowns_per_window(make_reconciler):
     rec = make_reconciler()
-    labels = ["orange sphere", "orange tool", "white wrapped object", "pen", "wristwatch", "red clip"]
+    labels = ["orange sphere", "orange tool", "white wrapped object", "pen", "green bag", "red clip"]  # AC-PER-69
     objects = [obj(lbl, frame_index=i // 2, confidence=0.9 - i * 0.05) for i, lbl in enumerate(labels)]
     p = run(rec, objects, n_frames=3)
     assert labels_of(p) == sorted(labels[:4])

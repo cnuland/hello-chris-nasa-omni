@@ -30,6 +30,8 @@ _PHRASES: tuple[tuple[str, str], ...] = (
     (r"\btank tops?\b", "shirt"),
     (r"\bspace ?suits?\b", "spacesuit"),
     (r"\beva suits?\b", "spacesuit"),
+    (r"\bextravehicular(?: activity)?(?: suits?)?\b", "spacesuit"),  # AC-PER-65
+    (r"\borlan(?: suits?)?\b", "spacesuit"),
     (r"\bemu(?: suits?)?\b", "spacesuit"),
     (r"\b(?:u\.? ?s\.? ?a?\.?|usa)\s*(?=flags?\b)", "american "),  # "US flag", "U.S. flag" -> American flag
     (r"\bflags\b", "flag"),
@@ -182,6 +184,12 @@ def _compare(a: str | None, b: str | None) -> tuple[bool, float, float]:
     da, db = appearance_descriptors(a), appearance_descriptors(b)
     if not da or not db:
         return False, 0.0, 0.0
+    la, lb = _hair_length(a), _hair_length(b)
+    if la and lb and not (la & lb):
+        return True, 0.0, 0.0  # AC-PER-66: "long hair" vs "short hair" is two people, like two colours
+    lega, legb = {k for k in da if k in LEGWEAR}, {k for k in db if k in LEGWEAR}
+    if lega and legb and not (lega & legb):
+        return True, 0.0, 0.0  # AC-PER-66: trousers vs shorts (vs a skirt) is two people
     shared = 0.0
     for key in da.keys() & db.keys():
         ca, cb = da[key], db[key]
@@ -261,3 +269,99 @@ def find_sleep_cue(obs: dict[str, Any]) -> tuple[str, str] | None:
     summary = obs.get("scene_summary")
     cue = sleep_cue(summary if isinstance(summary, str) else None)
     return (cue, "scene_summary") if cue else None
+
+
+
+# ------------------------------------------------------------------------------------------------ AC-PER-65
+# what an empty suit can "wear": everything else (hair, shirt, trousers, glasses, headset, watch, ...) is a person's
+SUIT_KEYS = frozenset({"spacesuit", "suit", "gloves", "helmet", "visor", "shoes"}) | INSIGNIA
+_BODY_WORDS = re.compile(
+    r"\b(face|faces|skin|smiling|smile|smiles|eyes|eye|beard|bearded|moustache|mustache|man|woman|men|women|he|she|"
+    r"his|her|hair|bald)\b")
+_HUMAN_ACTIVITY = re.compile(
+    r"\b(talk|talks|talking|speak|speaks|speaking|smil\w*|laugh\w*|eat|eats|eating|drink|drinks|drinking|typ\w*|"
+    r"writ\w*|wav\w*|gestur\w*|explain\w*|point|points|pointing|hold|holds|holding|use|uses|using|operat\w*|"
+    r"carr\w*|open|opens|opening|clos\w*|adjust\w*)\b")
+
+
+def _truthy(value: Any) -> bool:
+    """Review round: model output may say "true", 1 or "yes" for a boolean."""
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "yes", "1", "y")
+    return bool(value) and value is not False
+
+
+def is_empty_suit(appearance: str | None, activity: str | None = None, is_speaking: Any = False) -> bool:
+    """AC-PER-65: a people[] appearance that describes an empty spacesuit (a stowed EMU), not a crew member: it names a
+    spacesuit (or a suit coloured only white) and nothing only a person has (other garments, hair, face words), the
+    entry is not speaking, and the activity has no clearly human verb."""
+    if _truthy(is_speaking) or not appearance:
+        return False
+    desc = _descriptors(appearance)
+    suit = "spacesuit" in desc or desc.get("suit") == frozenset({"white"})
+    if not suit or any(k not in SUIT_KEYS for k in desc):
+        return False
+    if _BODY_WORDS.search(_normalise(appearance)):
+        return False
+    return not (activity and _HUMAN_ACTIVITY.search(_normalise(str(activity))))
+
+
+
+# ------------------------------------------------------------------------------------------------ AC-PER-66
+LEGWEAR = frozenset({"pants", "shorts", "skirt"})
+_HAIR_LENGTH = re.compile(r"\b(long|short)(?:\s+[a-z]+)?\s+hair(?:ed)?\b|\b(long|short)\s*haired\b")
+
+
+def _hair_length(text: str | None) -> set[str]:
+    """{"long"} / {"short"} when the text names a hair length ("long dark hair", "short-haired"); sleeve lengths are
+    removed by the normaliser first."""
+    if not text:
+        return set()
+    return {m.group(1) or m.group(2) for m in _HAIR_LENGTH.finditer(_normalise(text))}
+
+
+_OBJECT_DETERMINERS = frozenset(["the", "a", "an", "another", "second", "other", "some", "one", "two", "this", "that"])
+_PHRASE_CUT = frozenset(
+    ["of", "with", "on", "in", "inside", "at", "near", "behind", "under", "over", "above", "below", "beneath",
+     "through", "from", "to", "for", "into", "onto", "by", "and", "or", "showing", "visible", "seen", "leading",
+     "holding", "attached", "mounted", "outside", "against", "between", "around", "next", "hanging", "floating",
+     "being", "used", "that", "which", "lying", "stowed", "strapped", "secured", "displaying", "containing",
+     "featuring", "labelled", "labeled", "filled", "covered", "showing", "with"])
+
+
+def _phrase_colours(text: str | None) -> frozenset[str] | None:
+    words = re.findall(r"[a-z]+", unicodedata.normalize("NFKC", str(text or "")).lower())
+    while words and words[0] in _OBJECT_DETERMINERS:
+        words = words[1:]
+    for i, w in enumerate(words):
+        if i > 0 and (w in _PHRASE_CUT or (w.endswith("ing") and len(w) > 4)):
+            words = words[:i]
+            break
+    colours: set[str] = set()
+    family: frozenset[str] | None = None
+    for raw in words:
+        word = _COLOUR_ALIASES.get(raw, raw)
+        if word in COLOURS:
+            colours.add(word)
+        elif word in MODIFIERS and word != "bright":
+            family = MODIFIERS[word] if family is None else family | MODIFIERS[word]
+    if colours:
+        return frozenset(colours)
+    return family
+
+
+def object_colours(label: str | None, description: str | None = None) -> frozenset[str] | None:
+    """AC-PER-66: the colours of an object: the colour words of its label's noun phrase, else of its description's
+    first noun phrase (aliases folded; "dark"/"light" alone give a family); None when neither names a colour."""
+    return _phrase_colours(label) or _phrase_colours(description)
+
+
+def object_colour_conflict(a: tuple[str | None, str | None], b: tuple[str | None, str | None]) -> bool:
+    """AC-PER-66: both (label, description) pairs name colours and the colour sets are disjoint."""
+    ca, cb = object_colours(*a), object_colours(*b)
+    return ca is not None and cb is not None and not (_lighting(ca) & _lighting(cb))
+
+
+def _lighting(colours: frozenset[str]) -> frozenset[str]:
+    """Review round: white and grey (silver) are one colour under station lighting."""
+    return colours | {"white", "grey"} if colours & {"white", "grey"} else colours

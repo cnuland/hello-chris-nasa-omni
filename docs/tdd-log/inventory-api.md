@@ -643,3 +643,28 @@ docs/spec/10-inventory-api.md, plus the AC-API-25 order amendment. Perception's 
   provenance when the UPDATE would not apply (guard test added; now only for sightings newer than `last_seen_at`).
 - **Final:** inventory-api **517 passed** (506 + 11); ruff clean.
 
+
+## UI review round 6 (AC-API-46, AC-API-47) (2026-10-18)
+- **Spec first:** docs/spec/10-inventory-api.md "UI review round 6" (AC-API-46 structure memory, AC-API-47 no move
+  inside one place). Contract change: `contracts/db/007_structure_memory.sql` (idempotent, `CREATE ... IF NOT EXISTS`,
+  no backfill) and `GET /structure-memory` + `StructureMemory` in contracts/openapi/inventory-api.yaml.
+- **Red:** tests/test_ac_api_46_48_ui_review_round6.py, 22 of 28 failing for the right reasons (no migration file, 404
+  on the endpoint, moved events stored); 6 passing (resolutions that must write nothing, real moves stored).
+- **Green:** `inventory_api/structure_memory.py` (tokeniser, `record_not_inventory` in the resolve transaction, the
+  listing with the active-memory join), review.py dismiss hook (`structure_memory_id` in the audit), ingest
+  `_move_within_one_place` (`moved_events_skipped` in the audit). 545 passed; ruff clean.
+- **Migration notes:** 007 only creates the table and two indexes; safe to re-apply on every start (asserted by
+  applying it twice). No backfill: dismissals before 007 carry no memory, so the operator must dismiss once more after
+  the redeploy for already-dismissed structure (e.g. 6388e99f "insulated hose", dc687b97 "hatch cover"). FKs are
+  `ON DELETE SET NULL`, so deleting an entity or review keeps the memory; restoring or classifying the entity withdraws
+  it from the listing.
+- **Finding passed to the agent owner (UI6-10):** the five identical "New cargo transfer bag seen in NOD2" rows are
+  new-item rows of the agent's recent_changes (five distinct entities), not events, so no API-level event de-dup applies;
+  perception AC-PER-71 removes the repeated entities themselves.
+- **Adversarial review** (independent reviewer agent; fixes test-first, `test_review_*`, 5 red then green): moves
+  that refine a coarse place (USOS → LAB1) are stored, only coarsening is skipped (one existing parametrised case moved
+  from "skipped" to "stored", justified by the same finding); person/clothing words never enter `description_tokens`;
+  only an exemplar linked to a known non-overlapping sighting is remembered (the live-case test now links its
+  exemplars); a later dismissal for another reason does not reactivate a memory (latest dismiss note must be
+  not_inventory). Test file renamed to test_ac_api_46_47_ui_review_round6.py (there is no AC-API-48).
+- **Final:** inventory-api **549 passed** (517 + 32); ruff clean.

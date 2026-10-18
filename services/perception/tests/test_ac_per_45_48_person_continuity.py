@@ -28,7 +28,7 @@ from test_ac_per_35_38_people_privacy import (
 )
 
 from perception.omni import interpret_reply
-from perception.people import appearance_descriptors, appearance_similarity, sleep_cue
+from perception.people import appearance_conflict, appearance_descriptors, appearance_similarity, sleep_cue
 from perception.types import OmniResult
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "gemma4_tour_people_2026-10-18.json"
@@ -51,8 +51,21 @@ def test_ac_per_45_same_person_through_three_modules_in_five_minutes_is_one_trac
         run(rec, people=[person("P1", ("dark hair, blue shirt", "astronaut wearing a blue shirt",
                                        "blue shirt, khaki pants", "crew member, blue shirt")[i])],
             hint=hint, t=90.0 * i)
+    # AC-PER-66 amendment (UI6-02): the third module within 10 minutes needs strong evidence. "blue shirt, khaki
+    # pants" against the track's "dark hair, blue shirt" (closeness 0.57) is the live blue-shirt over-merge, so Kibo
+    # starts a second track; the fourth sighting (Unity again, no new module) joins the first track.
+    tracks = live_people(inv)
+    assert len(tracks) == 2
+    assert sorted(p["last_location"] for p in tracks) == ["JPM1", "NOD1"]
+
+
+def test_ac_per_45_distinctive_person_through_three_modules_in_five_minutes_is_one_track(make_reconciler, inv):
+    """AC-PER-66: strong, distinctive evidence still carries a track through a third module."""
+    rec = make_reconciler(HANDHELD)
+    looks = "blue flight suit with American flag patch, orange gloves"
+    for i, hint in enumerate(["Unity", "Columbus", "Kibo", "Unity"]):
+        run(rec, people=[person("P1", looks)], hint=hint, t=90.0 * i)
     assert [p["last_location"] for p in live_people(inv)] == ["NOD1"]
-    assert len(live_people(inv)) == 1
 
 
 def test_ac_per_45_beyond_the_horizon_only_same_module_matches(make_reconciler, inv):
@@ -313,7 +326,15 @@ def test_ac_per_48_fixture_modules_match_the_replay(make_reconciler, inv):
 def test_ac_per_48_real_sequence_produces_far_fewer_tracks(make_reconciler, inv):
     replayed = _replay(make_reconciler, inv)
     tracks = len(live_people(inv))
-    assert tracks <= 0.6 * AC_PER_35_REAL_TRACKS, tracks
+    # AC-PER-66 amendment (UI6-02): hair-length and legwear clashes and the module-spread rule trade continuity for
+    # purity on purpose. Measured: 21 -> 26 tracks (was <= 0.6 * 37 = 22), clashing sighting pairs inside tracks
+    # 3 -> 1, most places on one track 5 -> 4 (docs/tdd-log/perception.md). Still 30 % fewer than AC-PER-35's 37.
+    assert tracks <= 0.71 * AC_PER_35_REAL_TRACKS, tracks
+    clashing = 0
+    for e in live_people(inv):
+        texts = [s["description"] for s in inv.entities[e["entity_id"]]["sightings"] if s.get("description")]
+        clashing += sum(appearance_conflict(a, b) for i, a in enumerate(texts) for b in texts[i + 1:])
+    assert clashing <= 1, clashing
     for r in replayed:  # two entries of one window never share a track
         ids = [entity_of(a, r["response"]) for a in person_assignments(r["payload"], inv)]
         assert len(ids) == len(set(ids))

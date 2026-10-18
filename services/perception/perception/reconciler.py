@@ -73,14 +73,21 @@ from . import NEW, UNKNOWN
 from .config import PerceptionConfig
 from .labels import (
     CatalogMapper,
+    class_families,
+    content_tokens,
+    description_phrases,
+    head_family,
     is_fixed_in_place,
     is_generic_label,
     is_structure_label,
+    is_worn_item,
+    kind_family,
     label_key,
     normalise_label,
     noun_phrase,
+    token_overlap,
 )
-from .locations import LocationResolver, ModuleCarry, caption_scene_change
+from .locations import LocationResolver, ModuleCarry, RevisitLocator, caption_scene_change
 from .media import crop as crop_image
 from .media import encode_jpeg
 from .people import (
@@ -90,6 +97,8 @@ from .people import (
     appearance_evidence,
     appearance_similarity,
     find_sleep_cue,
+    is_empty_suit,
+    object_colour_conflict,
     sanitise_text,
 )
 from .privacy import is_body_label, mentions_person, ordered, overlaps_person, region_kind
@@ -110,6 +119,8 @@ NEAR_TIE_P = 0.02
 LOW_CONFIDENCE = "low_confidence"
 PLACE_ITEMS_LIMIT = 50  # AC-PER-29: same-class entities of one module (GET /items?catalog_id=&location=)
 PERSON_RECENT_DESCRIPTIONS = 5  # review round (AC-PER-45): a track's latest sighting appearances kept in memory
+OBJECT_RECENT_DESCRIPTIONS = 5  # AC-PER-66: an object entity's latest sighting descriptions kept in memory
+PERSON_RECENT_MODULES = 20  # AC-PER-66: a person track's latest (time, module) sightings kept in memory
 UNKNOWN_PLACE_ITEMS_LIMIT = 200  # UNKNOWN has no class filter: every entity of the module is listed
 MAX_PERSON_BOXES = 10  # AC-PER-49: person regions sent with a sighting (inventory-api checks crops itself)
 #: AC-PER-54 extra detector call for unknown objects: ``query_detect(frame_index, query_texts) -> detections``
@@ -277,6 +288,8 @@ class _Observed:
     candidate_ids: set[str] = field(default_factory=set)  # entities compared by appearance (have exemplars)
     person_overlap: bool = False  # AC-PER-49: its crop overlapped a person region and was dropped
     held_cross_module: list[_Scored] = field(default_factory=list)  # AC-PER-60: ask-band candidates in another module
+    suppressed: bool = False  # AC-PER-64: matches a structure memory; dropped before the payload
+    label_doubt: str | None = None  # AC-PER-68: the kind of thing the description names instead of the label
 
     @property
     def catalog_id(self) -> str | None:
@@ -321,6 +334,41 @@ class _Link:
         )
 
 
+@dataclass(frozen=True)
+class _Memory:
+    """AC-PER-64: one parsed GET /structure-memory row."""
+
+    memory_id: Any
+    label_key: str
+    family: str | None
+    tokens: frozenset[str]
+    location: str | None
+    module: str | None
+    embedding: np.ndarray | None
+
+    @classmethod
+    def parse(cls, row: Any) -> _Memory | None:
+        if not isinstance(row, dict) or not (row.get("location_id") or row.get("module_id")):
+            return None
+        label = str(row.get("label") or "")
+        raw_tokens = row.get("description_tokens") if isinstance(row.get("description_tokens"), list) else []
+        embedding = None
+        raw = row.get("embedding")
+        if isinstance(raw, list) and len(raw) == 768:
+            try:
+                v = np.asarray([float(x) for x in raw], dtype=np.float32)
+            except (TypeError, ValueError):
+                v = None
+            if v is not None and np.all(np.isfinite(v)) and float(np.linalg.norm(v)) > 0:
+                embedding = v / float(np.linalg.norm(v))
+        key = label_key(str(row.get("label_key") or label))
+        if not key and not raw_tokens and embedding is None:
+            return None
+        return cls(row.get("memory_id"), key, head_family(label),
+                   frozenset(content_tokens(label, " ".join(str(t) for t in raw_tokens))),
+                   row.get("location_id") or None, row.get("module_id") or None, embedding)
+
+
 class _WindowContext:
     """Per-window state: location, privacy, storage uploads (cached), decision log."""
 
@@ -351,6 +399,7 @@ class _WindowContext:
         self.unknown_query_ms = 0
         self.generic_unknowns_skipped = 0  # AC-PER-59
         self.unknowns_capped = 0  # AC-PER-59
+        self.structure_memory_suppressed = 0  # AC-PER-64
 
     def regions(self, idx: int) -> list[tuple[tuple[float, float, float, float], str]]:
         return self.person_regions.get(idx, [])
@@ -429,10 +478,17 @@ class Reconciler:
         # review round (AC-PER-45): appearance texts of each person track's latest sightings (this process only;
         # the same text is stored as the sighting description), so a clash with any of them blocks a match
         self._person_recent: dict[str, deque[str]] = {}
+        # AC-PER-66: latest sighting descriptions of object entities (colour gate) and (time, module) of person tracks
+        self._object_recent: dict[str, deque[str]] = {}
+        self._person_modules: dict[str, deque[tuple[datetime, str]]] = {}
         # AC-PER-37 review: windows starting before this stay private (overlapping windows show the same scene)
         self._private_until: datetime | None = None
         # AC-PER-41: a roaming camera's last own module (resolver and horizon are refreshed per window)
         self._module_carry = ModuleCarry(self.resolver, self.config.module_carry_s)
+        self._revisit = RevisitLocator()  # AC-PER-67: frame embeddings of windows that placed themselves
+        # AC-PER-64: parsed GET /structure-memory rows and the clock time they were fetched
+        self._memories: list[_Memory] = []
+        self._memories_at: float | None = None
 
     def _set_catalog(self, catalog: list[dict[str, Any]], locations: list[dict[str, Any]]) -> None:
         self.catalog = catalog
@@ -555,11 +611,22 @@ class Reconciler:
         # AC-PER-41: after every privacy decision, so nothing carries into or out of a no_capture window
         self._module_carry.resolver = self.resolver
         self._module_carry.carry_s = float(self.config.module_carry_s or 0.0)
+        roaming = self.resolver.is_roaming(camera_location)
+        scene_change = caption_scene_change(self.resolver, obs.get("location_hint"))
         carry = self._module_carry.step(window.t_start, window.t_end, scope, no_capture=no_capture,
-                                        roaming=self.resolver.is_roaming(camera_location),
-                                        scene_change=caption_scene_change(self.resolver, obs.get("location_hint")))
+                                        roaming=roaming, scene_change=scene_change)
         location = carry.location
         window_location: dict[str, Any] = {"location_id": location, "source": carry.source}
+        revisit = None
+        if roaming and not no_capture and float(self.config.revisit_location_sim or 0.0) > 0:
+            revisit = self._revisit_step(window, scope, carry)  # AC-PER-67
+            if revisit is not None:
+                location = revisit.module
+                window_location = {"location_id": location, "source": "revisit", "revisit_sim": revisit.sim,
+                                   "revisit_from": _iso(revisit.from_t_end)}
+                logger.info("window placed like an earlier window of a known module (revisit location)",
+                            extra={"camera_id": self.camera_id, "window": window.index, "location": location,
+                                   "sim": revisit.sim})
         if carry.ended:
             window_location["carry_ended"] = carry.ended
             logger.info("module carry ended by a scene change",
@@ -582,15 +649,25 @@ class Reconciler:
             )
         ctx = _WindowContext(self, window, location, no_capture, scope.hint_conflict)
         ctx.truncated = omni.truncated
-        ctx.carried = carry.carried
+        ctx.carried = carry.carried or revisit is not None  # AC-PER-67: an inferred place, like a carry
         dets = [list(detections[i]) if i < len(detections) else [] for i in range(len(window.frames))]
 
+        obs, suits = self._suits_as_objects(obs)  # AC-PER-65: an empty spacesuit is an object, not a person
         raw_objects = [o for o in obs.get("objects") or [] if isinstance(o, dict)]
+        converted_suits = {id(o) for o in raw_objects if o.get("label") == "spacesuit"} if suits else set()
         # AC-PER-50: station structure / outside views are not inventory (UNKNOWN labels only); AC-PER-49: body-part
         # labels are person regions, never instances. Both are dropped before consolidation and linking.
         structure = structure_filtered(raw_objects, self.mapper)
         body = [o for o in raw_objects if self._is_body(str(o.get("label") or ""))]
-        dropped_ids = {id(o) for o in structure} | {id(o) for o in body}
+        # AC-PER-69: a watch, or a wearable while people are in view, is worn by crew: not an unknown
+        people_present = bool([p for p in obs.get("people") or [] if isinstance(p, dict)]) or any(
+            self._is_region_label(str(o.get("label") or "")) for o in raw_objects)
+        skip = {id(o) for o in structure} | {id(o) for o in body}
+        worn = [o for o in raw_objects if id(o) not in skip and id(o) not in converted_suits
+                and self.mapper.map(str(o.get("label") or "")).catalog_id == UNKNOWN
+                and is_worn_item(str(o.get("label") or ""), str(o.get("description") or ""), people_present,
+                                 bool(o.get("held_by")))]
+        dropped_ids = skip | {id(o) for o in worn}
         objects = [o for o in raw_objects if id(o) not in dropped_ids]
         if structure or body:
             logger.info("omni objects that are not inventory dropped",
@@ -604,6 +681,8 @@ class Reconciler:
                 self._is_region_label(str(o.get("label") or "")) for o in raw_objects)
             self._query_unknowns(ctx, observed, dets, query_detect, people_reported)  # AC-PER-54/55
         observed = self._gate_unknowns(ctx, observed)  # AC-PER-59
+        for o in observed:
+            self._check_label(ctx, o)  # AC-PER-68
         observed = self._with_people(window, obs, observed)  # AC-PER-35
         for o in observed:
             o.location = self._object_location(ctx, o)
@@ -617,7 +696,9 @@ class Reconciler:
         ]
 
         reviews: list[dict[str, Any]] = []
+        instances = self._suppress_remembered(ctx, instances)  # AC-PER-64 (label / text evidence)
         self._match_instances(ctx, instances)
+        instances = [o for o in instances if not o.suppressed]  # AC-PER-64 (embedding evidence)
         self._check_speech_flags(ctx, instances)
         assignments = [self._assignment(ctx, o) for o in instances]
         self._expected_count_reviews(ctx, instances)
@@ -655,6 +736,9 @@ class Reconciler:
         # AC-PER-59 window statistics (inventory-api ignores unknown window fields)
         window_doc["generic_unknowns_skipped"] = ctx.generic_unknowns_skipped
         window_doc["unknowns_capped"] = ctx.unknowns_capped
+        window_doc["structure_memory_suppressed"] = ctx.structure_memory_suppressed  # AC-PER-64
+        window_doc["suits_as_objects"] = suits  # AC-PER-65
+        window_doc["worn_filtered"] = len(worn)  # AC-PER-69
         if privacy is not None:
             window_doc["privacy"] = privacy  # AC-PER-37 metadata (inventory-api ignores unknown window fields)
         if not no_capture:
@@ -680,6 +764,180 @@ class Reconciler:
             "stock_updates": stock_updates,
         }
         return payload, instances, claims
+
+    # ------------------------------------------------------------------ AC-PER-67 revisit location
+    def _revisit_step(self, window: Window, scope: Any, carry: Any):
+        """AC-PER-67: a window that placed itself (hint/summary) joins the gallery; a window still outside a module,
+        not elsewhere and mentioning no other module, may take the module of an earlier look-alike."""
+        own = self.resolver.module_of(scope.location) if (
+            not carry.carried and scope.source in ("hint", "summary")) else None
+        if own is not None:
+            self._revisit.add(own, window.t_end, self._frame_embeddings(window))
+            return None
+        if self.resolver.module_of(carry.location) is not None or scope.elsewhere:
+            return None
+        within, mentions = carry.location, set(scope.mentions)
+
+        def allowed(m: str) -> bool:
+            # inside a segment the hint named, and no mention of another module. A caption scene change ends a carry
+            # (time-based) but not this visual evidence ("To COL" read at the Columbus hatch, 08:19:00)
+            return (within is None or self.resolver.within(m, within)) and not (mentions - {m})
+
+        return self._revisit.query(
+            self._frame_embeddings(window), window.t_start, sim=float(self.config.revisit_location_sim),
+            margin=float(self.config.revisit_location_margin), allowed=allowed)
+
+    def _frame_embeddings(self, window: Window) -> list[np.ndarray]:
+        out = []
+        for frame in window.frames:
+            try:
+                out.append(np.asarray(self.embedder.embed(frame.hires), dtype=np.float32).reshape(-1))
+            except Exception as exc:  # noqa: BLE001 - the revisit location is optional
+                logger.warning("frame embedding failed; no revisit location", extra={"error": str(exc)})
+                return []
+        return out
+
+    # ------------------------------------------------------------------ AC-PER-68 label vs description
+    def _check_label(self, ctx: _WindowContext, o: _Observed) -> None:
+        """AC-PER-68: a description naming another catalog class remaps the instance; one naming another kind of
+        thing (families disjoint) marks the label as doubted (confidence cap + low_confidence review)."""
+        if ctx.no_capture or o.is_unknown or self._is_person(o) or self._is_fungible(o):
+            return
+        desc = str(o.obj.get("description") or "")
+        for phrase in description_phrases(desc):
+            m = self.mapper.map(phrase)
+            if m.method not in ("exact", "synonym"):
+                continue
+            item = self.mapper.item(m.catalog_id)
+            if m.catalog_id != o.catalog_id and item and item.get("category") != "person" and not item.get(
+                    "is_fungible"):
+                logger.info("description names another catalog class; instance remapped",
+                            extra={"window": ctx.window.index, "from": o.catalog_id, "to": m.catalog_id})
+                o.match = LabelMatch(m.catalog_id, m.score, "description", item.get("class_name"))
+                return
+            break  # the description names this class, the person class or a fungible class: no remap
+        family = kind_family(desc, description=True)
+        families = class_families(self.mapper.item(o.catalog_id))
+        if family is not None and families and family not in families:
+            words = description_phrases(desc)
+            o.label_doubt = next((w for w in reversed(words) if kind_family(w) == family), family)
+            logger.info("label and description disagree; sighting doubted",
+                        extra={"window": ctx.window.index, "class": o.catalog_id, "description_kind": family})
+
+    # ------------------------------------------------------------------ AC-PER-65 empty spacesuits
+    def _suits_as_objects(self, obs: dict[str, Any]) -> tuple[dict[str, Any], int]:
+        """AC-PER-65: people[] entries and person objects that describe an empty spacesuit become omni objects
+        labelled "spacesuit" (description = the appearance; a person object keeps its box and frame)."""
+        converted: list[dict[str, Any]] = []
+        people = []
+        # an entry that is the actor of an omni event on anything but a person (its own "moved") acts: a person,
+        # whatever it wears (handling a laptop; a body part that moves)
+        actors = {str(e.get("actor_ref")) for e in obs.get("events") or [] if isinstance(e, dict) and e.get("actor_ref")
+                  and not self._is_person_label(str(e.get("object_label") or ""))}
+        for p in obs.get("people") or []:
+            if isinstance(p, dict) and str(p.get("ref") or "") not in actors and is_empty_suit(p.get("appearance") if isinstance(p.get("appearance"), str)
+                                                     else None, p.get("activity") if isinstance(p.get("activity"),
+                                                                                                 str) else None,
+                                                     p.get("is_speaking")):
+                converted.append({"label": "spacesuit", "description": sanitise_text(p.get("appearance")),
+                                  "confidence": 0.5, "bbox": None, "frame_index": None})
+            else:
+                people.append(p)
+        objects = []
+        for o in obs.get("objects") or []:
+            if isinstance(o, dict) and self._is_person_label(str(o.get("label") or "")) and is_empty_suit(
+                    o.get("description") if isinstance(o.get("description"), str) else None):
+                # review round: no box, so no crop of what may still be a suited crew member
+                o = {**o, "label": "spacesuit", "description": sanitise_text(o.get("description")), "bbox": None}
+                converted.append(o)
+                continue
+            objects.append(o)
+        if not converted:
+            return obs, 0
+        logger.info("empty spacesuits treated as objects, not people", extra={"suits": len(converted)})
+        return {**obs, "people": people, "objects": objects + converted}, len(converted)
+
+    # ------------------------------------------------------------------ AC-PER-64 structure memory
+    def _structure_memories(self) -> list[_Memory]:
+        """GET /structure-memory, cached for ``structure_memory_refresh_s`` (0 = off). A failing call keeps the
+        previous copy; a client without the method has no memory."""
+        ttl = float(self.config.structure_memory_refresh_s or 0.0)
+        if ttl <= 0:
+            return []
+        now = self.clock()
+        if self._memories_at is not None and now - self._memories_at < ttl:
+            return self._memories
+        self._memories_at = now
+        fetch = getattr(self.api, "list_structure_memory", None)
+        if fetch is None:
+            self._memories = []
+            return self._memories
+        try:
+            rows = fetch(limit=500) or []
+        except Exception as exc:  # noqa: BLE001 - inventory-api is a remote dependency
+            logger.warning("structure memory fetch failed; keeping the previous copy", extra={"error": str(exc)})
+            return self._memories
+        self._memories = [m for m in (_Memory.parse(r) for r in rows) if m is not None]
+        return self._memories
+
+    def _memory_place(self, o: _Observed, m: _Memory) -> str | None:
+        """"same" (same module, or the same location outside modules), "nearby" (one side outside a module and one
+        location inside the other) or None."""
+        if o.location is None:
+            return None
+        om = self.resolver.module_of(o.location)
+        mm = m.module or self.resolver.module_of(m.location)
+        if om is not None and mm is not None:
+            return "same" if om == mm else None
+        if m.location is None:
+            return None
+        if m.location == o.location:
+            return "same"
+        if self.resolver.within(m.location, o.location) or self.resolver.within(o.location, m.location):
+            return "nearby"
+        return None
+
+    def _remembered(self, ctx: _WindowContext, o: _Observed, *, embedding_only: bool = False) -> bool:
+        """AC-PER-64: True (and the instance is marked suppressed and counted) when an UNKNOWN instance matches an
+        active structure memory: embedding >= assign_p or the same label key (same place or nearby), or the same
+        head-noun family with token overlap >= structure_memory_token_floor (same place only)."""
+        if not o.is_unknown or ctx.no_capture:
+            return False
+        memories = self._structure_memories()
+        if not memories:
+            return False
+        label = str(o.obj.get("label") or "")
+        key = label_key(label)
+        family = head_family(label)
+        tokens = content_tokens(label, str(o.obj.get("description") or ""))
+        floor = float(self.config.structure_memory_token_floor)
+        # review round: a one-word or generic label ("strap", "white object") is too broad to suppress beyond its place
+        specific = len(normalise_label(label).split()) >= 2 and not is_generic_label(label, None)
+        for m in memories:
+            place = self._memory_place(o, m)
+            if place is None:
+                continue
+            evidence = None
+            if o.embedding is not None and m.embedding is not None and m.embedding.shape == o.embedding.shape and float(
+                np.dot(m.embedding, o.embedding / (np.linalg.norm(o.embedding) or 1.0))
+            ) >= self.config.assign_p:
+                evidence = "embedding"
+            elif not embedding_only and key and key == m.label_key and (place == "same" or specific):
+                evidence = "label"
+            elif (not embedding_only and place == "same" and family is not None and family == m.family
+                  and token_overlap(tokens, m.tokens) >= floor):
+                evidence = "text"
+            if evidence:
+                o.suppressed = True
+                ctx.structure_memory_suppressed += 1
+                logger.info("unknown matches a structure memory (operator: not inventory); suppressed",
+                            extra={"window": ctx.window.index, "memory_id": m.memory_id, "evidence": evidence,
+                                   "place": place})
+                return True
+        return False
+
+    def _suppress_remembered(self, ctx: _WindowContext, instances: list[_Observed]) -> list[_Observed]:
+        return [o for o in instances if not self._remembered(ctx, o)]
 
     def _is_person_label(self, label: str) -> bool:
         item = self.mapper.item(self.mapper.map(label).catalog_id)
@@ -1216,6 +1474,10 @@ class Reconciler:
             m_now, m_then = self.resolver.module_of(o.location), self.resolver.module_of(last_loc)
             if m_now and m_then and m_now != m_then:
                 return None  # impossible transit for an object nobody is carrying
+        if not ctx.no_capture and o.catalog_id and not self._is_person(o):
+            row = self._class_items(ctx, o.catalog_id).get(str(cand.get("entity_id"))) or cand
+            if self._colour_clash(o, row):
+                return None  # AC-PER-66: a white bag is not the blue bag (review round: also without a listing row)
         sim = cand.get("similarity")
         return CandidateFeatures(
             similarity=float(sim) if sim is not None else 0.0,
@@ -1232,6 +1494,12 @@ class Reconciler:
         embedded: list[_Observed] = []
         gated: list[_Observed] = []
         persons: list[_Observed] = []
+        if ctx.no_capture:  # AC-PER-71: no appearance in a private window; class and place only
+            taken_private: set[str] = set()
+            for o in instances:
+                if not self._is_person(o):
+                    self._match_private(ctx, o, taken_private)
+            return
         for o in instances:
             if self._is_person(o):
                 persons.append(o)  # AC-PER-36: never embedded (a person crop is face-bearing, biometric-like)
@@ -1248,8 +1516,10 @@ class Reconciler:
                             extra={"window": ctx.window.index, "frame": o.frame_idx})
                 gated.append(o)
                 continue
-            embedded.append(o)
             o.embedding = np.asarray(self.embedder.embed(image), dtype=np.float32).reshape(-1)
+            if o.is_unknown and self._remembered(ctx, o, embedding_only=True):
+                continue  # AC-PER-64: the operator called this structure (embedding in the auto band)
+            embedded.append(o)
             candidates = (
                 self.api.candidates(
                     [float(v) for v in o.embedding],
@@ -1268,9 +1538,12 @@ class Reconciler:
                 if features is not None:
                     scored.append(_Scored(cand, _clamp01(self.scorer(features), 0.0)))
             o.scored = _rank(scored, o.location)
-            if self._is_generic(o):  # AC-PER-60: another module needs the auto band for a generic class
+            # AC-PER-66: a private-only entity (no checkable appearance) only in the same known module and auto band
+            o.scored = [s for s in o.scored if not self._private_only(ctx, o, s.entity_id) or (
+                s.p >= self.config.assign_p and self._same_known_module(s.candidate.get("last_location"), o.location))]
+            if self._is_generic(o):  # AC-PER-60/66: not the same known module needs the auto band for a generic class
                 o.held_cross_module = [s for s in o.scored if s.p < self.config.assign_p
-                                       and self._cross_module(s.candidate.get("last_location"), o.location)]
+                                       and not self._same_known_module(s.candidate.get("last_location"), o.location)]
                 if o.held_cross_module:
                     held = {s.entity_id for s in o.held_cross_module}
                     o.scored = [s for s in o.scored if s.entity_id not in held]
@@ -1378,6 +1651,9 @@ class Reconciler:
                 # specific shared trait (a compatibly coloured garment, a distinctive accessory or insignia)
                 if (cap or not same) and (close < cfg.person_match_floor or not appearance_evidence(desc, other)):
                     continue
+            if module is not None and self._spread_exceeded(eid, item, module, seen_at) and (
+                    featureless or sim < cfg.person_spread_floor or not appearance_evidence(desc, other)):
+                continue  # AC-PER-66: a third module within minutes needs strong evidence
             rank = (featureless, -sim, -close, not same, not recent, item.get("last_location") != o.location,
                     -last_seen.timestamp(), o.index, eid)
             out.append((rank, item))
@@ -1415,8 +1691,14 @@ class Reconciler:
             last_seen = _parse_ts(item.get("last_seen_at"))
             if not eid or eid in taken or item.get("status") in ("merged", "dismissed") or last_seen is None:
                 continue
-            if self._same_place(item.get("last_location"), o.location):
-                candidates.append((last_seen, item))
+            if not self._same_place(item.get("last_location"), o.location):
+                continue
+            if not ctx.no_capture and self._colour_clash(o, item):
+                continue  # AC-PER-66
+            if not ctx.no_capture and item.get("snapshot_withheld_reason") == "private_window" and not (
+                    self._same_known_module(item.get("last_location"), o.location)):
+                continue  # AC-PER-66: a private-only entity only in the same known module
+            candidates.append((last_seen, item))
         if not candidates:
             return
         horizon = self.config.no_exemplar_match_s
@@ -1601,6 +1883,61 @@ class Reconciler:
             ctx.class_items[catalog_id] = {str(r.get("entity_id")): r for r in rows}
         return ctx.class_items[catalog_id]
 
+    # ------------------------------------------------------------------ AC-PER-66 / AC-PER-71
+    def _colour_clash(self, o: _Observed, item: dict[str, Any]) -> bool:
+        """AC-PER-66: the instance's colours clash with the entity's description or its latest sighting texts."""
+        if self._is_person(o):
+            return False
+        mine = (str(o.obj.get("label") or ""), str(o.obj.get("description") or ""))
+        eid = str(item.get("entity_id") or "")
+        texts = [str(item.get("description") or ""), *self._object_recent.get(eid, ())]
+        return any(object_colour_conflict(mine, (None, t)) for t in texts if t)
+
+    def _private_only(self, ctx: _WindowContext, o: _Observed, entity_id: str) -> bool:
+        if ctx.no_capture or not o.catalog_id:
+            return False
+        row = self._class_items(ctx, o.catalog_id).get(entity_id)
+        return bool(row and row.get("snapshot_withheld_reason") == "private_window")
+
+    def _same_known_module(self, a: str | None, b: str | None) -> bool:
+        ma = self.resolver.module_of(a)
+        return ma is not None and ma == self.resolver.module_of(b)
+
+    def _spread_exceeded(self, eid: str, item: dict[str, Any], module: str, seen_at: datetime) -> bool:
+        """AC-PER-66: the track already has ``person_spread_modules`` distinct modules other than ``module`` within
+        ``person_spread_s`` before ``seen_at`` (memory of recorded sightings, plus the item's last place)."""
+        horizon = float(self.config.person_spread_s or 0.0)
+        if horizon <= 0:
+            return False
+        seen: list[tuple[datetime, str]] = list(self._person_modules.get(eid, ()))
+        last_mod, last_at = self.resolver.module_of(item.get("last_location")), _parse_ts(item.get("last_seen_at"))
+        if last_mod and last_at:
+            seen.append((last_at, last_mod))
+        recent = {m for at, m in seen if 0 <= (seen_at - at).total_seconds() <= horizon}
+        if module in recent:
+            return False  # the track was here within the window: not a new module
+        return len(recent) >= int(self.config.person_spread_modules)
+
+    def _match_private(self, ctx: _WindowContext, o: _Observed, taken: set[str]) -> None:
+        """AC-PER-71: a private-window instance attaches to a live entity of its class in the same module (any gap) or
+        at the same location outside modules: own zone first, then the most recently seen; no decision, no review."""
+        key = self._place_key(o)
+        if key is None or o.location is None:
+            return
+        module = self.resolver.module_of(o.location)
+        candidates = []
+        for item in self._place_items(ctx, key, module or o.location) or []:
+            eid = str(item.get("entity_id") or "")
+            last_seen = _parse_ts(item.get("last_seen_at"))
+            if not eid or eid in taken or item.get("status") in ("merged", "dismissed") or last_seen is None:
+                continue
+            if self._same_place(item.get("last_location"), o.location):
+                candidates.append((item.get("last_location") != o.location, -last_seen.timestamp(), eid, item))
+        if candidates:
+            item = min(candidates, key=lambda c: c[:3])[3]
+            self._attach_item(o, item)
+            taken.add(str(item["entity_id"]))
+
     def _is_generic(self, o: _Observed) -> bool:
         """AC-PER-60: the instance's class is one of ``config.generic_classes`` (class name or catalog id)."""
         item = self.mapper.item(o.catalog_id)
@@ -1717,6 +2054,8 @@ class Reconciler:
             confidence = min(confidence, _clamp01(self.config.omni_truncated_confidence, 0.5))
         if ctx.carried:  # AC-PER-41 module inherited from an earlier window
             confidence = min(confidence, _clamp01(self.config.module_carry_confidence, 0.5))
+        if o.label_doubt:  # AC-PER-68 the description names another kind of thing
+            confidence = min(confidence, _clamp01(self.config.label_conflict_confidence, 0.4))
         sighting: dict[str, Any] = {
             "location_id": o.location,
             "seen_at": _iso(seen_at),
@@ -1777,7 +2116,18 @@ class Reconciler:
                         "description": self._review_description(o, "not in the catalog"),
                     }
                 )
+        if o.label_doubt and not any(r.get("kind") == LOW_CONFIDENCE and r.get("label_doubt") for r in o.reviews):
+            o.reviews.append({
+                "kind": LOW_CONFIDENCE,
+                "candidate_ids": [],
+                "probabilities": {},
+                "label_doubt": True,
+                "description": self._review_description(
+                    o, f"label and description disagree: the description names a {o.label_doubt}, not a "
+                       f"{o.match.class_name or o.catalog_id}"),
+            })
         for review in o.reviews:
+            review.pop("label_doubt", None)
             review.update(
                 {
                     "entity_ref": o.ref,
@@ -1902,6 +2252,12 @@ class Reconciler:
                 if to_location is None:
                     continue
                 event_type = "seen"  # AC-PER-63: a person's own transit is an arrival ("seen" there), never a move
+            elif event_type == "moved" and (to_location is None or self._within_one_place(from_location,
+                                                                                          to_location)):
+                # AC-PER-70 (UI6-08): no destination, or LAB1 -> USOS: a loss of precision, not a move
+                logger.info("moved event without a destination or inside one place dropped",
+                            extra={"window": ctx.window.index, "entity_ref": target.ref})
+                continue
             elif event_type == "moved" and from_location is None:
                 # AC-PER-63 (UI5-09): a first sighting is not a move; the new entity itself records where it appeared
                 logger.info("moved event without a previous place dropped",
@@ -1970,6 +2326,11 @@ class Reconciler:
                                "from": o.previous_location, "to": o.location})
         return out
 
+    def _within_one_place(self, a: str | None, b: str | None) -> bool:
+        """AC-PER-70 (review round): ``b`` (to) is ``a`` (from) or contains it: LAB1 -> USOS loses precision. A
+        refinement (USOS -> LAB1) is information and is kept."""
+        return a is not None and b is not None and self.resolver.within(a, b)
+
     def _dedup_place(self, location: str | None) -> str | None:
         """Review round (AC-PER-51): destinations filled from sightings vary with the zone of the box centre, so the
         cross-window dedup key uses the module (or the place itself outside modules)."""
@@ -2013,6 +2374,9 @@ class Reconciler:
             key = (target.get("entity_ref") or target["entity_id"], claim.location_id)
             if key in seen:
                 continue
+            if claim.event_type == "moved" and self._within_one_place(target.get("last_location"), claim.location_id):
+                logger.info("speech move inside one place ignored", extra={"location": claim.location_id})
+                continue  # AC-PER-70: "putting the drill in node 2" while it is in NOD2D4
             seen.add(key)
             p_statement = result.probabilities.get("statement") if result and not result.needs_review else None
             cap = self.config.speech_max_confidence
@@ -2139,6 +2503,13 @@ class Reconciler:
             eid = resolve(o.entity_id, o.ref) if a else None
             if eid and text and self._is_person(o):
                 self._person_recent.setdefault(eid, deque(maxlen=PERSON_RECENT_DESCRIPTIONS)).append(str(text))
+            elif eid and text:  # AC-PER-66 colour gate memory
+                self._object_recent.setdefault(eid, deque(maxlen=OBJECT_RECENT_DESCRIPTIONS)).append(str(text))
+            seen_at = _parse_ts((a or {}).get("sighting", {}).get("seen_at"))
+            mod = self.resolver.module_of((a or {}).get("sighting", {}).get("location_id"))
+            self_placed = (payload.get("window", {}).get("location") or {}).get("source") not in ("carried", "revisit")
+            if eid and mod and seen_at and self._is_person(o) and self_placed:
+                self._person_modules.setdefault(eid, deque(maxlen=PERSON_RECENT_MODULES)).append((seen_at, mod))
 
         # 1. remember recorded omni events (overlap dedup)
         for ev in payload.get("events", []):

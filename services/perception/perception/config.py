@@ -25,7 +25,12 @@ Environment variables (all optional unless noted):
   PERCEPTION_LINK_IOU_CROSS_CLASS (AC-PER-58, default 0.5, <= 1),
   PERCEPTION_GENERIC_CLASSES (AC-PER-60, comma-separated class names or catalog ids, "none" = no class; default
   laptop, tablet, camera, camcorder, cargo transfer bag, m-bag),
-  PERCEPTION_UNKNOWNS_PER_FRAME / PERCEPTION_UNKNOWNS_PER_WINDOW (AC-PER-59, default 2 / 4, 0 = no cap, max 40).
+  PERCEPTION_UNKNOWNS_PER_FRAME / PERCEPTION_UNKNOWNS_PER_WINDOW (AC-PER-59, default 2 / 4, 0 = no cap, max 40),
+  PERCEPTION_STRUCTURE_MEMORY_REFRESH_S (AC-PER-64, default 60, 0 = memory off),
+  PERCEPTION_PERSON_SPREAD_S / _MODULES / _FLOOR (AC-PER-66, default 600 / 2 / 0.8; 0 s = off),
+  PERCEPTION_REVISIT_LOCATION_SIM / _MARGIN (AC-PER-67, default 0.94 / 0.04, 0 = off, <= 1),
+  PERCEPTION_LABEL_CONFLICT_CONFIDENCE (AC-PER-68, default 0.4, <= 1),
+  PERCEPTION_STRUCTURE_MEMORY_TOKEN_FLOOR (AC-PER-64, default 0.6, <= 1).
 
 A camera that has no entry in the camera -> location map is treated as no_capture (fail closed), and the CLI refuses
 to start for it.
@@ -105,10 +110,18 @@ class PerceptionConfig:
     hint_conflict_confidence: float = 0.5  # AC-PER-23 sighting confidence cap when a fixed camera's hint conflicts
     person_match_floor: float = 0.5  # AC-PER-35 appearance-text similarity needed to attach a person sighting
     person_cross_module_s: float = 600.0  # AC-PER-45 a person track last seen anywhere this recently is a candidate
+    person_spread_s: float = 600.0  # AC-PER-66 window for a person track's distinct modules (0 = off)
+    person_spread_modules: int = 2  # AC-PER-66 distinct modules after which a new module needs strong evidence
+    person_spread_floor: float = 0.8  # AC-PER-66 similarity and closeness needed then
     person_soft_cap: bool = True  # AC-PER-47 at the person class's expected_count, prefer attaching (floor-bounded)
     privacy_hold_s: float = 30.0  # AC-PER-37 windows of the camera starting this soon after a private one stay private
     module_carry_s: float = 45.0  # AC-PER-41 a roaming camera's unresolved window inherits the module this long
     module_carry_confidence: float = 0.5  # AC-PER-41 sighting confidence cap in a carried window
+    revisit_location_sim: float = 0.94  # AC-PER-67 frame-pair cosine to place a window like an earlier one (0 = off)
+    revisit_location_margin: float = 0.04  # AC-PER-67 lead over the best other module
+    label_conflict_confidence: float = 0.4  # AC-PER-68 sighting confidence cap when the description contradicts
+    structure_memory_refresh_s: float = 60.0  # AC-PER-64 GET /structure-memory cache age (0 = memory off)
+    structure_memory_token_floor: float = 0.6  # AC-PER-64 token overlap for a same-place text match
     min_transit_s: float = 20.0
     assign_p: float = 0.85
     ask_p: float = 0.5
@@ -215,6 +228,14 @@ _NUMBER_VARS: dict[str, tuple[str, type]] = {
     "unknowns_per_frame_max": ("PERCEPTION_UNKNOWNS_PER_FRAME", int),
     "link_iou_cross_class": ("PERCEPTION_LINK_IOU_CROSS_CLASS", float),
     "unknowns_per_window_max": ("PERCEPTION_UNKNOWNS_PER_WINDOW", int),
+    "structure_memory_refresh_s": ("PERCEPTION_STRUCTURE_MEMORY_REFRESH_S", float),
+    "label_conflict_confidence": ("PERCEPTION_LABEL_CONFLICT_CONFIDENCE", float),
+    "revisit_location_sim": ("PERCEPTION_REVISIT_LOCATION_SIM", float),
+    "revisit_location_margin": ("PERCEPTION_REVISIT_LOCATION_MARGIN", float),
+    "person_spread_s": ("PERCEPTION_PERSON_SPREAD_S", float),
+    "person_spread_modules": ("PERCEPTION_PERSON_SPREAD_MODULES", int),
+    "person_spread_floor": ("PERCEPTION_PERSON_SPREAD_FLOOR", float),
+    "structure_memory_token_floor": ("PERCEPTION_STRUCTURE_MEMORY_TOKEN_FLOOR", float),
 }
 
 # Upper bounds checked by from_env (inclusive).
@@ -235,6 +256,11 @@ _MAX_VALUES: dict[str, float] = {
     "unknowns_per_frame_max": 40,
     "link_iou_cross_class": 1.0,
     "unknowns_per_window_max": 40,
+    "structure_memory_token_floor": 1.0,
+    "label_conflict_confidence": 1.0,
+    "revisit_location_sim": 1.0,
+    "revisit_location_margin": 1.0,
+    "person_spread_floor": 1.0,
 }
 # Must be strictly positive (checked by from_env).
 _POSITIVE = {"omni_max_tokens", "omni_max_objects", "omni_repetition_penalty"}

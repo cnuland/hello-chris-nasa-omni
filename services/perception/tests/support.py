@@ -177,6 +177,8 @@ class FakeInventory:
         self.patches: list[tuple[str, dict[str, Any]]] = []
         self.candidate_calls: list[dict[str, Any]] = []
         self.calls: list[str] = []
+        self.structure_memories: list[Any] = []  # AC-API-46 GET /structure-memory rows
+        self.structure_memories_error: Exception | None = None
 
     # -- setup
     def add_entity(self, *, catalog_id: str | None, label: str | None = None, embedding=None,
@@ -281,6 +283,12 @@ class FakeInventory:
                          "evidence_url": ev.get("evidence_uri"), "source": ev.get("source")})
         rows.sort(key=lambda r: parse_dt(r["occurred_at"]), reverse=True)
         return rows[: int(limit)]
+
+    def list_structure_memory(self, limit=500):
+        self.calls.append("list_structure_memory")
+        if self.structure_memories_error is not None:
+            raise self.structure_memories_error
+        return list(self.structure_memories)[: int(limit)]
 
     def patch_item(self, entity_id, fields):
         self.calls.append("patch_item")

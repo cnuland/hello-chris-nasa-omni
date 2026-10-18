@@ -1091,3 +1091,239 @@ Residual risks accepted:
 - *Recall.* A truly moved generic item (laptop carried to another module) becomes a new entity plus an ask-band
   review unless its appearance reaches the auto band.
 - `FakeOmni` parses scripted replies as `xyxy` (test fake only).
+
+## Amendments: data quality, UI review round 6 (live Gemma 4 run, 2026-10-18)
+
+Measured on docs/ui-review/round6 (UI6-02 to UI6-10) and on the live run's database and raw replies (read-only).
+AC-PER-64 to AC-PER-71 amend AC-PER-8, 10, 13, 22, 29, 35, 41, 45, 50, 51, 59, 60, 61 and 63.
+
+- AC-PER-64 **Structure memory** (UI6-05; inventory-api AC-API-46).
+  - *Found live:* "insulated hose" (frame 075900) was dismissed as Not inventory; 10 minutes later the same duct came
+    back as the unknown "white padded tube: a thick white insulated tube running through the module".
+  - *Source.* `GET /structure-memory` (AC-API-46), read through `InventoryClient.list_structure_memory()` and cached
+    by the reconciler for `structure_memory_refresh_s` (`PERCEPTION_STRUCTURE_MEMORY_REFRESH_S`, default 60, 0 =
+    memory off). A failing call keeps the previous copy (warning); a client without the method or an API without the
+    endpoint (404) means no memory. Chosen over an ingest-candidates extension: the memory is small, read rarely, and
+    matched on text as well as embeddings.
+  - *Who is checked.* UNKNOWN instances only (a catalogued item is never suppressed), in capturable windows, after the
+    AC-PER-59 gate.
+  - *Place.* The observation and the memory are in the *same module* when both lie in a module and the modules are
+    equal; they are *nearby* when either is outside a module (segment level) and one location lies inside the other
+    (a USOS sighting and a LAB1 memory). Anything else never matches.
+  - *Evidence* (any one suffices):
+    - *embedding*: the instance has an exemplar-quality embedding (AC-PER-22, crop clear of people, AC-PER-49) and its
+      cosine with the memory's embedding is ≥ `assign_p` (the auto band); same module or nearby;
+    - *label*: the same `label_key` (AC-PER-31); same module or nearby;
+    - *text* (same place: same module, or the same location outside modules): the same head-noun family (`labels.head_family`: tube / hose / duct / pipe /
+      conduit; cover / covering / blanket / wrap / shroud / padding; box / case / container / enclosure / housing;
+      device / unit / display / screen / monitor / console; strap / bungee; else the head noun itself) and a token
+      overlap ≥ `structure_memory_token_floor` (`PERCEPTION_STRUCTURE_MEMORY_TOKEN_FLOOR`, default 0.6, ≤ 1; calibrated on the real strings:
+      the tube against the hose memory is 4/5 = 0.8, "white covering" against the dismissed "hatch cover" is 2/4 = 0.5).
+      Tokens (`labels.content_tokens`) are the words of the label plus description (the memory: its label plus
+      `description_tokens`), lower case, family words folded to their family, colour aliases folded (gray → grey),
+      minus stop words and placement words (module, station, wall, running, through, attached, mounted, side, ...);
+      overlap = |A ∩ B| / min(|A|, |B|), and both sides need at least 2 tokens.
+  - *Effect.* A suppressed instance is dropped like structure (AC-PER-50): no entity, sighting, review or exemplar;
+    omni events naming it are dropped as events for an unobserved object. `window.structure_memory_suppressed`
+    counts them (inventory-api ignores unknown window fields), `ReplayStats.structure_memory_suppressed` sums them,
+    and one INFO log line per suppression names the memory id and the evidence kind.
+- AC-PER-65 **Empty spacesuits are objects** (UI6-04; amends AC-PER-35, AC-PER-49, AC-PER-55).
+  - *Found live:* 3 of 18 person tracks were stowed EMUs: "white suit, blue gloves" (activity "working in the
+    background module"), "spacesuit with black and grey components" ("standing in the hatchway") and "astronaut in
+    white spacesuit" ("floating near the hatch"). The same suits were also unknowns "spacesuit" ("white extravehicular
+    activity suit"). Gemma gives a suit an activity, so "no activity" cannot be the test.
+  - *Empty suit* (`people.is_empty_suit(appearance, activity, is_speaking)`): the appearance names a spacesuit (the
+    AC-PER-46 `spacesuit` garment: spacesuit, space suit, EVA suit, EMU, now also "extravehicular (activity) suit" and
+    Orlan), or a suit coloured only white ("white suit"; ISS crew do not wear white flight suits, EMUs are white), and
+    nothing that only a person has: no descriptor other than suit, spacesuit, gloves, helmet, visor, shoes and insignia
+    (so no hair, shirt, trousers, shorts, glasses, headset, watch, ...), no face/body word (face, skin, smiling, eyes,
+    beard, man, woman, he, she, his, her), `is_speaking` not true, and an activity without a clearly human verb
+    (talking, speaking, smiling, laughing, eating, drinking, typing, writing, waving, gesturing, explaining, pointing,
+    holding, using, operating, carrying, opening, closing, adjusting). "suit" alone in another colour ("blue suit, orange
+    gloves", "person in grey suit", "blue flight suit with American flag patch") stays a person.
+    An entry that is the `actor_ref` of an omni event on anything but the person class acts, so it is a person
+    whatever it wears ("spacesuit, dark visor" using a laptop, AC-PER-44; "white suit" whose arm moves through a
+    hatch, 08:02:00 and 08:17:00). Its own "moved" (object "person": "the person in the spacesuit shifts position",
+    07:56:30) is no evidence.
+  - *Handling.* Such a `people[]` entry, and a person object (label maps to the person class) whose description is
+    an empty suit, is turned into an omni object before AC-PER-49/50 and consolidation: label `spacesuit`, description
+    = the appearance (sanitised), confidence 0.5, the person object's box and frame when it had one (else none). It is
+    then an ordinary object: a catalog spacesuit/EMU class when the catalog maps `spacesuit` to one, else an UNKNOWN
+    with `label_key` "spacesuit", which consolidates with omni's own "spacesuit" listings of the window and later
+    sightings attach to by label and place (AC-PER-29/31), so it is raised once per place. It is no person region,
+    no person sighting, and does not count as "omni reported people" for AC-PER-55.
+    `window.suits_as_objects` counts the conversions.
+- AC-PER-66 **Same-class re-identification needs consistent colour and a known module** (UI6-02; amends AC-PER-8,
+  AC-PER-22/29, AC-PER-45, AC-PER-60).
+  - *Found live:* m-bag 7a4c756d collected "white m-bag", "white storage bag", "large grey fabric bag", "blue storage
+    bag attached to wall" and "white storage bag attached to a rack", all at USOS; 776b4a82 went white → blue → green.
+    Person 1e8251b6 ("blue shirt, dark hair") took 15 sightings in JPM1, NOD1, ZVEZDA, NAUKA, CUP1 and USOS, five
+    modules between 07:49 and 07:57 (tank top, tan pants, shorts, long and short hair). Laptop 8b4c0819, created in a
+    private LAB1 window, absorbed public USOS laptops ("a small silver laptop", "a small screen mounted on the wall").
+    The AC-PER-60 rule never fired: one side was always segment-level.
+  - *Object colour clash* (`people.object_colours`, `people.object_colour_conflict`). The colours of an object are the
+    colour words of its label's noun phrase, else of its description's first noun phrase (`labels.noun_phrase`, with
+    "another"/"second"/"other" dropped as determiners), with the AC-PER-35 aliases (gray → grey, navy → blue, ...) and
+    families ("dark" alone = the dark family, a specific colour wins over a modifier). Two objects clash when both
+    have colours and the sets are disjoint ("white storage bag" vs "large grey fabric bag" vs "blue storage bag").
+    A non-person instance is never matched to an entity whose description, or any of its latest
+    `OBJECT_RECENT_DESCRIPTIONS` (5) recorded sighting descriptions (in memory, this process only, as AC-PER-45's
+    person memory), clashes with its description: a hard gate in the exemplar path (descriptions from the AC-PER-30
+    class listing) and in the exemplar-less and revisit paths. Private windows carry no descriptions (no check).
+  - *Module unknown counts as another module* (amends AC-PER-60). For a generic class, an embedded candidate needs the
+    auto band unless the candidate's last place and the observation lie in the **same known module**; a segment-level
+    place on either side is "module unknown". Moved events still need two known modules (AC-PER-60, AC-PER-70).
+  - *Person module spread* (amends AC-PER-45/47). The reconciler remembers the modules of each person track's
+    recorded sightings (in memory; seeded with the candidate's `last_location`/`last_seen_at`). A person sighting in a
+    module M may attach to a track that already has `person_spread_modules` (`PERCEPTION_PERSON_SPREAD_MODULES`,
+    default 2) distinct modules other than M within `person_spread_s` (`PERCEPTION_PERSON_SPREAD_S`, default 600, 0 =
+    off) before it only with strong evidence: similarity (the overlap coefficient) ≥ `person_spread_floor`
+    (`PERCEPTION_PERSON_SPREAD_FLOOR`, default 0.8, ≤ 1) and a specific shared trait (`appearance_evidence`). (A Dice
+    condition was tried first: it split the eval's single crew member, whose first description is the minimal "crew
+    member, blue shirt", at every "blue shirt, khaki pants" variant; on the live chain the overlap already separates
+    "wearing a blue shirt and shorts" against "blue shirt, dark hair", 0.67.) Segment-
+    level sightings add no module. Applies to every tier (same place cannot trigger it: M is then not new).
+  - *Hair length and legwear* (amends AC-PER-46). "long hair" and "short hair" (also "long dark hair",
+    "short-haired") clash, like two colours of one garment; so do two different legwear garments (trousers vs shorts
+    vs a skirt: live "blue t-shirt, tan pants" at 07:53 and "wearing a blue shirt and shorts" at 07:55 on one track).
+  - *Private-only entities* (amends AC-PER-22/60). An entity whose image is withheld because every sighting is private
+    (`snapshot_withheld_reason = "private_window"`, AC-API-44) has no appearance anyone can check. A sighting of a
+    capturable window attaches to it only when both lie in the same known module and, in the exemplar path, with p ≥
+    `assign_p`.
+- AC-PER-71 **Private windows attach by class and place** (UI6-10; amends AC-PER-22, AC-PER-29, AC-PER-43).
+  - *Found live:* NOD2 holds 12 imageless items: 5 m-bags and a CTB from the 07:50 sleep-cue window, then 5 new CTBs
+    and a laptop from the 08:05 window. An embedded private sighting was compared by appearance, judged different from
+    every same-class entity (the AC-PER-22 adoption skips entities judged by appearance) and created a new one.
+  - *Rule.* In a `no_capture` window no object is embedded and none gets an exemplar (a private crop's embedding has no
+    image behind it that anyone could check). Each instance (catalogued, non-fungible; unknowns and people are skipped
+    in private windows already) attaches to a live entity of its class last seen in the same module (any gap), or at
+    the same location outside modules: own zone first, then the most recently seen; one entity per window; no decision
+    model, no review. Only when no such entity is left is a new one created. A window with more instances of a class
+    than the place holds entities creates only the difference, so a repeated private view adds nothing.
+  - *Accepted.* Two different bags of one class in one private module may swap identities; a private module's count
+    of a class only grows when a window sees more of them than were seen there before. The m-bag/CTB label confusion
+    between passes (another class) is not merged.
+- AC-PER-67 **Second-pass locations: root cause and the revisit location** (UI6-03; amends AC-PER-41, AC-PER-61).
+  - *Measured* (live run 07:48:35 to 08:21:30, 63 windows, the tour video looping every 896.8 s; read-only DB and raw
+    replies, saved as tests/fixtures/gemma4_tour_two_pass_2026-10-18.json; `make eval-real`): `window_location_acc`
+    pass 1 **11/15 = 0.733**, pass 2 **6/15 = 0.400**, pass 3 (6 windows so far) 0/6 with 1 wrong (a privacy-hold
+    window whose reply is not stored). 0 wrong in passes 1 and 2.
+  - *Root cause: not a code regression.* The current code replays every stored window to exactly its stored
+    location. Neither AC-PER-61 (it fired identically in both passes, and where pass 2 lost a module there was never
+    an anchor to carry) nor AC-API-45 (it only holds `entity.last_location`; the eval and the "72 %" use
+    `sighting.location_id`) explains the drop. Module names come almost only from the hint, which Gemma reads off the
+    on-screen title caption (each title is up about 16 s). With a 30 s stride and an 896.8 s loop, 30 windows take
+    900 s, so each pass samples frames 3.2 s later: pass 1 caught the Columbus and Kibo titles in their last seconds
+    and pass 2 missed them ("Columbus Laboratory Module" became "To COL"; the Kibo title became hint null), and the
+    Kibo carry lost its anchor. The "49 % → 72 % segment-only" comparison also mixes in pass 1's uncaptioned tail
+    (about 356 s after the Poisk title, segment-only in every pass); like for like it is 41 % → 56 % on the captioned
+    stretch. Cadence was the same in both passes. Rejected after simulation: no caption end (gains only the two "NOD 3"
+    windows whose frames show Node 1: wrong), a 90 s carry (carries Nauka into Poisk: wrong module).
+  - *Revisit location* (`locations.RevisitLocator`). A roaming camera keeps a gallery of the frame embeddings
+    (the AC-PER-6 embedder on every hires frame) of its capturable windows that resolved a module **themselves**
+    (hint or summary; not carried, not private), at most `REVISIT_GALLERY_MAX` (400) windows, oldest dropped. A
+    capturable window that, after the window policy and the carry, is still outside a module and is not `elsewhere`
+    gets the module of the gallery whose best frame-pair cosine is ≥ `revisit_location_sim` (`PERCEPTION_REVISIT_LOCATION_SIM`, default
+    0.94, 0 = off, ≤ 1) and beats the best frame pair of every other module by ≥ `revisit_location_margin`
+    (`PERCEPTION_REVISIT_LOCATION_MARGIN`, default 0.04, ≤ 1). The module must lie inside a segment the hint named,
+    and the window must mention no other module (`WindowScope.mentions`). An AC-PER-61 caption scene change ends a
+    carry (time-based inference) but does not block this visual evidence: "To COL" read at the Columbus hatch
+    (08:19:00, truth COL1) is not even a mention; the "NOD 3" window's best match is 0.850, far below the threshold.
+    Only strictly earlier windows count. Such a window is treated like a carried one: `window.location = {"location_id",
+    "source": "revisit", "revisit_sim", "revisit_from"}`, sighting confidence capped at `module_carry_confidence`, no
+    AC-PER-60 moved events, and it never becomes a carry anchor or a gallery entry.
+  - *Calibration* (DINOv2-base CLS on the 93 stored frames of the run, tests/fixtures/
+    gemma4_tour_frame_embeddings_2026-10-18.json; only 1 or 2 frames per window are stored, live sees all 6): the
+    highest wrong best-match is 0.872 (all wrong ones go to COL1), the lowest correct gain 0.913; the second-best
+    module was always 0.67 to 0.79, so the margin never decided. At 0.94: pass 2 6/15 → 7/15 (08:04:30 → JPM1, 0.941),
+    pass 3 0/6 → 1/6 (08:19:00 → COL1, 0.943), pass 1 unchanged, 0 wrong, nothing assigned in uncaptioned or unseeded
+    (Poisk, Quest) stretches. 0.92 gains the same here; 0.94 is chosen because six live frames raise wrong matches too.
+  - *Accepted.* The gain is small (one window per pass); the root cause is sampling, which a shorter stride or more
+    frames per window would address (a deployment choice, not changed here). Report segment-only sightings of the
+    uncaptioned stretch as expected.
+- AC-PER-68 **Catalog labels that contradict their description** (UI6-06; amends AC-PER-7, AC-PER-8).
+  - *Found live:* drill 1bfe7717 (raw label "drill") was described as "a black handheld vacuum cleaner being used by a
+    person", and chat answered "who used the drill?" from it. Ball 78f65158: the raw label "orange tool" fuzzy-mapped
+    (0.667) to the operator-created class "Orange ball"; its description was "orange handled tool attached to a rail".
+  - *Kind families* (`labels.kind_family`): curated head nouns grouped by what kind of thing they name: tool (tool,
+    drill, driver, screwdriver, wrench, spanner, pliers, hammer, ratchet, PGT), vacuum (vacuum, vacuum cleaner,
+    hoover), sphere (ball, sphere, globe, orb), bag (bag, pouch, sack, CTB, tote), camera (camera, camcorder, lens,
+    DSLR), computer (laptop, computer, notebook, ThinkPad, tablet, iPad), light (flashlight, torch, lamp, headlamp),
+    tape, cable (cable, cord, wire), cutter (scissors, shears), meter (multimeter, meter, voltmeter), headset (headset,
+    headphones, earphones), robot (robot, Astrobee), food (food, meal), drink (drink, beverage, coffee, juice). The
+    family of a text is that of the last two words of its noun phrase, else of its head noun; a class's families are
+    those of its class name, display name and synonyms.
+  - *Mapping guard.* A fuzzy or embedding label match (never exact or synonym) is rejected (UNKNOWN) when the label's
+    family and the class's families are both known and disjoint: "orange tool" is not an "Orange ball".
+  - *Description check* (catalogued, non-person, non-fungible instances of a capturable window). The description's
+    first noun phrase (determiners dropped; cut before a preposition or participle, also "being", "used", "that",
+    "which"):
+    - names **another catalog class** by exact name or synonym (its whole phrase, its last two words or its head
+      noun; never the person class or a fungible class) → the instance is **remapped** to that class (label method
+      `description`), as if omni had said it;
+    - else its kind family is known, the class's families are known and they are disjoint ("vacuum cleaner" for a
+      drill) → the label is kept but **doubted**: the sighting confidence is capped at `label_conflict_confidence`
+      (`PERCEPTION_LABEL_CONFLICT_CONFIDENCE`, default 0.4, ≤ 1) and a `low_confidence` review is raised ("label and
+      description disagree: the description names a vacuum cleaner", the usual image rules), so no confident
+      catalog assignment is made from it. Shared families ("orange handled tool" for a wrench, "power tool" for a
+      drill) and unknown head nouns are no conflict.
+- AC-PER-69 **Worn items are not unknowns** (UI6-07; amends AC-PER-50).
+  - *Found live:* "wristwatch" ("a dark watch with a light face", "black watch with yellow accents") and "yellow
+    helmet" ("yellow protective helmet", on a cosmonaut; person_overlap true) were raised as unknowns. None of the
+    live replies says "worn" or "wearing" and none has `held_by`, so phrasing alone cannot catch them.
+  - *Rule* (`labels.is_worn_item(label, description, people_present)`), for objects that map to UNKNOWN only (a
+    catalog match such as the headset class is kept): the label's head noun is a watch (watch, wristwatch,
+    smartwatch: always personal); or it is a wearable (helmet, glasses, goggles, gloves, cap, hat, harness, earpiece,
+    headlamp, lanyard, badge, bracelet, ring, necklace, earring, visor) and the window reports people (`people[]` or a
+    person/body object) or the object has `held_by`; or the label or description says it is worn ("worn", "wearing",
+    "wears", "on his/her/their/the person's/the crew member's wrist/head/face/arm/neck/ear/waist", unnegated).
+  - *Effect:* dropped like structure before consolidation (no entity, sighting, review, query); `window.worn_filtered`
+    counts them.
+- AC-PER-70 **No move inside one place, no move without a destination** (UI6-08; amends AC-PER-10, AC-PER-51,
+  AC-PER-60, AC-PER-63; inventory-api AC-API-47).
+  - *Found live:* the only two "moved" events were laptop 8b4c0819 "moved from LAB1" and m-bag 7a4c756d "moved from
+    USOS", both with `to_location` null: an omni `moved` event whose hint did not resolve and whose sighting was in the
+    same area as `from_location` kept a null destination (AC-PER-51), which the dashboard and agent render as a move
+    to the item's place (USOS).
+  - *Rule:* an object `moved` event (omni or speech) is not emitted when its `to_location` is null after the AC-PER-51
+    fill, or when `to_location` is `from_location` or contains it (LAB1 → USOS, LAB1S2 → LAB1; review round: a
+    refinement such as USOS → LAB1 is kept). Logged. AC-PER-60 moves already need two different known modules. inventory-api skips such events too.
+
+### Review round (AC-PER-64..71): fixes and residual risks accepted
+
+Fixes (each reproduced first, tests/test_ac_per_64_71_review_round.py):
+- *P1 remap through a verb.* "crew member wearing a headset" remapped a laptop to the headset class. A description's
+  noun phrase now also ends at a verb form (a word ending in "-ing", except nouns such as tubing, covering, housing).
+- *P1 kind guard vs the seed.* "coffee", "drink", "meal", "food" no longer mapped to the drink/food classes (their
+  names end in "pouch"/"package"). A class's families now include the family of every word of its names; a test maps
+  every seed class name and synonym.
+- *P1 worn phrasing.* "a canister beside a crew member wearing a blue shirt", "a sticker on the face of the rack" and
+  "a camera mounted on the arm" were dropped as worn. Only "worn" / "being worn" counts, and a body place needs a
+  possessive ("on her wrist").
+- *P1 suit then worn.* "astronaut wearing white spacesuit" was converted and then dropped as worn: converted suits are
+  exempt from AC-PER-69.
+- *P2 structure memory scope.* The text path holds for the same module **or the same location outside modules** (the
+  live case is USOS/USOS; the earlier "same module only" wording contradicted it). Label-key evidence beyond the same
+  place (nearby) needs a specific label: at least two words and not generic ("strap" dismissed at USOS does not
+  suppress a Destiny "strap").
+- *P2 colour gate without a listing row.* A candidate outside the 50-row class listing is checked against its own row
+  and the in-memory sighting texts.
+- *P2 colour false clashes.* The colour phrase also ends at "displaying", "containing", "featuring", "with", ... and at
+  "-ing" words; white and grey (silver) are compatible (station lighting). Blue/green/white still clash.
+- *P2 refinements.* AC-PER-70 / AC-API-47 drop a move only when the destination is the origin or contains it
+  (coarsening: LAB1 → USOS). A refinement (USOS → LAB1, also by speech) is kept.
+- *P2 privacy of converted person objects.* A person object turned into "spacesuit" loses its box, so no crop or
+  exemplar of what may be a suited crew member is ever made.
+- *P3:* memory embeddings of another dimension are ignored (no crash); `is_speaking` "true"/1/"yes" counts as speaking;
+  carried or revisit-placed sightings do not count toward a person's module spread.
+
+Residual risks accepted:
+- *Continuity cost.* The spread rule and the hair/legwear clashes split some real tracks (fixture 21 → 26 tracks, 3 → 1
+  clashing pairs). Without faces this is the price of purity.
+- *Private-only check* needs the AC-PER-30 class listing (50 most recent rows); an older private-only candidate is
+  treated as public.
+- *Cost.* The colour gate reads the class listing once per class per window (cached); the revisit location embeds every
+  frame of a roaming window (6 DINOv2 passes, ≈ 30 ms each on the T4; batching is a follow-up). The in-memory text
+  and module histories hold one bounded deque per entity seen by this process.
+- *Memory reactivation.* A not_inventory memory is active while its entity is dismissed (inventory-api); an entity
+  restored and then dismissed again for another reason reactivates it (see inventory-api review round).

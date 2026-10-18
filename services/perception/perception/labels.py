@@ -268,13 +268,20 @@ class CatalogMapper:
             score = fuzzy_similarity(key, name)
             if score > best_score:
                 best_score, best_id = score, cid
-        if best_id is not None and best_score >= self.floor:
+        if best_id is not None and best_score >= self.floor and not self._kind_clash(key, best_id):
             # A fuzzy hit is never "exact": cap just below 1.0 (e.g. "flash light" vs "flashlight").
             return self._match(best_id, min(best_score, 0.999), "fuzzy")
         emb_score, emb_id = self._embedding_match(raw)
-        if emb_id is not None and emb_score >= self.floor:
+        if emb_id is not None and emb_score >= self.floor and not self._kind_clash(key, emb_id):
             return self._match(emb_id, emb_score, "embedding")
         return LabelMatch(catalog_id=UNKNOWN, score=float(max(best_score, emb_score, 0.0)), method="none")
+
+    def _kind_clash(self, label: str, catalog_id: str) -> bool:
+        """AC-PER-68 mapping guard: the label names another kind of thing than the class ("orange tool" vs "orange
+        ball"): both families known and disjoint."""
+        family = kind_family(label)
+        families = class_families(self._by_id.get(catalog_id))
+        return family is not None and bool(families) and family not in families
 
     def _embedding_match(self, text: str) -> tuple[float, str | None]:
         if self.text_embedder is None:
@@ -294,3 +301,149 @@ def _unit(vector: Any) -> np.ndarray:
     v = np.asarray(vector, dtype=np.float64).reshape(-1)
     n = float(np.linalg.norm(v))
     return v / n if n > 0 else v
+
+
+# ------------------------------------------------------------------------------------------------ AC-PER-64
+# Head-noun families for structure memory text matching: an operator who dismissed an "insulated hose" also dismissed
+# the "white padded tube" that is the same duct.
+HEAD_FAMILIES: dict[str, str] = {
+    **{w: "conduit" for w in ("tube", "tubes", "tubing", "hose", "hoses", "hosing", "duct", "ducts", "ducting",
+                              "pipe", "pipes", "piping", "conduit", "conduits")},
+    **{w: "cover" for w in ("cover", "covers", "covering", "coverings", "blanket", "blankets", "wrap", "wrapping",
+                            "shroud", "shrouds", "padding")},
+    **{w: "container" for w in ("box", "boxes", "case", "cases", "container", "containers", "enclosure",
+                                "enclosures", "housing", "housings")},
+    **{w: "device" for w in ("device", "devices", "unit", "units", "display", "displays", "screen", "screens",
+                             "monitor", "monitors", "console", "consoles")},
+    **{w: "strap" for w in ("strap", "straps", "bungee", "bungees")},
+}
+_TOKEN_COLOURS = {"gray": "grey", "silver": "grey"}
+# words that say nothing about what the thing is or looks like (function words, size, placement in the frame)
+TOKEN_STOP_WORDS = frozenset(
+    ["a", "an", "the", "and", "or", "of", "with", "without", "for", "from", "to", "into", "onto", "on", "in", "at", "by", "over", "under", "near", "along", "through", "behind", "inside", "outside", "above", "below", "beneath", "between", "around", "against", "across", "its", "it", "this", "that", "these", "those", "another", "other", "some", "any", "one", "two", "is", "are", "was", "were", "be", "been", "being", "has", "have", "had", "which", "who", "there", "here", "also", "very", "partially", "seen", "visible", "appears", "looks", "shown", "showing", "large", "small", "big", "tiny", "little", "module", "modules", "station", "node", "wall", "walls", "running", "runs", "run", "attached", "mounted", "fixed", "hanging", "floating", "side", "left", "right", "top", "bottom", "upper", "lower", "middle", "centre", "center", "foreground", "background", "frame", "view", "area", "part", "corner", "edge", "front", "back", "rear"]
+)
+
+
+def head_family(text: str) -> str | None:
+    """AC-PER-64: the family of a label's head noun (``noun_phrase``'s last word), else the head noun itself."""
+    words = noun_phrase(text).split()
+    if not words:
+        return None
+    return HEAD_FAMILIES.get(words[-1], words[-1])
+
+
+def content_tokens(*texts: str | None) -> set[str]:
+    """AC-PER-64: lower-case words of the texts, family words folded to their family, colour aliases folded, stop and
+    placement words removed."""
+    out: set[str] = set()
+    for text in texts:
+        for word in re.findall(r"[a-z]+", str(text or "").lower()):
+            if word in TOKEN_STOP_WORDS or len(word) < 2:
+                continue
+            out.add(HEAD_FAMILIES.get(word, _TOKEN_COLOURS.get(word, word)))
+    return out
+
+
+def token_overlap(a: set[str], b: set[str]) -> float:
+    """|A ∩ B| / min(|A|, |B|); 0 unless both sides have at least 2 tokens."""
+    if len(a) < 2 or len(b) < 2:
+        return 0.0
+    return len(a & b) / min(len(a), len(b))
+
+
+
+# ------------------------------------------------------------------------------------------------ AC-PER-68
+_KINDS: dict[str, tuple[str, ...]] = {
+    "tool": ("tool", "tools", "drill", "drills", "driver", "screwdriver", "wrench", "wrenches", "spanner", "pliers",
+             "hammer", "ratchet", "pgt"),
+    "vacuum": ("vacuum", "vacuum cleaner", "vacuums", "hoover"),
+    "sphere": ("ball", "balls", "sphere", "spheres", "globe", "orb"),
+    "bag": ("bag", "bags", "pouch", "pouches", "sack", "ctb", "tote"),
+    "camera": ("camera", "cameras", "camcorder", "lens", "dslr"),
+    "computer": ("laptop", "laptops", "computer", "notebook", "thinkpad", "tablet", "ipad"),
+    "light": ("flashlight", "torch", "lamp", "headlamp"),
+    "tape": ("tape",),
+    "cable": ("cable", "cables", "cord", "cords", "wire"),
+    "cutter": ("scissors", "shears"),
+    "meter": ("multimeter", "meter", "voltmeter"),
+    "headset": ("headset", "headphones", "earphones"),
+    "robot": ("robot", "astrobee"),
+    "food": ("food", "meal"),
+    "drink": ("drink", "beverage", "coffee", "juice"),
+}
+KIND_FAMILIES: dict[str, str] = {word: family for family, words in _KINDS.items() for word in words}
+_ING_NOUNS = frozenset({"ring", "string", "tubing", "piping", "ducting", "wiring", "cabling", "clothing",
+                        "padding", "covering", "coverings", "wrapping", "bedding", "housing", "fitting", "fittings",
+                        "railing", "ceiling", "lighting", "earring", "earrings", "awning", "building"})
+# a description's noun phrase also ends at these (participles and relative pronouns)
+_DESCRIPTION_END = _PHRASE_END | {"being", "used", "that", "which", "who", "is", "are", "next", "hanging", "floating",
+                                  "lying", "strapped", "stowed", "secured"}
+
+
+def _noun_words(text: str, ends: frozenset[str] = _PHRASE_END) -> list[str]:
+    words = normalise_label(text).split()
+    while len(words) > 1 and words[0] in _DETERMINERS | {"another", "second", "other", "pair"}:
+        words = words[1:]
+    if words and words[0] == "of":
+        words = words[1:]
+    description = ends is _DESCRIPTION_END
+    for i, w in enumerate(words):
+        # review round: a description's phrase also ends at a verb form ("wearing", "containing", "typing")
+        if i > 0 and (w in ends or (description and w.endswith("ing") and len(w) > 4 and w not in _ING_NOUNS)):
+            return words[:i]
+    return words
+
+
+def kind_family(text: str | None, *, description: bool = False) -> str | None:
+    """AC-PER-68: the kind family of a label (or, ``description``, a description's first noun phrase): the last two
+    words, else the head noun, looked up in KIND_FAMILIES; None when unknown."""
+    words = _noun_words(str(text or ""), _DESCRIPTION_END if description else _PHRASE_END)
+    if not words:
+        return None
+    return KIND_FAMILIES.get(" ".join(words[-2:])) or KIND_FAMILIES.get(words[-1])
+
+
+def class_families(item: dict[str, Any] | None) -> set[str]:
+    """AC-PER-68: the kind families of a catalog class's class name, display name and synonyms."""
+    if not item:
+        return set()
+    names = [item.get("class_name"), item.get("display_name"), *(item.get("synonyms") or [])]
+    out = {f for f in (kind_family(str(n)) for n in names if n) if f}
+    # review round: every word counts ("drink pouch" is a drink and a bag; "food package" is food)
+    out |= {KIND_FAMILIES[w] for n in names if n for w in normalise_label(str(n)).split() if w in KIND_FAMILIES}
+    return out
+
+
+def description_phrases(description: str | None) -> list[str]:
+    """AC-PER-68: the description's first noun phrase, its last two words and its head noun (normalised)."""
+    words = _noun_words(str(description or ""), _DESCRIPTION_END)
+    if not words:
+        return []
+    return list(dict.fromkeys([" ".join(words), " ".join(words[-2:]), words[-1]]))
+
+
+# ------------------------------------------------------------------------------------------------ AC-PER-69
+WATCHES = frozenset({"watch", "watches", "wristwatch", "wristwatches", "smartwatch"})
+WEARABLES = frozenset({"helmet", "helmets", "glasses", "goggles", "gloves", "glove", "cap", "hat", "harness",
+                       "earpiece", "headlamp", "lanyard", "badge", "bracelet", "ring", "necklace", "earring",
+                       "earrings", "visor"})
+# review round: "worn" (the object is worn), never "wearing" (someone near it wears something); a body place needs a
+# possessive ("on her wrist", not "on the face of the rack" / "mounted on the arm")
+_WORN = re.compile(
+    r"\b(?:being\s+)?worn\b"
+    r"|\bon\s+(?:his|her|their|someone's|the\s+person's|the\s+crew\s+member's|the\s+astronaut's|a\s+person's)\s+"
+    r"(?:left\s+|right\s+)?(?:wrist|head|face|arm|neck|ear|ears|waist)\b")
+
+
+def is_worn_item(label: str | None, description: str | None = None, people_present: bool = False,
+                 held: bool = False) -> bool:
+    """AC-PER-69: an object worn by a crew member: a watch (always personal); a wearable when people are reported or
+    it is held; or a label/description that says it is worn ("worn", "wearing", "on his wrist"), unnegated."""
+    words = _phrase_words(str(label or ""))
+    head = words[-1] if words else ""
+    if head in WATCHES:
+        return True
+    if head in WEARABLES and (people_present or held):
+        return True
+    text = " ".join(f"{label or ''} {description or ''}".lower().split())
+    return _unnegated_match(_WORN, text)

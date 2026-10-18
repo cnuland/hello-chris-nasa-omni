@@ -1,0 +1,5213 @@
+{
+ "_about": "Live Gemma 4 run 2026-10-18 07:48:35-08:21:30 UTC, cam-handheld replaying tour-medium.mp4 (896.8 s) in a loop at PERCEPTION_STRIDE_S=30 (5 s windows), 2 full passes + start of pass 3. Raw replies read-only from RustFS via the media proxy; stored locations from the CNPG replica. video_offset_s follows nasa_eval.real.score_run alignment (first window = video t 0, modulo 896.8 s); the phase drifts +3.2 s per pass (30 s stride x 30 windows = 900 s). caption_module = srt_truth.module_timeline truth at video_t_mid. Private windows: no text (as stored). replay_current = LocationResolver.window_policy + ModuleCarry(45 s) + caption_scene_change on the current code (matches stored_location for every capturable window).",
+ "video_duration_s": 896.8,
+ "stride_s": 30,
+ "module_carry_s": 45,
+ "windows": [
+  {
+   "t_start": "2026-10-18T07:48:35.797113+00:00",
+   "t_end": "2026-10-18T07:48:35.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 0.0,
+   "video_t_mid": 0.0,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A person in a blue flight suit looks toward the camera in a cluttered space station interior.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "blue flight suit with American flag patch",
+     "activity": "looking at camera",
+     "is_speaking": true
+    }
+   ],
+   "objects": [],
+   "events": [],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 1,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T07:49:00.797113+00:00",
+   "t_end": "2026-10-18T07:49:05.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 25.0,
+   "video_t_mid": 27.5,
+   "caption_module": "COL1",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": "Columbus Laboratory Module",
+   "scene_summary": "A person in a black shirt stands near a hatch in the Columbus Laboratory Module.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "black t-shirt, grey pants",
+     "activity": "standing near a hatch",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "hatch",
+     "description": "large circular hatch leading to another module",
+     "confidence": 0.95,
+     "bbox": [
+      188,
+      273,
+      868,
+      745
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "blue cloth",
+     "description": "blue fabric piece tucked into a rack",
+     "confidence": 0.9,
+     "bbox": [
+      618,
+      425,
+      733,
+      495
+     ],
+     "frame_index": 3
+    },
+    {
+     "label": "orange tool",
+     "description": "orange handled tool attached to a rail",
+     "confidence": 0.85,
+     "bbox": [
+      618,
+      688,
+      785,
+      725
+     ],
+     "frame_index": 5
+    }
+   ],
+   "events": [],
+   "stored_location": "COL1",
+   "stored_locations": [
+    "COL1"
+   ],
+   "sighting_count": 2,
+   "replay_current": {
+    "location": "COL1",
+    "source": "hint",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T07:49:30.797113+00:00",
+   "t_end": "2026-10-18T07:49:35.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 55.0,
+   "video_t_mid": 57.5,
+   "caption_module": "JPM1",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": "Japanese Experiment Module \"Kibo\"",
+   "scene_summary": "A person in a blue shirt floats in the Japanese Experiment Module \"Kibo\" while looking at equipment.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "blue shirt, dark hair",
+     "activity": "floating and looking at equipment",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "orange sphere",
+     "description": "a small orange spherical object",
+     "confidence": 0.9,
+     "bbox": [
+      411,
+      493,
+      474,
+      531
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "laptop",
+     "description": "a black laptop mounted on a rack",
+     "confidence": 0.85,
+     "bbox": [
+      368,
+      548,
+      453,
+      603
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "tablet",
+     "description": "a small screen device attached to a rail",
+     "confidence": 0.8,
+     "bbox": [
+      400,
+      573,
+      453,
+      613
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [
+    {
+     "type": "moved",
+     "object_label": "person",
+     "actor_ref": "P1",
+     "confidence": 0.9,
+     "frame_index": 4,
+     "evidence": "The person moves into view and floats in the center of the module."
+    }
+   ],
+   "stored_location": "JPM1",
+   "stored_locations": [
+    "JPM1"
+   ],
+   "sighting_count": 4,
+   "replay_current": {
+    "location": "JPM1",
+    "source": "hint",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T07:50:00.797113+00:00",
+   "t_end": "2026-10-18T07:50:05.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 85.0,
+   "video_t_mid": 87.5,
+   "caption_module": "JPM1",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A large white wrapped cargo container floats in the center of a space station module.",
+   "people": [],
+   "objects": [
+    {
+     "label": "cargo transfer bag",
+     "description": "large white wrapped cargo container",
+     "confidence": 0.95,
+     "bbox": [
+      488,
+      454,
+      785,
+      671
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [],
+   "stored_location": "JPM1",
+   "stored_locations": [
+    "JPM1"
+   ],
+   "sighting_count": 1,
+   "replay_current": {
+    "location": "JPM1",
+    "source": "carried",
+    "carried": true,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T07:50:30.797113+00:00",
+   "t_end": "2026-10-18T07:50:35.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 115.0,
+   "video_t_mid": 117.5,
+   "caption_module": "NOD2",
+   "private": true,
+   "privacy_reason": "sleep_cue",
+   "location_hint": null,
+   "scene_summary": null,
+   "people": null,
+   "objects": null,
+   "events": null,
+   "stored_location": "NOD2",
+   "stored_locations": [
+    "NOD2"
+   ],
+   "sighting_count": 6,
+   "replay_current": null
+  },
+  {
+   "t_start": "2026-10-18T07:51:00.797113+00:00",
+   "t_end": "2026-10-18T07:51:05.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 145.0,
+   "video_t_mid": 147.5,
+   "caption_module": "LAB1",
+   "private": true,
+   "privacy_reason": "privacy_hold",
+   "location_hint": null,
+   "scene_summary": null,
+   "people": null,
+   "objects": null,
+   "events": null,
+   "stored_location": "LAB1",
+   "stored_locations": [
+    "LAB1"
+   ],
+   "sighting_count": 3,
+   "replay_current": null
+  },
+  {
+   "t_start": "2026-10-18T07:51:30.797113+00:00",
+   "t_end": "2026-10-18T07:51:35.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 175.0,
+   "video_t_mid": 177.5,
+   "caption_module": "NOD1",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": "Unity Module",
+   "scene_summary": "Two astronauts are seen floating and interacting within the Unity Module of the ISS.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "dark hair, blue shirt",
+     "activity": "floating and looking towards P2",
+     "is_speaking": false
+    },
+    {
+     "ref": "P2",
+     "appearance": "short hair, grey t-shirt, black shorts",
+     "activity": "floating and holding onto a rail",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "laptop",
+     "description": "a small black laptop mounted on a rack",
+     "confidence": 0.9,
+     "bbox": [
+      0,
+      315,
+      185,
+      438
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "cable",
+     "description": "various cables running along the walls",
+     "confidence": 0.8,
+     "bbox": [
+      100,
+      440,
+      350,
+      610
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "drink pouch",
+     "description": "a clear plastic drink pouch attached to a rail",
+     "confidence": 0.85,
+     "bbox": [
+      510,
+      160,
+      680,
+      220
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [
+    {
+     "type": "moved",
+     "object_label": "P2",
+     "actor_ref": "P2",
+     "frame_index": 4,
+     "evidence": "P2 moves slightly while holding the rail",
+     "confidence": 0.9
+    }
+   ],
+   "stored_location": "NOD1",
+   "stored_locations": [
+    "NOD1"
+   ],
+   "sighting_count": 3,
+   "replay_current": {
+    "location": "NOD1",
+    "source": "hint",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T07:52:00.797113+00:00",
+   "t_end": "2026-10-18T07:52:05.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 205.0,
+   "video_t_mid": 207.5,
+   "caption_module": "CUP1",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": "Cupola",
+   "scene_summary": "A person in blue shorts and a grey shirt maneuvers inside the Cupola module of the ISS.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "blue shorts, grey long-sleeved shirt",
+     "activity": "moving and maneuvering inside the Cupola",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "camera",
+     "description": "external camera mounted on the station",
+     "confidence": 0.9,
+     "bbox": [
+      388,
+      331,
+      588,
+      431
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "drink pouch",
+     "description": "small clear pouch containing liquid",
+     "confidence": 0.85,
+     "bbox": [
+      453,
+      331,
+      664,
+      403
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [
+    {
+     "type": "moved",
+     "object_label": "person",
+     "actor_ref": "P1",
+     "frame_index": 2,
+     "evidence": "P1 moves deeper into the Cupola module",
+     "confidence": 0.95
+    }
+   ],
+   "stored_location": "CUP1",
+   "stored_locations": [
+    "CUP1"
+   ],
+   "sighting_count": 2,
+   "replay_current": {
+    "location": "CUP1",
+    "source": "hint",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T07:52:30.797113+00:00",
+   "t_end": "2026-10-18T07:52:35.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 235.0,
+   "video_t_mid": 237.5,
+   "caption_module": "CUP1",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": "NOD 3",
+   "scene_summary": "A person in a grey shirt works with equipment while another person is visible in the background.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "grey shirt, black shorts, headset",
+     "activity": "working with equipment",
+     "is_speaking": false
+    },
+    {
+     "ref": "P2",
+     "appearance": "blue shirt, orange helmet",
+     "activity": "working in background",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "m-bag",
+     "description": "white m-bag attached to a rack",
+     "confidence": 0.9,
+     "bbox": [
+      585,
+      578,
+      714,
+      644
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "m-bag",
+     "description": "another white m-bag on the floor",
+     "confidence": 0.85,
+     "bbox": [
+      714,
+      588,
+      844,
+      644
+     ],
+     "frame_index": 3
+    },
+    {
+     "label": "m-bag",
+     "description": "white m-bag near the center",
+     "confidence": 0.8,
+     "bbox": [
+      478,
+      518,
+      553,
+      564
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "m-bag",
+     "description": "white m-bag in the background",
+     "confidence": 0.75,
+     "bbox": [
+      478,
+      431,
+      553,
+      478
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [
+    {
+     "type": "moved",
+     "object_label": "m-bag",
+     "actor_ref": "P1",
+     "frame_index": 4,
+     "evidence": "P1 moves his hands near the m-bags",
+     "confidence": 0.7
+    }
+   ],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 6,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": "caption"
+   }
+  },
+  {
+   "t_start": "2026-10-18T07:53:00.797113+00:00",
+   "t_end": "2026-10-18T07:53:05.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 265.0,
+   "video_t_mid": 267.5,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "Astronauts prepare spacesuits and equipment inside the ISS.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "blue t-shirt, tan pants",
+     "activity": "preparing equipment near spacesuits",
+     "is_speaking": false
+    },
+    {
+     "ref": "P2",
+     "appearance": "grey t-shirt, short hair",
+     "activity": "looking towards the camera while holding a drink pouch",
+     "is_speaking": false
+    },
+    {
+     "ref": "P3",
+     "appearance": "dark hair, partially visible",
+     "activity": "working in the background",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "spacesuit",
+     "description": "white extravehicular activity suit",
+     "confidence": 0.95,
+     "bbox": [
+      488,
+      414,
+      998,
+      612
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "spacesuit",
+     "description": "another white extravehicular activity suit",
+     "confidence": 0.92,
+     "bbox": [
+      500,
+      0,
+      998,
+      231
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "camera",
+     "description": "black camera mounted on a robotic arm",
+     "confidence": 0.9,
+     "bbox": [
+      382,
+      674,
+      782,
+      935
+     ],
+     "frame_index": 2
+    },
+    {
+     "label": "drink pouch",
+     "description": "blue and green drink pouch",
+     "confidence": 0.85,
+     "bbox": [
+      722,
+      688,
+      855,
+      755
+     ],
+     "frame_index": 5
+    },
+    {
+     "label": "m-bag",
+     "description": "white storage bag",
+     "confidence": 0.8,
+     "bbox": [
+      355,
+      255,
+      585,
+      375
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [
+    {
+     "type": "moved",
+     "object_label": "camera",
+     "actor_ref": null,
+     "to_location_hint": null,
+     "frame_index": 2,
+     "evidence": "The camera moves into view on the robotic arm.",
+     "confidence": 0.8
+    }
+   ],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 7,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T07:53:30.797113+00:00",
+   "t_end": "2026-10-18T07:53:35.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 295.0,
+   "video_t_mid": 297.5,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A person holds onto a blue handrail while looking into a hatch filled with white storage bags.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "black shirt, blue pants",
+     "activity": "holding a blue handrail and looking into a hatch",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "cargo transfer bag",
+     "description": "multiple white bags with blue labels packed into a hatch",
+     "confidence": 0.95,
+     "bbox": [
+      100,
+      0,
+      1000,
+      500
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "cable",
+     "description": "orange corrugated hose",
+     "confidence": 0.9,
+     "bbox": [
+      200,
+      330,
+      850,
+      530
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "ziploc bag",
+     "description": "clear plastic bag containing small items",
+     "confidence": 0.85,
+     "bbox": [
+      550,
+      510,
+      750,
+      570
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "m-bag",
+     "description": "large grey fabric bag",
+     "confidence": 0.8,
+     "bbox": [
+      520,
+      620,
+      980,
+      780
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "ziploc bag",
+     "description": "clear plastic bag with tools",
+     "confidence": 0.8,
+     "bbox": [
+      750,
+      760,
+      990,
+      980
+     ],
+     "frame_index": 5
+    }
+   ],
+   "events": [
+    {
+     "type": "moved",
+     "object_label": "hand",
+     "actor_ref": "P1",
+     "confidence": 0.9,
+     "frame_index": 2,
+     "evidence": "P1's hand moves along the blue handrail"
+    }
+   ],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 3,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T07:54:00.797113+00:00",
+   "t_end": "2026-10-18T07:54:05.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 325.0,
+   "video_t_mid": 327.5,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A view through a circular hatch shows a cluttered interior with various equipment and bags.",
+   "people": [],
+   "objects": [
+    {
+     "label": "grey equipment box",
+     "description": "a grey rectangular box mounted on the wall",
+     "confidence": 0.9,
+     "bbox": [
+      198,
+      134,
+      374,
+      251
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "grey equipment box",
+     "description": "another grey rectangular box mounted below the first one",
+     "confidence": 0.9,
+     "bbox": [
+      368,
+      144,
+      581,
+      251
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "white bag",
+     "description": "a large white bag or container in the background",
+     "confidence": 0.8,
+     "bbox": [
+      414,
+      384,
+      581,
+      534
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "orange cylinder",
+     "description": "an orange cylindrical object in the background",
+     "confidence": 0.8,
+     "bbox": [
+      514,
+      434,
+      581,
+      474
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "blue bag",
+     "description": "a blue bag hanging in the background",
+     "confidence": 0.8,
+     "bbox": [
+      214,
+      394,
+      368,
+      444
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "silver container",
+     "description": "a silver container or piece of equipment",
+     "confidence": 0.8,
+     "bbox": [
+      381,
+      344,
+      481,
+      414
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 2,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T07:54:30.797113+00:00",
+   "t_end": "2026-10-18T07:54:35.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 355.0,
+   "video_t_mid": 357.5,
+   "caption_module": "ZARYA",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A cluttered interior of the International Space Station shows numerous cylindrical containers and bags.",
+   "people": [],
+   "objects": [
+    {
+     "label": "cargo transfer bag",
+     "description": "large white bags covering items",
+     "confidence": 0.9,
+     "bbox": [
+      373,
+      284,
+      544,
+      524
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "m-bag",
+     "description": "blue storage bag attached to wall",
+     "confidence": 0.85,
+     "bbox": [
+      0,
+      145,
+      284,
+      318
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "drink pouch",
+     "description": "small clear pouch with yellow label",
+     "confidence": 0.8,
+     "bbox": [
+      534,
+      684,
+      731,
+      731
+     ],
+     "frame_index": 5
+    },
+    {
+     "label": "ziploc bag",
+     "description": "clear plastic bag containing items",
+     "confidence": 0.85,
+     "bbox": [
+      714,
+      768,
+      998,
+      974
+     ],
+     "frame_index": 5
+    },
+    {
+     "label": "cylindrical container",
+     "description": "large silver metallic cylinder",
+     "confidence": 0.95,
+     "bbox": [
+      674,
+      331,
+      998,
+      544
+     ],
+     "frame_index": 5
+    },
+    {
+     "label": "cylindrical container",
+     "description": "another large silver metallic cylinder",
+     "confidence": 0.95,
+     "bbox": [
+      518,
+      484,
+      814,
+      631
+     ],
+     "frame_index": 5
+    },
+    {
+     "label": "cable",
+     "description": "thin black wire running across containers",
+     "confidence": 0.9,
+     "bbox": [
+      631,
+      348,
+      998,
+      631
+     ],
+     "frame_index": 5
+    }
+   ],
+   "events": [],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 2,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T07:55:00.797113+00:00",
+   "t_end": "2026-10-18T07:55:05.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 385.0,
+   "video_t_mid": 387.5,
+   "caption_module": "ZARYA",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A view through a hatch into another module of the International Space Station.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "white suit, blue gloves",
+     "activity": "working in the background module",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "laptop",
+     "description": "a black laptop screen facing away",
+     "confidence": 0.9,
+     "bbox": [
+      535,
+      783,
+      915,
+      871
+     ],
+     "frame_index": 2
+    },
+    {
+     "label": "cable",
+     "description": "various cables running along the walls",
+     "confidence": 0.8,
+     "bbox": [
+      450,
+      630,
+      850,
+      700
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 2,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T07:55:30.797113+00:00",
+   "t_end": "2026-10-18T07:55:35.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 415.0,
+   "video_t_mid": 417.5,
+   "caption_module": "ZVEZDA",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": "Zvezda Service Module",
+   "scene_summary": "A person is visible in the background of the Zvezda Service Module interior.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "wearing a blue shirt and shorts",
+     "activity": "standing in the background",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "laptop",
+     "description": "black laptop mounted on a rack",
+     "confidence": 0.95,
+     "bbox": [
+      211,
+      624,
+      414,
+      753
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "drink pouch",
+     "description": "red and white drink pouch attached to a rail",
+     "confidence": 0.9,
+     "bbox": [
+      198,
+      38,
+      468,
+      91
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "m-bag",
+     "description": "blue m-bag attached to a rack",
+     "confidence": 0.85,
+     "bbox": [
+      704,
+      248,
+      814,
+      288
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "trash bag",
+     "description": "blue trash bag hanging from a rail",
+     "confidence": 0.8,
+     "bbox": [
+      714,
+      473,
+      854,
+      518
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "food package",
+     "description": "white food package on a shelf",
+     "confidence": 0.75,
+     "bbox": [
+      584,
+      714,
+      744,
+      763
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [
+    {
+     "type": "moved",
+     "object_label": "person",
+     "actor_ref": "P1",
+     "confidence": 0.9,
+     "frame_index": 3,
+     "evidence": "P1 moves slightly towards the center of the frame"
+    }
+   ],
+   "stored_location": "ZVEZDA",
+   "stored_locations": [
+    "ZVEZDA"
+   ],
+   "sighting_count": 3,
+   "replay_current": {
+    "location": "ZVEZDA",
+    "source": "hint",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T07:56:00.797113+00:00",
+   "t_end": "2026-10-18T07:56:05.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 445.0,
+   "video_t_mid": 447.5,
+   "caption_module": "ZVEZDA",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A person is running on a treadmill while holding a large grey device.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "blue shorts, orange shirt, headset",
+     "activity": "running on a treadmill while holding a device",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "treadmill",
+     "description": "a treadmill with a red belt",
+     "confidence": 0.95,
+     "bbox": [
+      848,
+      318,
+      1000,
+      541
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "grey device",
+     "description": "a large grey rectangular device with a screen",
+     "confidence": 0.9,
+     "bbox": [
+      263,
+      318,
+      531,
+      515
+     ],
+     "frame_index": 0,
+     "held_by": "P1"
+    },
+    {
+     "label": "black bag",
+     "description": "a large black bag hanging on the wall",
+     "confidence": 0.9,
+     "bbox": [
+      208,
+      621,
+      598,
+      825
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "white pouch",
+     "description": "a white pouch attached to a rack",
+     "confidence": 0.85,
+     "bbox": [
+      548,
+      925,
+      763,
+      1000
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "drink pouch",
+     "description": "a small clear drink pouch",
+     "confidence": 0.8,
+     "bbox": [
+      448,
+      45,
+      503,
+      75
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "food package",
+     "description": "a small food package on a shelf",
+     "confidence": 0.8,
+     "bbox": [
+      363,
+      65,
+      463,
+      125
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "laptop",
+     "description": "a laptop mounted on a rack",
+     "confidence": 0.85,
+     "bbox": [
+      153,
+      560,
+      353,
+      665
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "trash bag",
+     "description": "a black trash bag on the floor",
+     "confidence": 0.85,
+     "bbox": [
+      753,
+      710,
+      1000,
+      930
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [
+    {
+     "type": "moved",
+     "object_label": "grey device",
+     "actor_ref": "P1",
+     "confidence": 0.9,
+     "frame_index": 3,
+     "evidence": "the person is moving the device slightly while running"
+    }
+   ],
+   "stored_location": "ZVEZDA",
+   "stored_locations": [
+    "ZVEZDA"
+   ],
+   "sighting_count": 4,
+   "replay_current": {
+    "location": "ZVEZDA",
+    "source": "carried",
+    "carried": true,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T07:56:30.797113+00:00",
+   "t_end": "2026-10-18T07:56:35.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 475.0,
+   "video_t_mid": 477.5,
+   "caption_module": "ZVEZDA",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A person in a spacesuit is visible through a circular hatchway in the ISS.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "spacesuit with black and grey components",
+     "activity": "standing in the hatchway",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "laptop",
+     "description": "a laptop screen showing green and blue graphics",
+     "confidence": 0.9,
+     "bbox": [
+      878,
+      744,
+      1000,
+      998
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "laptop",
+     "description": "another laptop screen showing blue graphics",
+     "confidence": 0.9,
+     "bbox": [
+      915,
+      0,
+      1000,
+      145
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "cable",
+     "description": "white cables bundled together",
+     "confidence": 0.8,
+     "bbox": [
+      525,
+      848,
+      765,
+      1000
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "cable",
+     "description": "white cables running along the wall",
+     "confidence": 0.8,
+     "bbox": [
+      215,
+      635,
+      555,
+      700
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "cable",
+     "description": "blue cable near the hatch",
+     "confidence": 0.8,
+     "bbox": [
+      145,
+      465,
+      285,
+      545
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [
+    {
+     "type": "moved",
+     "object_label": "person",
+     "actor_ref": "P1",
+     "confidence": 0.7,
+     "frame_index": 5,
+     "evidence": "the person in the spacesuit shifts position slightly within the hatchway",
+     "to_location_hint": null
+    }
+   ],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 3,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T07:57:00.797113+00:00",
+   "t_end": "2026-10-18T07:57:05.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 505.0,
+   "video_t_mid": 507.5,
+   "caption_module": "NAUKA",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": "Nauka Multipurpose Laboratory Module",
+   "scene_summary": "A person in a blue suit works in the Nauka Multipurpose Laboratory Module.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "blue suit, orange gloves",
+     "activity": "working with equipment",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "m-bag",
+     "description": "white m-bag with black markings",
+     "confidence": 0.95,
+     "bbox": [
+      0,
+      148,
+      373,
+      438
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "laptop",
+     "description": "grey laptop on a surface",
+     "confidence": 0.85,
+     "bbox": [
+      548,
+      213,
+      713,
+      332
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "drink pouch",
+     "description": "clear drink pouch",
+     "confidence": 0.8,
+     "bbox": [
+      483,
+      403,
+      583,
+      463
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "yellow helmet",
+     "description": "yellow protective helmet",
+     "confidence": 0.9,
+     "bbox": [
+      423,
+      253,
+      523,
+      332
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "white pouch",
+     "description": "large white pouch in foreground",
+     "confidence": 0.9,
+     "bbox": [
+      493,
+      343,
+      1000,
+      773
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [
+    {
+     "type": "moved",
+     "object_label": "white pouch",
+     "actor_ref": null,
+     "to_location_hint": null,
+     "frame_index": 5,
+     "evidence": "The large white pouch moves closer to the camera.",
+     "confidence": 0.9
+    }
+   ],
+   "stored_location": "NAUKA",
+   "stored_locations": [
+    "NAUKA"
+   ],
+   "sighting_count": 4,
+   "replay_current": {
+    "location": "NAUKA",
+    "source": "hint",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T07:57:30.797113+00:00",
+   "t_end": "2026-10-18T07:57:35.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 535.0,
+   "video_t_mid": 537.5,
+   "caption_module": "NAUKA",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A person in a dark blue shirt works near a circular hatch in a cluttered space station module.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "dark blue shirt, short hair",
+     "activity": "working near a hatch",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "gas cylinder",
+     "description": "blue and yellow gas cylinder",
+     "confidence": 0.9,
+     "bbox": [
+      632,
+      223,
+      998,
+      398
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "gas cylinder",
+     "description": "blue and yellow gas cylinder",
+     "confidence": 0.9,
+     "bbox": [
+      718,
+      383,
+      1000,
+      518
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "cable",
+     "description": "thick white insulated cable",
+     "confidence": 0.8,
+     "bbox": [
+      368,
+      500,
+      788,
+      675
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "cable",
+     "description": "thick white insulated cable",
+     "confidence": 0.8,
+     "bbox": [
+      0,
+      400,
+      368,
+      553
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "black pouch",
+     "description": "small black pouch attached to a rail",
+     "confidence": 0.85,
+     "bbox": [
+      150,
+      783,
+      368,
+      893
+     ],
+     "frame_index": 1
+    },
+    {
+     "label": "black pouch",
+     "description": "another small black pouch",
+     "confidence": 0.8,
+     "bbox": [
+      443,
+      553,
+      583,
+      653
+     ],
+     "frame_index": 2
+    },
+    {
+     "label": "wrench",
+     "description": "orange handled tool",
+     "confidence": 0.7,
+     "bbox": [
+      563,
+      613,
+      713,
+      653
+     ],
+     "frame_index": 2
+    },
+    {
+     "label": "drill",
+     "description": "handheld power tool",
+     "confidence": 0.75,
+     "bbox": [
+      483,
+      833,
+      633,
+      903
+     ],
+     "frame_index": 2
+    },
+    {
+     "label": "cable",
+     "description": "grey insulated cable",
+     "confidence": 0.8,
+     "bbox": [
+      843,
+      500,
+      1000,
+      873
+     ],
+     "frame_index": 2
+    },
+    {
+     "label": "cable",
+     "description": "grey insulated cable",
+     "confidence": 0.8,
+     "bbox": [
+      833,
+      0,
+      1000,
+      453
+     ],
+     "frame_index": 3
+    },
+    {
+     "label": "cable",
+     "description": "grey insulated cable",
+     "confidence": 0.8,
+     "bbox": [
+      743,
+      0,
+      1000,
+      303
+     ],
+     "frame_index": 4
+    }
+   ],
+   "events": [],
+   "stored_location": "NAUKA",
+   "stored_locations": [
+    "NAUKA"
+   ],
+   "sighting_count": 5,
+   "replay_current": {
+    "location": "NAUKA",
+    "source": "carried",
+    "carried": true,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T07:58:00.797113+00:00",
+   "t_end": "2026-10-18T07:58:05.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 565.0,
+   "video_t_mid": 567.5,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A camera view shows a green fabric-covered object secured near a hatch, with a glimpse of another module.",
+   "people": [],
+   "objects": [
+    {
+     "label": "green fabric cover",
+     "description": "a green perforated fabric cover with a brown patch",
+     "confidence": 0.95,
+     "bbox": [
+      0,
+      250,
+      1000,
+      850
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "metal handle",
+     "description": "a curved silver metal handle attached to the green cover",
+     "confidence": 0.9,
+     "bbox": [
+      100,
+      490,
+      730,
+      700
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "yellow latch",
+     "description": "a yellow latch mechanism on the hatch frame",
+     "confidence": 0.85,
+     "bbox": [
+      600,
+      245,
+      810,
+      280
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "blue container",
+     "description": "a blue plastic container in the background module",
+     "confidence": 0.8,
+     "bbox": [
+      480,
+      100,
+      580,
+      165
+     ],
+     "frame_index": 4
+    },
+    {
+     "label": "white pouch",
+     "description": "a small white pouch on a rack",
+     "confidence": 0.75,
+     "bbox": [
+      570,
+      25,
+      660,
+      75
+     ],
+     "frame_index": 4
+    }
+   ],
+   "events": [],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 1,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T07:58:30.797113+00:00",
+   "t_end": "2026-10-18T07:58:35.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 595.0,
+   "video_t_mid": 597.5,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A view down a cluttered corridor of the International Space Station showing various equipment and blue storage bags.",
+   "people": [],
+   "objects": [
+    {
+     "label": "m-bag",
+     "description": "large blue storage bag hanging on the right",
+     "confidence": 0.95,
+     "bbox": [
+      258,
+      554,
+      603,
+      711
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "m-bag",
+     "description": "another large blue storage bag hanging higher up",
+     "confidence": 0.92,
+     "bbox": [
+      248,
+      448,
+      445,
+      594
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "m-bag",
+     "description": "a third blue storage bag partially visible",
+     "confidence": 0.88,
+     "bbox": [
+      374,
+      423,
+      542,
+      483
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "m-bag",
+     "description": "blue bag in the foreground right",
+     "confidence": 0.9,
+     "bbox": [
+      483,
+      682,
+      855,
+      998
+     ],
+     "frame_index": 5
+    },
+    {
+     "label": "cable",
+     "description": "various cables running along the floor and walls",
+     "confidence": 0.9,
+     "bbox": [
+      534,
+      188,
+      998,
+      631
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "towel",
+     "description": "white cloth or towel draped over a rail",
+     "confidence": 0.85,
+     "bbox": [
+      252,
+      771,
+      900,
+      1000
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "m-bag",
+     "description": "white bag with black markings on the floor",
+     "confidence": 0.9,
+     "bbox": [
+      734,
+      128,
+      998,
+      682
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 5,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T07:59:00.797113+00:00",
+   "t_end": "2026-10-18T07:59:05.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 625.0,
+   "video_t_mid": 627.5,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A view through a hatch into another module of the International Space Station showing various equipment and storage containers.",
+   "people": [],
+   "objects": [
+    {
+     "label": "storage container",
+     "description": "large cylindrical silver container with white straps",
+     "confidence": 0.95,
+     "bbox": [
+      483,
+      598,
+      818,
+      783
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "hatch cover",
+     "description": "white circular hatch cover partially open",
+     "confidence": 0.9,
+     "bbox": [
+      383,
+      498,
+      680,
+      613
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "insulated hose",
+     "description": "thick white insulated hose curving through the foreground",
+     "confidence": 0.9,
+     "bbox": [
+      113,
+      98,
+      993,
+      488
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "cargo bag",
+     "description": "white bag attached to the interior wall",
+     "confidence": 0.85,
+     "bbox": [
+      413,
+      333,
+      643,
+      443
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "metal rack",
+     "description": "yellow metal rack structure near the ceiling",
+     "confidence": 0.8,
+     "bbox": [
+      0,
+      343,
+      183,
+      533
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 3,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T07:59:30.797113+00:00",
+   "t_end": "2026-10-18T07:59:35.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 655.0,
+   "video_t_mid": 657.5,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": "Ti LAB",
+   "scene_summary": "A person performs exercises in the ISS while another person is visible in the background.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "dark hair, blue tank top, dark shorts",
+     "activity": "performing exercises",
+     "is_speaking": false
+    },
+    {
+     "ref": "P2",
+     "appearance": "grey hair, grey long-sleeve shirt, dark pants",
+     "activity": "standing in background",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "drink pouch",
+     "description": "orange liquid in a clear pouch",
+     "confidence": 0.9,
+     "bbox": [
+      188,
+      715,
+      313,
+      745
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "drink pouch",
+     "description": "red liquid in a clear pouch",
+     "confidence": 0.9,
+     "bbox": [
+      375,
+      725,
+      453,
+      755
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "drink pouch",
+     "description": "green liquid in a clear pouch",
+     "confidence": 0.9,
+     "bbox": [
+      382,
+      645,
+      453,
+      675
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "drink pouch",
+     "description": "white liquid in a clear pouch",
+     "confidence": 0.9,
+     "bbox": [
+      382,
+      755,
+      453,
+      785
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "m-bag",
+     "description": "green fabric bag",
+     "confidence": 0.9,
+     "bbox": [
+      685,
+      560,
+      985,
+      820
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "trash bag",
+     "description": "black plastic bag",
+     "confidence": 0.8,
+     "bbox": [
+      585,
+      275,
+      785,
+      355
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [
+    {
+     "type": "moved",
+     "object_label": "P1",
+     "actor_ref": "P1",
+     "frame_index": 3,
+     "evidence": "P1 moves across the foreground during exercise",
+     "confidence": 0.9
+    }
+   ],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 3,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": "caption"
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:00:00.797113+00:00",
+   "t_end": "2026-10-18T08:00:05.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 685.0,
+   "video_t_mid": 687.5,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A view through a hatch shows astronauts in space suits and various equipment.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "astronaut in white spacesuit",
+     "activity": "floating near the hatch",
+     "is_speaking": false
+    },
+    {
+     "ref": "P2",
+     "appearance": "astronaut in white spacesuit",
+     "activity": "positioned inside the hatch area",
+     "is_speaking": false
+    },
+    {
+     "ref": "P3",
+     "appearance": "astronaut in dark clothing",
+     "activity": "visible through the hatch",
+     "is_speaking": false
+    },
+    {
+     "ref": "P4",
+     "appearance": "person in grey suit",
+     "activity": "standing in the background",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "food package",
+     "description": "multiple grey packages stacked on a shelf",
+     "confidence": 0.9,
+     "bbox": [
+      718,
+      158,
+      1000,
+      425
+     ],
+     "frame_index": 5
+    },
+    {
+     "label": "camera",
+     "description": "black camera mounted on a bracket",
+     "confidence": 0.85,
+     "bbox": [
+      378,
+      338,
+      645,
+      494
+     ],
+     "frame_index": 3
+    },
+    {
+     "label": "camera",
+     "description": "another black camera mounted nearby",
+     "confidence": 0.85,
+     "bbox": [
+      378,
+      500,
+      545,
+      633
+     ],
+     "frame_index": 3
+    },
+    {
+     "label": "m-bag",
+     "description": "white storage bags inside the hatch",
+     "confidence": 0.8,
+     "bbox": [
+      450,
+      540,
+      730,
+      830
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [
+    {
+     "type": "moved",
+     "object_label": "camera",
+     "actor_ref": null,
+     "to_location_hint": null,
+     "frame_index": 3,
+     "evidence": "The camera angle shifts to focus more on the equipment on the left.",
+     "confidence": 0.9
+    }
+   ],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 7,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:00:30.797113+00:00",
+   "t_end": "2026-10-18T08:00:35.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 715.0,
+   "video_t_mid": 717.5,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A person in a grey shirt uses a handheld vacuum cleaner to clean a surface inside the ISS.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "grey t-shirt, dark shorts",
+     "activity": "using a handheld vacuum cleaner to clean a surface",
+     "is_speaking": false
+    },
+    {
+     "ref": "P2",
+     "appearance": "grey hoodie",
+     "activity": "standing in the foreground facing away from the camera",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "laptop",
+     "description": "a silver laptop mounted on a rack",
+     "confidence": 0.95,
+     "bbox": [
+      45,
+      1,
+      315,
+      221
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "drill",
+     "description": "a black handheld vacuum cleaner being used by a person",
+     "confidence": 0.9,
+     "bbox": [
+      585,
+      430,
+      778,
+      515
+     ],
+     "frame_index": 2,
+     "held_by": "P1"
+    },
+    {
+     "label": "ziploc bag",
+     "description": "a clear plastic bag held by the person",
+     "confidence": 0.85,
+     "bbox": [
+      715,
+      373,
+      855,
+      418
+     ],
+     "frame_index": 4,
+     "held_by": "P1"
+    }
+   ],
+   "events": [
+    {
+     "type": "used",
+     "object_label": "drill",
+     "actor_ref": "P1",
+     "confidence": 0.95,
+     "frame_index": 2,
+     "evidence": "P1 is holding and operating the handheld vacuum cleaner on a surface."
+    },
+    {
+     "type": "added",
+     "object_label": "ziploc bag",
+     "actor_ref": "P1",
+     "confidence": 0.8,
+     "frame_index": 4,
+     "evidence": "P1 brings a clear plastic bag into view while cleaning."
+    }
+   ],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 4,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:01:00.797113+00:00",
+   "t_end": "2026-10-18T08:01:05.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 745.0,
+   "video_t_mid": 747.5,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A view through a hatch into another module of the International Space Station showing various equipment and cables.",
+   "people": [],
+   "objects": [
+    {
+     "label": "white box",
+     "description": "large white rectangular container with some text",
+     "confidence": 0.95,
+     "bbox": [
+      700,
+      448,
+      998,
+      723
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "tablet",
+     "description": "small black screen mounted on a surface",
+     "confidence": 0.85,
+     "bbox": [
+      873,
+      365,
+      955,
+      428
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "laptop",
+     "description": "black device with a screen and keyboard",
+     "confidence": 0.8,
+     "bbox": [
+      883,
+      705,
+      998,
+      813
+     ],
+     "frame_index": 4
+    },
+    {
+     "label": "cable",
+     "description": "blue bundled cables along the wall",
+     "confidence": 0.9,
+     "bbox": [
+      548,
+      535,
+      998,
+      723
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "camera",
+     "description": "small black camera mounted on a bracket",
+     "confidence": 0.85,
+     "bbox": [
+      568,
+      633,
+      683,
+      713
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 4,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:02:00.797113+00:00",
+   "t_end": "2026-10-18T08:02:05.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 805.0,
+   "video_t_mid": 807.5,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A person reaches through a circular hatch opening towards another module.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "white suit, reaching forward",
+     "activity": "reaching through a hatch",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "cargo transfer bag",
+     "description": "large white bag with black markings and yellow label",
+     "confidence": 0.95,
+     "bbox": [
+      108,
+      598,
+      998,
+      1000
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "cable",
+     "description": "thin red cable near the bottom left",
+     "confidence": 0.8,
+     "bbox": [
+      888,
+      113,
+      1000,
+      233
+     ],
+     "frame_index": 5
+    }
+   ],
+   "events": [
+    {
+     "type": "moved",
+     "object_label": "arm",
+     "actor_ref": "P1",
+     "confidence": 0.9,
+     "frame_index": 2,
+     "evidence": "The arm moves closer to the center of the hatch opening."
+    }
+   ],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 2,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:02:30.797113+00:00",
+   "t_end": "2026-10-18T08:02:35.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 835.0,
+   "video_t_mid": 837.5,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A person in a black shirt looks out a window and then covers their eyes.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "black shirt, grey shorts",
+     "activity": "looking out the window and covering eyes",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "wristwatch",
+     "description": "a dark watch with a light face",
+     "confidence": 0.95,
+     "bbox": [
+      745,
+      603,
+      824,
+      644
+     ],
+     "frame_index": 5
+    }
+   ],
+   "events": [
+    {
+     "type": "moved",
+     "object_label": "hand",
+     "actor_ref": "P1",
+     "confidence": 0.9,
+     "frame_index": 5,
+     "evidence": "P1 moves their hand to cover their eyes"
+    }
+   ],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 2,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:03:00.797113+00:00",
+   "t_end": "2026-10-18T08:03:05.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 865.0,
+   "video_t_mid": 867.5,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A view of Earth and a spacecraft component through a window.",
+   "people": [],
+   "objects": [
+    {
+     "label": "spacecraft",
+     "description": "white and black spacecraft component visible outside the window",
+     "confidence": 0.95,
+     "bbox": [
+      318,
+      12,
+      998,
+      352
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [],
+   "stored_location": null,
+   "stored_locations": [],
+   "sighting_count": 0,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:03:30.797113+00:00",
+   "t_end": "2026-10-18T08:03:35.797113+00:00",
+   "pass": 1,
+   "video_offset_s": 895.0,
+   "video_t_mid": 897.5,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "An astronaut in a blue flight suit looks around the interior of the International Space Station.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "blue flight suit with American flag patch",
+     "activity": "looking around the cabin",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "drink pouch",
+     "description": "a small clear pouch containing liquid",
+     "confidence": 0.9,
+     "bbox": [
+      11,
+      138,
+      103,
+      188
+     ],
+     "frame_index": 4
+    }
+   ],
+   "events": [],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 1,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:04:00.797113+00:00",
+   "t_end": "2026-10-18T08:04:05.797113+00:00",
+   "pass": 2,
+   "video_offset_s": 28.2,
+   "video_t_mid": 30.7,
+   "caption_module": "COL1",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": "To COL",
+   "scene_summary": "A view through a hatchway into another module of the International Space Station.",
+   "people": [],
+   "objects": [
+    {
+     "label": "blue cloth",
+     "description": "a blue piece of fabric",
+     "confidence": 0.95,
+     "bbox": [
+      548,
+      414,
+      684,
+      523
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "orange pouch",
+     "description": "an orange pouch attached to a rail",
+     "confidence": 0.9,
+     "bbox": [
+      614,
+      694,
+      711,
+      724
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "ziploc bag",
+     "description": "a clear plastic bag containing items",
+     "confidence": 0.85,
+     "bbox": [
+      384,
+      728,
+      514,
+      761
+     ],
+     "frame_index": 3
+    },
+    {
+     "label": "white pouch",
+     "description": "a small white pouch",
+     "confidence": 0.8,
+     "bbox": [
+      898,
+      514,
+      994,
+      671
+     ],
+     "frame_index": 5
+    }
+   ],
+   "events": [],
+   "stored_location": null,
+   "stored_locations": [],
+   "sighting_count": 0,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:04:30.797113+00:00",
+   "t_end": "2026-10-18T08:04:35.797113+00:00",
+   "pass": 2,
+   "video_offset_s": 58.2,
+   "video_t_mid": 60.7,
+   "caption_module": "JPM1",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A person in a blue shirt maneuvers through the cluttered interior of the ISS.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "blue shirt, dark pants, black hair",
+     "activity": "moving through the module and reaching for equipment",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "laptop",
+     "description": "a small screen mounted on a rack",
+     "confidence": 0.9,
+     "bbox": [
+      365,
+      551,
+      445,
+      601
+     ],
+     "frame_index": 1
+    },
+    {
+     "label": "orange sphere",
+     "description": "a bright orange spherical object",
+     "confidence": 0.95,
+     "bbox": [
+      415,
+      488,
+      485,
+      528
+     ],
+     "frame_index": 1
+    },
+    {
+     "label": "white pouch",
+     "description": "a small white container on a shelf",
+     "confidence": 0.85,
+     "bbox": [
+      880,
+      453,
+      965,
+      503
+     ],
+     "frame_index": 5
+    },
+    {
+     "label": "ziploc bag",
+     "description": "a clear plastic bag containing items",
+     "confidence": 0.8,
+     "bbox": [
+      875,
+      373,
+      965,
+      423
+     ],
+     "frame_index": 5
+    }
+   ],
+   "events": [
+    {
+     "type": "moved",
+     "object_label": "person",
+     "actor_ref": "P1",
+     "confidence": 0.95,
+     "frame_index": 5,
+     "evidence": "P1 moves from the center towards the left side of the frame",
+     "to_location_hint": null
+    }
+   ],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 3,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:05:00.797113+00:00",
+   "t_end": "2026-10-18T08:05:05.797113+00:00",
+   "pass": 2,
+   "video_offset_s": 88.2,
+   "video_t_mid": 90.7,
+   "caption_module": "JPM1",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A view through a series of interconnected modules on the International Space Station, showing various equipment and a large white covered object.",
+   "people": [],
+   "objects": [
+    {
+     "label": "white covered object",
+     "description": "large object covered in white fabric",
+     "confidence": 0.95,
+     "bbox": [
+      615,
+      430,
+      998,
+      725
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "cable",
+     "description": "various cables and wires along the walls",
+     "confidence": 0.9,
+     "bbox": [
+      218,
+      110,
+      850,
+      280
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "m-bag",
+     "description": "white storage bag attached to a rack",
+     "confidence": 0.85,
+     "bbox": [
+      550,
+      140,
+      860,
+      230
+     ],
+     "frame_index": 1
+    },
+    {
+     "label": "drink pouch",
+     "description": "small pouch attached to a wall",
+     "confidence": 0.8,
+     "bbox": [
+      380,
+      330,
+      440,
+      345
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "ziploc bag",
+     "description": "small clear bag hanging",
+     "confidence": 0.75,
+     "bbox": [
+      380,
+      860,
+      450,
+      890
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 2,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:05:30.797113+00:00",
+   "t_end": "2026-10-18T08:05:35.797113+00:00",
+   "pass": 2,
+   "video_offset_s": 118.2,
+   "video_t_mid": 120.7,
+   "caption_module": "NOD2",
+   "private": true,
+   "privacy_reason": "sleep_cue",
+   "location_hint": null,
+   "scene_summary": null,
+   "people": null,
+   "objects": null,
+   "events": null,
+   "stored_location": "NOD2",
+   "stored_locations": [
+    "NOD2"
+   ],
+   "sighting_count": 7,
+   "replay_current": null
+  },
+  {
+   "t_start": "2026-10-18T08:06:00.797113+00:00",
+   "t_end": "2026-10-18T08:06:05.797113+00:00",
+   "pass": 2,
+   "video_offset_s": 148.2,
+   "video_t_mid": 150.7,
+   "caption_module": "LAB1",
+   "private": true,
+   "privacy_reason": "privacy_hold",
+   "location_hint": null,
+   "scene_summary": null,
+   "people": null,
+   "objects": null,
+   "events": null,
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 3,
+   "replay_current": null
+  },
+  {
+   "t_start": "2026-10-18T08:06:30.797113+00:00",
+   "t_end": "2026-10-18T08:06:35.797113+00:00",
+   "pass": 2,
+   "video_offset_s": 178.2,
+   "video_t_mid": 180.7,
+   "caption_module": "NOD1",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": "Unity Module",
+   "scene_summary": "Two astronauts are seen floating and interacting within the Unity Module of the ISS.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "dark hair, dark blue long-sleeved shirt",
+     "activity": "floating and observing",
+     "is_speaking": false
+    },
+    {
+     "ref": "P2",
+     "appearance": "short hair, grey t-shirt, black shorts",
+     "activity": "floating and moving",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "drink pouch",
+     "description": "a silver drink pouch attached to a rack",
+     "confidence": 0.9,
+     "bbox": [
+      785,
+      373,
+      885,
+      425
+     ],
+     "frame_index": 0,
+     "held_by": null
+    }
+   ],
+   "events": [
+    {
+     "type": "moved",
+     "object_label": "P2",
+     "actor_ref": "P2",
+     "frame_index": 5,
+     "evidence": "P2 moves their body position while floating",
+     "confidence": 0.9
+    }
+   ],
+   "stored_location": "NOD1",
+   "stored_locations": [
+    "NOD1"
+   ],
+   "sighting_count": 2,
+   "replay_current": {
+    "location": "NOD1",
+    "source": "hint",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:07:00.797113+00:00",
+   "t_end": "2026-10-18T08:07:05.797113+00:00",
+   "pass": 2,
+   "video_offset_s": 208.2,
+   "video_t_mid": 210.7,
+   "caption_module": "CUP1",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": "Cupola",
+   "scene_summary": "An astronaut in a blue shirt uses a camera to take photos from the Cupola module.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "blue shirt, long hair",
+     "activity": "taking photos with a camera",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "camera",
+     "description": "handheld camera used for photography",
+     "confidence": 0.95,
+     "bbox": [
+      915,
+      351,
+      985,
+      395
+     ],
+     "frame_index": 5,
+     "held_by": "P1"
+    }
+   ],
+   "events": [
+    {
+     "type": "used",
+     "object_label": "camera",
+     "actor_ref": "P1",
+     "confidence": 0.9,
+     "frame_index": 5,
+     "evidence": "P1 is holding and aiming the camera towards the window"
+    }
+   ],
+   "stored_location": "CUP1",
+   "stored_locations": [
+    "CUP1"
+   ],
+   "sighting_count": 2,
+   "replay_current": {
+    "location": "CUP1",
+    "source": "hint",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:07:30.797113+00:00",
+   "t_end": "2026-10-18T08:07:35.797113+00:00",
+   "pass": 2,
+   "video_offset_s": 238.2,
+   "video_t_mid": 240.7,
+   "caption_module": "CUP1",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": "NOD 3",
+   "scene_summary": "An astronaut works with equipment in a module while another person is visible through a hatch.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "grey t-shirt, black shorts",
+     "activity": "working with a laptop and equipment",
+     "is_speaking": false
+    },
+    {
+     "ref": "P2",
+     "appearance": "blue shirt, visible through hatch",
+     "activity": "standing in another module",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "laptop",
+     "description": "a small silver laptop",
+     "confidence": 0.9,
+     "bbox": [
+      368,
+      765,
+      442,
+      818
+     ],
+     "frame_index": 0,
+     "held_by": "P1"
+    },
+    {
+     "label": "m-bag",
+     "description": "a large white storage bag",
+     "confidence": 0.85,
+     "bbox": [
+      755,
+      385,
+      998,
+      585
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "trash bag",
+     "description": "a white trash bag",
+     "confidence": 0.8,
+     "bbox": [
+      785,
+      595,
+      998,
+      735
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "drink pouch",
+     "description": "a small green drink pouch",
+     "confidence": 0.95,
+     "bbox": [
+      715,
+      285,
+      755,
+      305
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "food package",
+     "description": "a small white food package",
+     "confidence": 0.8,
+     "bbox": [
+      885,
+      815,
+      945,
+      855
+     ],
+     "frame_index": 5
+    }
+   ],
+   "events": [
+    {
+     "type": "used",
+     "object_label": "laptop",
+     "actor_ref": "P1",
+     "confidence": 0.9,
+     "frame_index": 0,
+     "evidence": "P1 is interacting with the laptop screen and keyboard"
+    }
+   ],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 4,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": "caption"
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:08:00.797113+00:00",
+   "t_end": "2026-10-18T08:08:05.797113+00:00",
+   "pass": 2,
+   "video_offset_s": 268.2,
+   "video_t_mid": 270.7,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "Several astronauts are gathered in a module, some eating and interacting.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "grey short-sleeved shirt, black pants",
+     "activity": "standing and looking towards the camera",
+     "is_speaking": false
+    },
+    {
+     "ref": "P2",
+     "appearance": "grey t-shirt, dark hair",
+     "activity": "sitting and holding a drink pouch",
+     "is_speaking": true
+    },
+    {
+     "ref": "P3",
+     "appearance": "dark blue long-sleeved shirt, light pants",
+     "activity": "floating and eating a food package",
+     "is_speaking": false
+    },
+    {
+     "ref": "P4",
+     "appearance": "black t-shirt, blue shorts",
+     "activity": "floating and holding a drink pouch",
+     "is_speaking": true
+    }
+   ],
+   "objects": [
+    {
+     "label": "drink pouch",
+     "description": "a blue and green drink pouch",
+     "confidence": 0.9,
+     "bbox": [
+      388,
+      688,
+      534,
+      754
+     ],
+     "frame_index": 3,
+     "held_by": "P2"
+    },
+    {
+     "label": "food package",
+     "description": "an orange food package being held",
+     "confidence": 0.85,
+     "bbox": [
+      578,
+      723,
+      653,
+      781
+     ],
+     "frame_index": 3,
+     "held_by": "P3"
+    },
+    {
+     "label": "drink pouch",
+     "description": "a small clear drink pouch",
+     "confidence": 0.8,
+     "bbox": [
+      718,
+      784,
+      784,
+      821
+     ],
+     "frame_index": 5,
+     "held_by": "P4"
+    },
+    {
+     "label": "green bag",
+     "description": "a green storage bag attached to a rail",
+     "confidence": 0.95,
+     "bbox": [
+      784,
+      508,
+      981,
+      653
+     ],
+     "frame_index": 4,
+     "held_by": null
+    },
+    {
+     "label": "white pouch",
+     "description": "a white pouch attached to a rack",
+     "confidence": 0.8,
+     "bbox": [
+      388,
+      648,
+      511,
+      718
+     ],
+     "frame_index": 1,
+     "held_by": null
+    }
+   ],
+   "events": [
+    {
+     "type": "used",
+     "object_label": "food package",
+     "actor_ref": "P3",
+     "confidence": 0.9,
+     "frame_index": 3,
+     "evidence": "P3 is holding and appears to be consuming the orange package"
+    },
+    {
+     "type": "used",
+     "object_label": "drink pouch",
+     "actor_ref": "P2",
+     "confidence": 0.9,
+     "frame_index": 3,
+     "evidence": "P2 is holding and drinking from the blue and green pouch"
+    }
+   ],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 5,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:09:00.797113+00:00",
+   "t_end": "2026-10-18T08:09:05.797113+00:00",
+   "pass": 2,
+   "video_offset_s": 328.2,
+   "video_t_mid": 330.7,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A view through a circular hatch into a cluttered interior of the International Space Station.",
+   "people": [],
+   "objects": [
+    {
+     "label": "metal container",
+     "description": "a large cylindrical metal container",
+     "confidence": 0.9,
+     "bbox": [
+      375,
+      351,
+      455,
+      404
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "white pouch",
+     "description": "a white pouch attached to a rack",
+     "confidence": 0.85,
+     "bbox": [
+      398,
+      404,
+      485,
+      455
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "orange cylinder",
+     "description": "an orange cylindrical object",
+     "confidence": 0.95,
+     "bbox": [
+      385,
+      785,
+      615,
+      855
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "grey box",
+     "description": "a grey rectangular box mounted on a wall",
+     "confidence": 0.9,
+     "bbox": [
+      385,
+      580,
+      685,
+      635
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "silver container",
+     "description": "a silver metallic container",
+     "confidence": 0.8,
+     "bbox": [
+      615,
+      305,
+      735,
+      445
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "white bag",
+     "description": "a white bag containing items",
+     "confidence": 0.85,
+     "bbox": [
+      515,
+      225,
+      685,
+      335
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "blue pouch",
+     "description": "a blue pouch hanging on a rack",
+     "confidence": 0.9,
+     "bbox": [
+      315,
+      285,
+      405,
+      335
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "grey box",
+     "description": "a grey box mounted on the left side",
+     "confidence": 0.9,
+     "bbox": [
+      385,
+      25,
+      565,
+      175
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 1,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:09:30.797113+00:00",
+   "t_end": "2026-10-18T08:09:35.797113+00:00",
+   "pass": 2,
+   "video_offset_s": 358.2,
+   "video_t_mid": 360.7,
+   "caption_module": "ZARYA",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A view down a narrow corridor of the ISS filled with large cylindrical containers and white protective coverings.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "dark clothing, partially visible in distance",
+     "activity": "moving in the background",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "cylindrical container",
+     "description": "large silver metallic cylinder",
+     "confidence": 0.95,
+     "bbox": [
+      800,
+      300,
+      1000,
+      550
+     ],
+     "frame_index": 5
+    },
+    {
+     "label": "cylindrical container",
+     "description": "large silver metallic cylinder",
+     "confidence": 0.95,
+     "bbox": [
+      780,
+      480,
+      1000,
+      730
+     ],
+     "frame_index": 5
+    },
+    {
+     "label": "cylindrical container",
+     "description": "large silver metallic cylinder",
+     "confidence": 0.95,
+     "bbox": [
+      530,
+      480,
+      750,
+      630
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "white covering",
+     "description": "large white fabric covering over equipment",
+     "confidence": 0.9,
+     "bbox": [
+      350,
+      200,
+      580,
+      520
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "drink pouch",
+     "description": "blue drink pouch attached to wall",
+     "confidence": 0.85,
+     "bbox": [
+      360,
+      170,
+      510,
+      250
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "m-bag",
+     "description": "blue m-bag attached to wall",
+     "confidence": 0.8,
+     "bbox": [
+      380,
+      100,
+      550,
+      180
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "cable",
+     "description": "thin black cable running across the floor",
+     "confidence": 0.8,
+     "bbox": [
+      450,
+      250,
+      700,
+      550
+     ],
+     "frame_index": 5
+    }
+   ],
+   "events": [
+    {
+     "type": "moved",
+     "object_label": "cylindrical container",
+     "actor_ref": null,
+     "to_location_hint": null,
+     "frame_index": 5,
+     "evidence": "The camera moves forward, changing the perspective of the cylinders.",
+     "confidence": 0.7
+    }
+   ],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 4,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:10:00.797113+00:00",
+   "t_end": "2026-10-18T08:10:05.797113+00:00",
+   "pass": 2,
+   "video_offset_s": 388.2,
+   "video_t_mid": 390.7,
+   "caption_module": "ZARYA",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A view through a series of interconnected modules on the International Space Station.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "wearing blue shirt",
+     "activity": "standing in the distance",
+     "is_speaking": false
+    },
+    {
+     "ref": "P2",
+     "appearance": "wearing white shirt",
+     "activity": "standing in the distance",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "white padded tube",
+     "description": "a thick white insulated tube running through the module",
+     "confidence": 0.9,
+     "bbox": [
+      358,
+      365,
+      544,
+      501
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "yellow fabric cover",
+     "description": "a large yellow protective cover on a piece of equipment",
+     "confidence": 0.95,
+     "bbox": [
+      358,
+      158,
+      701,
+      234
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "grey panel",
+     "description": "a flat grey panel in the foreground",
+     "confidence": 0.85,
+     "bbox": [
+      531,
+      0,
+      998,
+      300
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 3,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:10:30.797113+00:00",
+   "t_end": "2026-10-18T08:10:35.797113+00:00",
+   "pass": 2,
+   "video_offset_s": 418.2,
+   "video_t_mid": 420.7,
+   "caption_module": "ZVEZDA",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": "Zvezda Service Module",
+   "scene_summary": "A person in a blue shirt and shorts floats in the ISS interior while looking towards the camera.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "blue shirt, green shorts, glasses",
+     "activity": "floating and looking at the camera",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "laptop",
+     "description": "black laptop mounted on a rack",
+     "confidence": 0.95,
+     "bbox": [
+      211,
+      528,
+      444,
+      655
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "laptop",
+     "description": "large black laptop screen facing away",
+     "confidence": 0.9,
+     "bbox": [
+      10,
+      671,
+      488,
+      958
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "drink pouch",
+     "description": "blue drink pouch attached to a rail",
+     "confidence": 0.85,
+     "bbox": [
+      784,
+      181,
+      894,
+      241
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "drink pouch",
+     "description": "blue drink pouch near the center",
+     "confidence": 0.8,
+     "bbox": [
+      703,
+      468,
+      814,
+      511
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "drink pouch",
+     "description": "blue drink pouch on the left side",
+     "confidence": 0.8,
+     "bbox": [
+      388,
+      98,
+      481,
+      128
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "m-bag",
+     "description": "white m-bag hanging on a rack",
+     "confidence": 0.85,
+     "bbox": [
+      568,
+      463,
+      714,
+      503
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "trash bag",
+     "description": "white trash bag hanging",
+     "confidence": 0.8,
+     "bbox": [
+      511,
+      453,
+      644,
+      493
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [],
+   "stored_location": "ZVEZDA",
+   "stored_locations": [
+    "ZVEZDA"
+   ],
+   "sighting_count": 4,
+   "replay_current": {
+    "location": "ZVEZDA",
+    "source": "hint",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:11:00.797113+00:00",
+   "t_end": "2026-10-18T08:11:05.797113+00:00",
+   "pass": 2,
+   "video_offset_s": 448.2,
+   "video_t_mid": 450.7,
+   "caption_module": "ZVEZDA",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A person in a blue shirt and shorts holds a large grey device while standing on a treadmill.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "blue shirt, dark shorts, hair tied back",
+     "activity": "holding a device while standing on a treadmill",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "tablet",
+     "description": "large grey rectangular device with a screen",
+     "confidence": 0.95,
+     "bbox": [
+      333,
+      343,
+      564,
+      514
+     ],
+     "frame_index": 0,
+     "held_by": "P1"
+    },
+    {
+     "label": "treadmill",
+     "description": "exercise equipment with a red belt",
+     "confidence": 0.9,
+     "bbox": [
+      888,
+      238,
+      1000,
+      454
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "trash bag",
+     "description": "black bag hanging on the right",
+     "confidence": 0.85,
+     "bbox": [
+      288,
+      594,
+      694,
+      824
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "drink pouch",
+     "description": "small clear pouch with liquid",
+     "confidence": 0.8,
+     "bbox": [
+      774,
+      781,
+      998,
+      964
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "food package",
+     "description": "small white and orange package",
+     "confidence": 0.85,
+     "bbox": [
+      764,
+      143,
+      874,
+      233
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "ziploc bag",
+     "description": "clear plastic bag containing items",
+     "confidence": 0.8,
+     "bbox": [
+      714,
+      781,
+      888,
+      884
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "laptop",
+     "description": "black laptop mounted on a rack",
+     "confidence": 0.85,
+     "bbox": [
+      10,
+      556,
+      288,
+      675
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "m-bag",
+     "description": "white storage bag",
+     "confidence": 0.75,
+     "bbox": [
+      348,
+      884,
+      544,
+      981
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [
+    {
+     "type": "used",
+     "object_label": "treadmill",
+     "actor_ref": "P1",
+     "confidence": 0.9,
+     "frame_index": 0,
+     "evidence": "P1 is standing on the treadmill belt"
+    }
+   ],
+   "stored_location": "ZVEZDA",
+   "stored_locations": [
+    "ZVEZDA"
+   ],
+   "sighting_count": 4,
+   "replay_current": {
+    "location": "ZVEZDA",
+    "source": "carried",
+    "carried": true,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:11:30.797113+00:00",
+   "t_end": "2026-10-18T08:11:35.797113+00:00",
+   "pass": 2,
+   "video_offset_s": 478.2,
+   "video_t_mid": 480.7,
+   "caption_module": "ZVEZDA",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A robotic arm moves through a series of interconnected modules on the International Space Station.",
+   "people": [],
+   "objects": [
+    {
+     "label": "robotic arm",
+     "description": "a large grey and white robotic arm with padded sections",
+     "confidence": 0.95,
+     "bbox": [
+      580,
+      180,
+      998,
+      580
+     ],
+     "frame_index": 5
+    }
+   ],
+   "events": [
+    {
+     "type": "moved",
+     "object_label": "robotic arm",
+     "actor_ref": null,
+     "to_location_hint": null,
+     "frame_index": 5,
+     "evidence": "the robotic arm moves forward through the hatch towards the camera",
+     "confidence": 0.9
+    }
+   ],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 1,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:12:00.797113+00:00",
+   "t_end": "2026-10-18T08:12:05.797113+00:00",
+   "pass": 2,
+   "video_offset_s": 508.2,
+   "video_t_mid": 510.7,
+   "caption_module": "NAUKA",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": "Nauka Multipurpose Laboratory Module",
+   "scene_summary": "A person in a blue shirt works with equipment inside the Nauka Multipurpose Laboratory Module.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "blue shirt, blue shorts",
+     "activity": "working with equipment",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "laptop",
+     "description": "a grey laptop on a surface",
+     "confidence": 0.9,
+     "bbox": [
+      618,
+      233,
+      733,
+      325
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "m-bag",
+     "description": "a white m-bag hanging on the left",
+     "confidence": 0.85,
+     "bbox": [
+      0,
+      0,
+      570,
+      263
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "ziploc bag",
+     "description": "a clear ziploc bag containing items",
+     "confidence": 0.8,
+     "bbox": [
+      798,
+      748,
+      915,
+      833
+     ],
+     "frame_index": 5
+    },
+    {
+     "label": "food package",
+     "description": "a green food package on a shelf",
+     "confidence": 0.75,
+     "bbox": [
+      685,
+      273,
+      813,
+      333
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "drink pouch",
+     "description": "a small white drink pouch",
+     "confidence": 0.7,
+     "bbox": [
+      703,
+      223,
+      783,
+      263
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [
+    {
+     "type": "used",
+     "object_label": "equipment",
+     "actor_ref": "P1",
+     "confidence": 0.9,
+     "frame_index": 3,
+     "evidence": "P1 is interacting with a piece of hardware",
+     "to_location_hint": null
+    }
+   ],
+   "stored_location": "NAUKA",
+   "stored_locations": [
+    "NAUKA"
+   ],
+   "sighting_count": 3,
+   "replay_current": {
+    "location": "NAUKA",
+    "source": "hint",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:12:30.797113+00:00",
+   "t_end": "2026-10-18T08:12:35.797113+00:00",
+   "pass": 2,
+   "video_offset_s": 538.2,
+   "video_t_mid": 540.7,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": "Poisk Research Module",
+   "scene_summary": "A person in a dark blue shirt works near a circular hatch in the Poisk Research Module.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "dark blue shirt, dark pants",
+     "activity": "working near a hatch while holding a white object",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "cable",
+     "description": "black cable running along the wall",
+     "confidence": 0.9,
+     "bbox": [
+      114,
+      348,
+      888,
+      381
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "m-bag",
+     "description": "white m-bag attached to a rack",
+     "confidence": 0.85,
+     "bbox": [
+      348,
+      414,
+      534,
+      534
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "drink pouch",
+     "description": "small blue drink pouch",
+     "confidence": 0.8,
+     "bbox": [
+      914,
+      884,
+      1000,
+      948
+     ],
+     "frame_index": 5
+    },
+    {
+     "label": "ziploc bag",
+     "description": "clear ziploc bag containing items",
+     "confidence": 0.75,
+     "bbox": [
+      734,
+      784,
+      948,
+      854
+     ],
+     "frame_index": 4
+    }
+   ],
+   "events": [
+    {
+     "type": "moved",
+     "object_label": "m-bag",
+     "actor_ref": null,
+     "frame_index": 0,
+     "evidence": "The m-bag is visible in the upper center of the frame.",
+     "confidence": 0.9
+    }
+   ],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 2,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:13:00.797113+00:00",
+   "t_end": "2026-10-18T08:13:05.797113+00:00",
+   "pass": 2,
+   "video_offset_s": 568.2,
+   "video_t_mid": 570.7,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A view through a circular hatch opening shows a cluttered interior space with various equipment and bags.",
+   "people": [],
+   "objects": [
+    {
+     "label": "hatch",
+     "description": "circular metallic hatch with a yellow cover",
+     "confidence": 0.95,
+     "bbox": [
+      0,
+      100,
+      1000,
+      850
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "blue container",
+     "description": "blue storage container on a shelf",
+     "confidence": 0.9,
+     "bbox": [
+      485,
+      55,
+      575,
+      165
+     ],
+     "frame_index": 2
+    },
+    {
+     "label": "white bag",
+     "description": "large white bag or garment hanging",
+     "confidence": 0.85,
+     "bbox": [
+      550,
+      0,
+      1000,
+      230
+     ],
+     "frame_index": 5
+    },
+    {
+     "label": "grey bag",
+     "description": "grey bag on the floor",
+     "confidence": 0.8,
+     "bbox": [
+      850,
+      300,
+      1000,
+      450
+     ],
+     "frame_index": 5
+    },
+    {
+     "label": "yellow handle",
+     "description": "yellow handle on a piece of equipment",
+     "confidence": 0.85,
+     "bbox": [
+      595,
+      690,
+      740,
+      720
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 3,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:13:30.797113+00:00",
+   "t_end": "2026-10-18T08:13:35.797113+00:00",
+   "pass": 2,
+   "video_offset_s": 598.2,
+   "video_t_mid": 600.7,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A view down a cluttered corridor of the International Space Station showing various equipment and storage bags.",
+   "people": [],
+   "objects": [
+    {
+     "label": "m-bag",
+     "description": "large blue storage bag with red markings",
+     "confidence": 0.95,
+     "bbox": [
+      81,
+      633,
+      658,
+      872
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "m-bag",
+     "description": "another large blue storage bag",
+     "confidence": 0.9,
+     "bbox": [
+      0,
+      444,
+      303,
+      633
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "m-bag",
+     "description": "smaller blue storage bag",
+     "confidence": 0.85,
+     "bbox": [
+      103,
+      403,
+      385,
+      493
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "cable",
+     "description": "various cables running along the floor and walls",
+     "confidence": 0.9,
+     "bbox": [
+      718,
+      313,
+      998,
+      588
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "food package",
+     "description": "white wrapped package on the floor",
+     "confidence": 0.8,
+     "bbox": [
+      833,
+      83,
+      1000,
+      693
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "trash bag",
+     "description": "white mesh bag hanging on the right",
+     "confidence": 0.85,
+     "bbox": [
+      363,
+      553,
+      713,
+      753
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 3,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:14:00.797113+00:00",
+   "t_end": "2026-10-18T08:14:05.797113+00:00",
+   "pass": 2,
+   "video_offset_s": 628.2,
+   "video_t_mid": 630.7,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A view looking through an open hatch into another module of the ISS.",
+   "people": [],
+   "objects": [
+    {
+     "label": "metal cylinder",
+     "description": "large silver cylindrical container secured with straps",
+     "confidence": 0.95,
+     "bbox": [
+      95,
+      625,
+      845,
+      855
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "white padded cover",
+     "description": "large white fabric cover over a piece of equipment",
+     "confidence": 0.9,
+     "bbox": [
+      300,
+      445,
+      825,
+      660
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "silver handle",
+     "description": "small rectangular metal handle on the white cover",
+     "confidence": 0.85,
+     "bbox": [
+      575,
+      535,
+      685,
+      565
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "yellow handrail",
+     "description": "bright yellow curved handrail",
+     "confidence": 0.9,
+     "bbox": [
+      0,
+      715,
+      1000,
+      885
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "white pouch",
+     "description": "small white pouch attached to the interior wall",
+     "confidence": 0.8,
+     "bbox": [
+      545,
+      165,
+      685,
+      285
+     ],
+     "frame_index": 3
+    },
+    {
+     "label": "orange bag",
+     "description": "orange bag visible inside the adjacent module",
+     "confidence": 0.85,
+     "bbox": [
+      385,
+      375,
+      525,
+      445
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 2,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:14:30.797113+00:00",
+   "t_end": "2026-10-18T08:14:35.797113+00:00",
+   "pass": 2,
+   "video_offset_s": 658.2,
+   "video_t_mid": 660.7,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": "To NOD 3",
+   "scene_summary": "A person in a grey shirt works near a hatch while another person floats in the foreground.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "grey long-sleeve shirt, dark pants",
+     "activity": "working near a hatch",
+     "is_speaking": false
+    },
+    {
+     "ref": "P2",
+     "appearance": "dark shirt, floating in foreground",
+     "activity": "floating in the cabin",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "food package",
+     "description": "multiple silver foil packages on a rack",
+     "confidence": 0.9,
+     "bbox": [
+      188,
+      688,
+      788,
+      998
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "laptop",
+     "description": "a small screen mounted on the wall",
+     "confidence": 0.8,
+     "bbox": [
+      0,
+      0,
+      250,
+      100
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "drink pouch",
+     "description": "a blue pouch attached to the ceiling",
+     "confidence": 0.9,
+     "bbox": [
+      0,
+      248,
+      145,
+      395
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "m-bag",
+     "description": "a white bag hanging on the wall",
+     "confidence": 0.8,
+     "bbox": [
+      100,
+      165,
+      265,
+      235
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "trash bag",
+     "description": "a black bag on the floor",
+     "confidence": 0.8,
+     "bbox": [
+      715,
+      305,
+      915,
+      415
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "ziploc bag",
+     "description": "a clear bag containing items",
+     "confidence": 0.7,
+     "bbox": [
+      535,
+      545,
+      655,
+      635
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [
+    {
+     "type": "moved",
+     "object_label": "P2",
+     "actor_ref": "P2",
+     "frame_index": 0,
+     "evidence": "P2 is floating across the foreground",
+     "confidence": 0.9
+    }
+   ],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 4,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:15:30.797113+00:00",
+   "t_end": "2026-10-18T08:15:35.797113+00:00",
+   "pass": 2,
+   "video_offset_s": 718.2,
+   "video_t_mid": 720.7,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A person in a grey shirt works with a black object and a blue-handled tool in a cluttered space station module.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "grey t-shirt, dark shorts",
+     "activity": "working with tools and fabric",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "laptop",
+     "description": "grey laptop mounted on a rack",
+     "confidence": 0.95,
+     "bbox": [
+      10,
+      0,
+      250,
+      140
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "m-bag",
+     "description": "white m-bag attached to a rack",
+     "confidence": 0.9,
+     "bbox": [
+      580,
+      270,
+      780,
+      340
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "drill",
+     "description": "black handheld power tool",
+     "confidence": 0.85,
+     "bbox": [
+      600,
+      440,
+      800,
+      560
+     ],
+     "frame_index": 0,
+     "held_by": "P1"
+    },
+    {
+     "label": "black cloth",
+     "description": "large black fabric being handled",
+     "confidence": 0.9,
+     "bbox": [
+      850,
+      280,
+      1000,
+      550
+     ],
+     "frame_index": 5,
+     "held_by": "P1"
+    },
+    {
+     "label": "blue-handled tool",
+     "description": "tool with a prominent blue handle",
+     "confidence": 0.8,
+     "bbox": [
+      880,
+      460,
+      1000,
+      530
+     ],
+     "frame_index": 5,
+     "held_by": "P1"
+    }
+   ],
+   "events": [
+    {
+     "type": "used",
+     "object_label": "drill",
+     "actor_ref": "P1",
+     "confidence": 0.9,
+     "frame_index": 0,
+     "evidence": "P1 is holding and operating the drill tool"
+    }
+   ],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 5,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:16:00.797113+00:00",
+   "t_end": "2026-10-18T08:16:05.797113+00:00",
+   "pass": 2,
+   "video_offset_s": 748.2,
+   "video_t_mid": 750.7,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A view through a hatch into another module of the International Space Station showing various equipment and storage.",
+   "people": [],
+   "objects": [
+    {
+     "label": "cable",
+     "description": "blue coiled cable",
+     "confidence": 0.9,
+     "bbox": [
+      414,
+      551,
+      998,
+      773
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "laptop",
+     "description": "small screen mounted on a rack",
+     "confidence": 0.8,
+     "bbox": [
+      344,
+      466,
+      441,
+      518
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "m-bag",
+     "description": "white storage bag",
+     "confidence": 0.7,
+     "bbox": [
+      374,
+      381,
+      514,
+      471
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "drink pouch",
+     "description": "orange pouch",
+     "confidence": 0.8,
+     "bbox": [
+      423,
+      493,
+      503,
+      526
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "tablet",
+     "description": "small screen on a wall",
+     "confidence": 0.7,
+     "bbox": [
+      344,
+      466,
+      441,
+      518
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 3,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:17:00.797113+00:00",
+   "t_end": "2026-10-18T08:17:05.797113+00:00",
+   "pass": 2,
+   "video_offset_s": 808.2,
+   "video_t_mid": 810.7,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A person in a white suit reaches through a circular hatch towards another area of the space station.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "white suit",
+     "activity": "reaching through a hatch",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "hatch",
+     "description": "circular opening between modules",
+     "confidence": 0.95,
+     "bbox": [
+      350,
+      270,
+      990,
+      630
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "white pouch",
+     "description": "large white bag with black markings",
+     "confidence": 0.85,
+     "bbox": [
+      100,
+      780,
+      990,
+      1000
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [
+    {
+     "type": "moved",
+     "object_label": "hand",
+     "actor_ref": "P1",
+     "frame_index": 5,
+     "evidence": "the arm moves closer to the center of the hatch",
+     "confidence": 0.9
+    }
+   ],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 1,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:17:30.797113+00:00",
+   "t_end": "2026-10-18T08:17:35.797113+00:00",
+   "pass": 2,
+   "video_offset_s": 838.2,
+   "video_t_mid": 840.7,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A person in a black shirt looks out a window and points towards Earth.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "black shirt, short hair",
+     "activity": "looking out window and pointing",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "wristwatch",
+     "description": "black watch with yellow accents",
+     "confidence": 0.95,
+     "bbox": [
+      755,
+      598,
+      831,
+      645
+     ],
+     "frame_index": 3
+    },
+    {
+     "label": "wristwatch",
+     "description": "second black watch",
+     "confidence": 0.9,
+     "bbox": [
+      848,
+      875,
+      915,
+      905
+     ],
+     "frame_index": 4
+    }
+   ],
+   "events": [
+    {
+     "type": "moved",
+     "object_label": "wristwatch",
+     "actor_ref": "P1",
+     "frame_index": 3,
+     "evidence": "P1 moves his arm to point at the window while wearing a watch",
+     "confidence": 0.9
+    }
+   ],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 3,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:18:00.797113+00:00",
+   "t_end": "2026-10-18T08:18:05.797113+00:00",
+   "pass": 2,
+   "video_offset_s": 868.2,
+   "video_t_mid": 870.7,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A view from the ISS window shows Earth and a spacecraft.",
+   "people": [],
+   "objects": [
+    {
+     "label": "spacecraft",
+     "description": "a white and black spacecraft visible outside the window",
+     "confidence": 0.95,
+     "bbox": [
+      311,
+      78,
+      998,
+      351
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [],
+   "stored_location": null,
+   "stored_locations": [],
+   "sighting_count": 0,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:18:30.797113+00:00",
+   "t_end": "2026-10-18T08:18:35.797113+00:00",
+   "pass": 3,
+   "video_offset_s": 1.4,
+   "video_t_mid": 3.9,
+   "caption_module": null,
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "An astronaut in a blue flight suit moves through the interior of the International Space Station.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "blue flight suit with American flag patch",
+     "activity": "moving through the station and grasping a handle",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "laptop",
+     "description": "a black laptop mounted on a rack",
+     "confidence": 0.9,
+     "bbox": [
+      368,
+      78,
+      615,
+      243
+     ],
+     "frame_index": 5
+    }
+   ],
+   "events": [
+    {
+     "type": "moved",
+     "object_label": "P1",
+     "actor_ref": "P1",
+     "frame_index": 2,
+     "evidence": "P1 moves their arm to reach for a handle",
+     "confidence": 0.9
+    },
+    {
+     "type": "used",
+     "object_label": "handle",
+     "actor_ref": "P1",
+     "frame_index": 3,
+     "evidence": "P1 grasps a blue handle",
+     "confidence": 0.9
+    }
+   ],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 2,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:19:00.797113+00:00",
+   "t_end": "2026-10-18T08:19:05.797113+00:00",
+   "pass": 3,
+   "video_offset_s": 31.4,
+   "video_t_mid": 33.9,
+   "caption_module": "COL1",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": "To COL",
+   "scene_summary": "A view through a hatch into another module of the International Space Station showing various equipment and storage.",
+   "people": [],
+   "objects": [
+    {
+     "label": "blue cloth",
+     "description": "a blue piece of fabric",
+     "confidence": 0.95,
+     "bbox": [
+      858,
+      278,
+      1000,
+      513
+     ],
+     "frame_index": 5
+    },
+    {
+     "label": "orange container",
+     "description": "an orange storage container",
+     "confidence": 0.9,
+     "bbox": [
+      915,
+      455,
+      1000,
+      530
+     ],
+     "frame_index": 5
+    },
+    {
+     "label": "white pouch",
+     "description": "a white pouch attached to a surface",
+     "confidence": 0.85,
+     "bbox": [
+      805,
+      585,
+      905,
+      655
+     ],
+     "frame_index": 3
+    },
+    {
+     "label": "ziploc bag",
+     "description": "a clear plastic bag containing items",
+     "confidence": 0.8,
+     "bbox": [
+      775,
+      765,
+      865,
+      830
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "m-bag",
+     "description": "a white storage bag",
+     "confidence": 0.8,
+     "bbox": [
+      685,
+      615,
+      835,
+      735
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 1,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:19:30.797113+00:00",
+   "t_end": "2026-10-18T08:19:35.797113+00:00",
+   "pass": 3,
+   "video_offset_s": 61.4,
+   "video_t_mid": 63.9,
+   "caption_module": "JPM1",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A person in a blue shirt moves around the interior of the ISS, interacting with various equipment.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "blue shirt, green pants",
+     "activity": "moving and reaching for equipment",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "tablet",
+     "description": "a small screen displaying data",
+     "confidence": 0.9,
+     "bbox": [
+      400,
+      528,
+      485,
+      583
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "orange sphere",
+     "description": "a bright orange spherical object",
+     "confidence": 0.95,
+     "bbox": [
+      453,
+      448,
+      545,
+      493
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "white pouch",
+     "description": "a white fabric pouch attached to a rack",
+     "confidence": 0.85,
+     "bbox": [
+      555,
+      373,
+      715,
+      523
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "laptop",
+     "description": "a laptop mounted on a bracket",
+     "confidence": 0.8,
+     "bbox": [
+      385,
+      573,
+      515,
+      643
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "drink pouch",
+     "description": "a clear plastic pouch containing liquid",
+     "confidence": 0.8,
+     "bbox": [
+      485,
+      493,
+      560,
+      528
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [
+    {
+     "type": "moved",
+     "object_label": "person",
+     "actor_ref": "P1",
+     "confidence": 0.9,
+     "frame_index": 2,
+     "evidence": "P1 moves from the center towards the left side of the frame"
+    }
+   ],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 4,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:20:00.797113+00:00",
+   "t_end": "2026-10-18T08:20:05.797113+00:00",
+   "pass": 3,
+   "video_offset_s": 91.4,
+   "video_t_mid": 93.9,
+   "caption_module": "JPM1",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "A view through a series of interconnected modules on the International Space Station.",
+   "people": [],
+   "objects": [
+    {
+     "label": "white cover",
+     "description": "large white protective cover over equipment",
+     "confidence": 0.95,
+     "bbox": [
+      625,
+      358,
+      1000,
+      753
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "orange bag",
+     "description": "orange storage bag hanging in the background",
+     "confidence": 0.9,
+     "bbox": [
+      434,
+      408,
+      613,
+      463
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "blue bag",
+     "description": "blue storage bag on the floor",
+     "confidence": 0.9,
+     "bbox": [
+      534,
+      564,
+      664,
+      671
+     ],
+     "frame_index": 0
+    },
+    {
+     "label": "white pouch",
+     "description": "small white pouch attached to a rack",
+     "confidence": 0.85,
+     "bbox": [
+      154,
+      798,
+      234,
+      831
+     ],
+     "frame_index": 0
+    }
+   ],
+   "events": [],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 2,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  },
+  {
+   "t_start": "2026-10-18T08:20:30.797113+00:00",
+   "t_end": "2026-10-18T08:20:35.797113+00:00",
+   "pass": 3,
+   "video_offset_s": 121.4,
+   "video_t_mid": 123.9,
+   "caption_module": "NOD2",
+   "private": true,
+   "privacy_reason": "sleep_cue",
+   "location_hint": null,
+   "scene_summary": null,
+   "people": null,
+   "objects": null,
+   "events": null,
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 5,
+   "replay_current": null
+  },
+  {
+   "t_start": "2026-10-18T08:21:00.797113+00:00",
+   "t_end": "2026-10-18T08:21:05.797113+00:00",
+   "pass": 3,
+   "video_offset_s": 151.4,
+   "video_t_mid": 153.9,
+   "caption_module": "LAB1",
+   "private": true,
+   "privacy_reason": "privacy_hold",
+   "location_hint": null,
+   "scene_summary": null,
+   "people": null,
+   "objects": null,
+   "events": null,
+   "stored_location": "NOD1",
+   "stored_locations": [
+    "NOD1"
+   ],
+   "sighting_count": 3,
+   "replay_current": null
+  },
+  {
+   "t_start": "2026-10-18T08:21:30.797113+00:00",
+   "t_end": "2026-10-18T08:21:35.797113+00:00",
+   "pass": 3,
+   "video_offset_s": 181.4,
+   "video_t_mid": 183.9,
+   "caption_module": "NOD1",
+   "private": false,
+   "privacy_reason": null,
+   "location_hint": null,
+   "scene_summary": "Two astronauts are performing a maneuver in the ISS interior.",
+   "people": [
+    {
+     "ref": "P1",
+     "appearance": "grey t-shirt, black shorts",
+     "activity": "floating and maneuvering",
+     "is_speaking": false
+    },
+    {
+     "ref": "P2",
+     "appearance": "dark blue long-sleeve shirt",
+     "activity": "observing and assisting",
+     "is_speaking": false
+    }
+   ],
+   "objects": [
+    {
+     "label": "drink pouch",
+     "description": "silver cylindrical container",
+     "confidence": 0.9,
+     "bbox": [
+      773,
+      218,
+      988,
+      284
+     ],
+     "frame_index": 5
+    }
+   ],
+   "events": [
+    {
+     "type": "moved",
+     "object_label": "P1",
+     "actor_ref": "P1",
+     "frame_index": 5,
+     "evidence": "P1 moves across the frame while holding onto a rail",
+     "confidence": 0.9
+    }
+   ],
+   "stored_location": "USOS",
+   "stored_locations": [
+    "USOS"
+   ],
+   "sighting_count": 2,
+   "replay_current": {
+    "location": "USOS",
+    "source": "camera",
+    "carried": false,
+    "carry_ended": null
+   }
+  }
+ ]
+}

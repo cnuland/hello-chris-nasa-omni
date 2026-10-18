@@ -306,9 +306,10 @@ def test_ac_per_10_same_event_in_overlapping_windows_is_recorded_once(make_recon
     process(rec, frames, [obj("drill", BOX_A, frame_index=1)], {"drill-1": "drill"},
             events=[{**MOVED, "frame_index": 1}], t0=T0 + timedelta(seconds=4))
     assert len([e for e in inv.events if e["event_type"] == "moved"]) == 1
-    # a genuinely later move of the same object is still recorded
+    # a genuinely later move of the same object is still recorded (AC-PER-70 amendment: NOD2 -> NOD2 is no move at
+    # all any more, so the later move goes elsewhere)
     process(rec, frames, [obj("drill", BOX_A, frame_index=2)], {"drill-1": "drill"},
-            events=[{**MOVED, "frame_index": 2}], t0=T0 + timedelta(minutes=5))
+            events=[{**MOVED, "frame_index": 2, "to_location_hint": "Destiny"}], t0=T0 + timedelta(minutes=5))
     assert len([e for e in inv.events if e["event_type"] == "moved"]) == 2
 
 
@@ -316,6 +317,8 @@ def test_ac_per_14_replay_default_windowing_dedups_repeated_omni_event():
     """Default windowing (6 frames, stride 4 s): consecutive windows share frames and the omni model reports the same
     movement in each of them."""
     inv = FakeInventory()
+    _drill(inv)  # AC-PER-70 amendment: the drill starts in LAB1, so "moved to NOD2" is a real move (a first sighting
+    # or NOD2 -> NOD2 emits no move at all)
     items = [(T0 + timedelta(seconds=i), make_frame([("drill-1", BOX_A)]), None) for i in range(10)]
     obs = observation([obj("drill", BOX_A, frame_index=0)], events=[{**MOVED, "frame_index": 0}])
     later = observation([obj("drill", BOX_A, frame_index=0)], events=[{**MOVED, "frame_index": 0}])

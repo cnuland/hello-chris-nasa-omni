@@ -245,14 +245,14 @@ def test_ac_per_41_carried_window_records_its_anchor_and_gap(make_reconciler, in
 
 @pytest.mark.parametrize("start,carried", [(50, True), (50.001, False), (80, False)])
 def test_ac_per_41_carry_horizon_is_measured_from_the_anchor(make_reconciler, inv, start, carried):
-    rec = make_reconciler(camera_id="cam-handheld")
+    rec = make_reconciler(camera_id="cam-handheld", revisit_location_sim=0.0)  # AC-PER-67: identical synthetic frames
     run_window(rec, inv, 0, hint="Kibo")  # ends at 5 s
     _, sightings = run_window(rec, inv, start)
     assert (sightings[0]["location_id"] == "JPM1") is carried
 
 
 def test_ac_per_41_carried_windows_do_not_extend_the_carry(make_reconciler, inv):
-    rec = make_reconciler(camera_id="cam-handheld")
+    rec = make_reconciler(camera_id="cam-handheld", revisit_location_sim=0.0)  # AC-PER-67: identical synthetic frames
     run_window(rec, inv, 0, hint="Kibo")
     assert run_window(rec, inv, 30)[1][0]["location_id"] == "JPM1"
     assert run_window(rec, inv, 60)[1][0]["location_id"] == "USOS"  # 55 s after the last real evidence
@@ -282,7 +282,7 @@ def test_ac_per_41_never_carries_into_a_private_window(make_reconciler, inv, sto
 
 
 def test_ac_per_41_never_carries_out_of_a_private_window(make_reconciler, inv):
-    rec = make_reconciler(camera_id="cam-handheld", privacy_hold_s=0.0)
+    rec = make_reconciler(camera_id="cam-handheld", revisit_location_sim=0.0, privacy_hold_s=0.0)  # AC-PER-67: identical synthetic frames
     run_window(rec, inv, 0, hint="Kibo")
     run_window(rec, inv, 10, summary="Somebody opens the crew quarters.")
     window, sightings = run_window(rec, inv, 20)
@@ -321,7 +321,7 @@ def test_ac_per_41_fixed_camera_never_carries(make_reconciler, inv):
 
 
 def test_ac_per_41_carry_can_be_turned_off(make_reconciler, inv):
-    rec = make_reconciler(camera_id="cam-handheld", module_carry_s=0.0)
+    rec = make_reconciler(camera_id="cam-handheld", revisit_location_sim=0.0, module_carry_s=0.0)  # AC-PER-67: identical synthetic frames
     run_window(rec, inv, 0, hint="Kibo")
     assert run_window(rec, inv, 10)[1][0]["location_id"] == "USOS"
 

@@ -144,6 +144,7 @@ class ReplayStats:
     asr_calls: int = 0
     decisions: int = 0
     structure_filtered: int = 0  # AC-PER-50: omni objects dropped as station structure
+    structure_memory_suppressed: int = 0  # AC-PER-64: unknowns matching an operator "not inventory" memory
     person_crops_dropped: int = 0  # AC-PER-49: object crops dropped because they overlapped a person
     unknown_queries: int = 0  # AC-PER-54: extra OWLv2 query texts run for unknown objects
     unknown_boxes_linked: int = 0  # AC-PER-54: unknown objects that got a query box

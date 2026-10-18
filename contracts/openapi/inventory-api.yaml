@@ -205,9 +205,14 @@ paths:
                 location_id: {type: [string, 'null']}
                 k: {type: integer, default: 10}
       responses: {'200': {description: candidates, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Candidate'}}}}}}
+  /structure-memory:
+    get:
+      summary: 'Active "Not inventory" memories (AC-API-46 / AC-PER-64): uncatalogued entities an operator dismissed with the note not_inventory, newest first; a memory is active while its entity is deleted or still dismissed'
+      parameters: [{name: limit, in: query, schema: {type: integer, default: 500, minimum: 1, maximum: 1000}}]
+      responses: {'200': {description: memories, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/StructureMemory'}}}}}}
   /ingest/window:
     post:
-      summary: Transactionally record one reconciled observation window (window + sightings + new entities + events + review items)
+      summary: 'Transactionally record one reconciled observation window (window + sightings + new entities + events + review items). A pipeline/speech moved event whose from and to are the same place or one inside the other is not stored (AC-API-47)'
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/IngestWindow'}}}}
       responses: {'201': {description: recorded}, '422': {description: invalid payload}}
 
@@ -436,6 +441,20 @@ components:
         last_location: {type: [string, 'null']}
         last_seen_at: {type: [string, 'null'], format: date-time}
         status: {type: string}
+    StructureMemory:
+      type: object
+      properties:
+        memory_id: {type: integer}
+        review_id: {type: [string, 'null'], format: uuid}
+        entity_id: {type: [string, 'null'], format: uuid}
+        label: {type: string}
+        label_key: {type: string, description: 'lower case, non-alphanumerics removed (perception AC-PER-31 key)'}
+        description_tokens: {type: array, items: {type: string}, description: 'distinct words (>= 3 letters, stop words removed, at most 40) of the label, description and latest sighting descriptions'}
+        location_id: {type: [string, 'null']}
+        module_id: {type: [string, 'null'], description: module containing location_id; null at segment level}
+        embedding: {type: [array, 'null'], items: {type: number}, description: "the entity's best exemplar (768-d), null when none"}
+        created_by: {type: string}
+        created_at: {type: string, format: date-time}
     IngestWindow:
       type: object
       required: [window, assignments]

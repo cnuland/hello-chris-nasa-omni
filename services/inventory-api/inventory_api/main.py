@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from . import __version__
+from . import __version__, structure_memory
 from .config import Settings
 from .deps import AppContext
 from .errors import install_handlers
@@ -39,7 +39,7 @@ def create_app(settings: Settings | None = None, object_store: ObjectStore | Non
     app = FastAPI(title="NASA Omni Inventory API", version=__version__, lifespan=lifespan)
     app.state.ctx = ctx
     install_handlers(app)
-    for module in (health, items, review, catalog, search, media, ingest):
+    for module in (health, items, review, catalog, search, media, ingest, structure_memory):
         app.include_router(module.router)
     return app
 

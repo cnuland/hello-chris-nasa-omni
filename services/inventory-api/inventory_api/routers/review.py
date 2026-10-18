@@ -25,6 +25,7 @@ from ..repo import (
 )
 from ..schemas import ResolveRequest, ReviewKind, ReviewStatus
 from ..storage import uri_to_url
+from ..structure_memory import is_not_inventory, record_not_inventory
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["review"])
@@ -470,17 +471,17 @@ def resolve_review(review_id: UUID, body: ResolveRequest, ctx: Ctx) -> dict[str,
                                updated_at = now() WHERE entity_id = %s""",
                         (entity_id,),
                     )
-                write_audit(
-                    conn,
-                    "dismiss",
-                    [entity_id] if entity_id else [],
-                    actor,
-                    {
-                        "review_id": str(review_id),
-                        "before": {"status": entity["status"]} if entity is not None else None,
-                        "note": body.note,
-                    },
-                )
+                detail: dict[str, Any] = {
+                    "review_id": str(review_id),
+                    "before": {"status": entity["status"]} if entity is not None else None,
+                    "note": body.note,
+                }
+                if entity is not None and entity["status"] != "merged" and is_not_inventory(body.note):
+                    # AC-API-46 (UI6-05): remember what the operator called station structure, where and how it looked
+                    memory_id = record_not_inventory(conn, review, entity_id, actor)
+                    if memory_id is not None:
+                        detail["structure_memory_id"] = memory_id
+                write_audit(conn, "dismiss", [entity_id] if entity_id else [], actor, detail)
                 new_status = "dismissed"
 
             updated = conn.execute(

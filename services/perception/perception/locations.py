@@ -21,10 +21,13 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Sequence
+from collections import deque
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+
+import numpy as np
 
 _NUMBER_WORDS = {
     "zero": "0",
@@ -625,3 +628,61 @@ class ModuleCarry:
         if scope.source == "hint" and not self.resolver.within(anchor_module, scope.location):
             return own  # the hint named a segment the anchored module is not in
         return CarryDecision(anchor_module, True, "carried", anchor_end, round(gap, 3))
+
+
+
+REVISIT_GALLERY_MAX = 400  # AC-PER-67: gallery windows kept per roaming camera (oldest dropped)
+
+
+@dataclass(frozen=True)
+class RevisitHit:
+    module: str
+    sim: float
+    from_t_end: datetime
+
+
+class RevisitLocator:
+    """AC-PER-67 revisit location for one roaming camera: frame embeddings of windows that placed themselves in a module
+    (hint or summary). ``query`` returns the module whose best frame-pair cosine with the window's frames is >= ``sim``
+    and beats every other module's best by >= ``margin``; only gallery windows that ended by ``t_start`` count."""
+
+    def __init__(self, max_windows: int = REVISIT_GALLERY_MAX):
+        self._gallery: deque[tuple[str, datetime, np.ndarray]] = deque(maxlen=max(int(max_windows), 1))
+
+    @staticmethod
+    def _matrix(embeddings: Sequence[Any]) -> np.ndarray | None:
+        rows = []
+        for e in embeddings:
+            v = np.asarray(e, dtype=np.float32).reshape(-1)
+            n = float(np.linalg.norm(v))
+            if v.size and np.all(np.isfinite(v)) and n > 0:
+                rows.append(v / n)
+        if not rows or len({r.size for r in rows}) != 1:
+            return None
+        return np.stack(rows)
+
+    def add(self, module: str, t_end: datetime, embeddings: Sequence[Any]) -> None:
+        m = self._matrix(embeddings)
+        if m is not None and module:
+            self._gallery.append((module, t_end, m))
+
+    def query(self, embeddings: Sequence[Any], t_start: datetime, *, sim: float, margin: float,
+              allowed: Callable[[str], bool] | None = None) -> RevisitHit | None:
+        q = self._matrix(embeddings)
+        if q is None or not sim or sim <= 0:
+            return None
+        best: dict[str, tuple[float, datetime]] = {}
+        for module, t_end, g in self._gallery:
+            if t_end > t_start or g.shape[1] != q.shape[1]:
+                continue
+            score = float(np.max(q @ g.T))
+            if module not in best or score > best[module][0]:
+                best[module] = (score, t_end)
+        if not best:
+            return None
+        ranked = sorted(best.items(), key=lambda kv: -kv[1][0])
+        module, (score, t_end) = ranked[0]
+        second = ranked[1][1][0] if len(ranked) > 1 else -1.0
+        if score < sim or score - second < margin or (allowed is not None and not allowed(module)):
+            return None
+        return RevisitHit(module, round(score, 4), t_end)

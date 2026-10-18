@@ -448,8 +448,9 @@ def test_ac_per_51_object_moved_and_seen_in_the_same_place_keeps_no_destination(
     payload, _ = run(make_reconciler(LAB_CAM), objects=[obj("drill", None, frame_index=0)],
                      events=[{"type": "moved", "object_label": "drill", "frame_index": 0, "confidence": 0.8}])
     assert next(a for a in payload["assignments"] if a.get("entity_id") == eid)
-    (ev,) = payload["events"]
-    assert ev["from_location"] == "LAB1" and ev["to_location"] is None
+    # AC-PER-70 amendment (UI6-08): a move with no destination was rendered live as "moved from LAB1 to USOS"; it is
+    # no longer emitted at all (the place is unchanged, so there is nothing to report)
+    assert payload["events"] == []
 
 
 @pytest.mark.parametrize("etype", ["removed", "consumed"])

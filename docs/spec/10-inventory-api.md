@@ -324,3 +324,50 @@ All additions are optional ingest fields, optional response fields and migration
   - Tests: tests/test_ac_api_45_location_downgrade.py.
   - *Review round:* a naive `seen_at` is read as UTC (it raised a 500 in the hold check); nothing is held or frozen
     unless the sighting is newer than `last_seen_at` (the UPDATE would not apply).
+
+## UI review round 6 (docs/ui-review/round6: UI6-05, UI6-08, UI6-10)
+
+- AC-API-46 **Structure memory** (UI6-05; perception AC-PER-64). Contract change: migration
+  `contracts/db/007_structure_memory.sql` and `GET /structure-memory` in the OpenAPI file.
+  - *Found live:* the operator dismissed "insulated hose" (review 6388e99f, frame 075900) as Not inventory; 10 minutes
+    later the same duct came back as the unknown "white padded tube". A dismissal was only remembered on that entity.
+  - *Table* `structure_memory` (idempotent migration: `CREATE TABLE/INDEX IF NOT EXISTS`, no backfill): `memory_id`
+    (bigserial), `review_id` (unique, `ON DELETE SET NULL`), `entity_id` (`ON DELETE SET NULL`), `label`, `label_key`
+    (the label lower-cased with every non-alphanumeric character removed, perception's AC-PER-31 key),
+    `description_tokens` (text[]), `location_id` and `module_id` (location FKs; `module_id` is the module containing
+    the location, null at segment level), `embedding` (halfvec(768), nullable), `created_by`, `created_at`.
+  - *Recording.* `POST /review/{id}/resolve` with `action = dismiss` and `note` equal to `not_inventory` (trimmed,
+    case-insensitive) on a review whose entity exists and has no `catalog_id` writes one row in the same
+    transaction (`ON CONFLICT (review_id) DO NOTHING`):
+    - `label` = the entity's label; `description_tokens` = the distinct words (lower case, letters only, at least 3
+      letters, minus a short stop list) of the entity's label, its description and its 5 latest sighting
+      descriptions, at most 40, in first-seen order (review round: person and clothing words excluded);
+    - `location_id` = the review's location, else the entity's `last_location`; `module_id` from it;
+    - `embedding` = the entity's best-quality exemplar cut from a sighting known not to overlap a person (review round:
+      linked `sighting_id`, `person_overlap` false), else null.
+    The dismiss audit row gets `structure_memory_id`. Other notes, other actions and catalogued entities write nothing.
+  - *Read.* `GET /structure-memory?limit=` (default 500, 1..1000), newest first: `{memory_id, review_id, entity_id,
+    label, label_key, description_tokens, location_id, module_id, embedding (768 floats or null), created_by,
+    created_at}`. Only *active* memories are listed: the entity was deleted, or it is still `dismissed` and its latest
+    dismissal note is `not_inventory` (an operator who restores or classifies the entity withdraws the memory).
+  - *Privacy.* Reviews never exist for no_capture places (AC-API-19), so no memory holds text of a private place.
+- AC-API-47 **No move inside one place** (UI6-08; perception AC-PER-70). Ingest does not store a `moved` event (source
+  `pipeline` or `speech`) whose `from_location` and `to_location` are both set and the destination is the origin or
+  contains it ("Laptop moved from Destiny (LAB1) to US Orbital Segment" was a loss of precision, not a move; review
+  round: a refinement such as USOS → LAB1 is stored). The event is skipped
+  (logged; `moved_events_skipped` in the ingest audit detail); the rest of the window is written. Operator moves
+  (`PATCH /items`) are unchanged.
+
+### Review round (AC-API-46/47)
+Fixes (test-first, `test_review_*` in tests/test_ac_api_46_47_ui_review_round6.py):
+- *Refinements are moves.* Only a coarsening (destination = origin or contains it) is skipped; USOS → LAB1 is stored.
+- *No person words in the memory.* `description_tokens` drop person and clothing words (crew, member, hair, wearing,
+  shirt, ...): a sighting description can mention a nearby crew member, and GET /structure-memory is a new read path.
+- *Only a verifiable exemplar.* The remembered embedding must come from an exemplar linked to a sighting known not to
+  overlap a person; a legacy exemplar without a link is not used.
+- *No reactivation.* A memory is active while its entity is dismissed and the entity's latest dismiss note is
+  `not_inventory`; restoring the entity and dismissing it again for another reason ("duplicate") withdraws it.
+
+Residual risks accepted: a skipped moved event does not add its entity to the ingest audit's touched list (the entity is
+sighted in the same payload in practice); memories never expire (an operator withdraws one by restoring or classifying
+the entity).

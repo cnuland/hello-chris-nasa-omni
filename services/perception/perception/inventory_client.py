@@ -33,6 +33,7 @@ class InventoryClient(Protocol):
     def list_items(self, **filters: Any) -> list[dict[str, Any]]: ...
     def patch_item(self, entity_id: str, fields: dict[str, Any]) -> dict[str, Any]: ...
     def list_events(self, **filters: Any) -> list[dict[str, Any]]: ...
+    def list_structure_memory(self, limit: int = 500) -> list[dict[str, Any]]: ...
 
 
 class HttpInventoryClient:
@@ -124,3 +125,12 @@ class HttpInventoryClient:
         """GET /events (entity_id, type, after, before, limit); newest first."""
         params = [(k, str(v)) for k, v in filters.items() if v is not None]
         return list(self._request("GET", "/events", params=params) or [])
+
+    def list_structure_memory(self, limit: int = 500) -> list[dict[str, Any]]:
+        """GET /structure-memory (AC-API-46 / AC-PER-64); an API without the endpoint (404) has no memory."""
+        try:
+            return list(self._request("GET", "/structure-memory", params={"limit": int(limit)}) or [])
+        except InventoryError as exc:
+            if exc.status_code == 404:
+                return []
+            raise

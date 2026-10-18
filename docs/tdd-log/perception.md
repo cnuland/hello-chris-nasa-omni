@@ -1237,3 +1237,108 @@ No window had the wrong module; all 14 misses stayed at segment level (USOS).
 
 - **After review:** `make test` all suites passed (api 517, perception 1483, agent 668, eval 408 + 1 skipped, dashboard
   471, e2e 29); `make eval` gate PASSED.
+
+## AC-PER-64..71 data quality, UI review round 6 (live Gemma 4 run, 2026-10-18)
+- **Measured first** (read-only: replica inventory-db-2, raw replies via the media proxy): the live run's 63 windows
+  saved as tests/fixtures/gemma4_tour_two_pass_2026-10-18.json (people/objects/events verbatim, private windows without
+  text) and the DINOv2 CLS embeddings of its 93 stored frames as tests/fixtures/gemma4_tour_frame_embeddings_2026-10-18
+  .json. Real strings for every test below come from these and the DB.
+- **Spec first:** docs/spec/20-perception.md "Amendments: data quality, UI review round 6" (AC-PER-64..71).
+- **Order note (honest):** for AC-PER-64 the label helpers (`head_family`, `content_tokens`) and config were written
+  before the first red run; the reconciler tests were red for the right reason (no suppression). For AC-PER-65/66/67/
+  68/69 minimal stubs returning "no" were added first so the red step failed on assertions, not import errors.
+- **AC-PER-64 structure memory.** Red 12/30. Green: `_Memory`, `_structure_memories` (TTL cache, keeps the old copy
+  on failure, 404 = none), `_remembered` (embedding ≥ assign_p / label key / same-place text), `HttpInventoryClient.
+  list_structure_memory`, `ReplayStats.structure_memory_suppressed`. Calibration change before green (test and spec):
+  token floor 0.5 → **0.6**, because the dismissed "hatch cover" against the open "white covering" is exactly 0.5
+  (the hose → tube case is 0.8). Test-design fix before green: the "below the auto band" case used a label of the same
+  family, so the text path matched; label changed. *Existing test amended (justified):*
+  `test_ac_per_07_reconciler_never_writes_catalog` allowed-call set gains the read `list_structure_memory`.
+  Live case: the tube was raised at 08:10, before the 08:16:55 dismissal, from another video offset; both at USOS, so
+  "same place" includes the same segment-level location (text evidence), which the spec says.
+- **AC-PER-65 empty spacesuits.** Red 17/29. Green: `people.is_empty_suit` (+ "extravehicular", "Orlan" phrases),
+  `Reconciler._suits_as_objects` before AC-PER-49/50. Data-driven refinements, each with a test: an `actor_ref` of an
+  event entry is a person (kept `test_ac_per_44_person_moving_itself_gets_no_actor` valid unchanged), except its own
+  "moved" (object = person class): live 07:56:30 "spacesuit with black and grey components" was only the actor of its
+  own move, while 08:02:00 / 08:17:00 "white suit" have an arm/hand moving (kept as people).
+- **AC-PER-66 colour, module unknown, spread, private-only.** Red 21/32. Green: `people.object_colours/
+  object_colour_conflict`, hair-length and legwear clashes in `_compare`, `_colour_clash` (entity description + 5
+  latest sighting texts in memory), `_same_known_module` replaces `_cross_module` for the AC-PER-60 hold,
+  `_spread_exceeded` (+ `_person_modules` memory), `_private_only` (AC-API-44 `snapshot_withheld_reason`).
+  - Bug found by `make eval` (crew transit `person_tracks_per_person` 2.0 > 1.3): the spread rule counted the module the
+    track was already in; fixed (a module seen within the window is not new), test added after the fix
+    (`test_a_module_the_track_was_just_in_is_not_new`).
+  - Design change measured on eval: strong evidence = overlap ≥ 0.8 (the Dice condition split the eval's single actor
+    at every "blue shirt, khaki pants" variant against its minimal first text).
+  - Test bug before green: the spread-expiry case used 900 s, beyond the AC-PER-45 cross-module horizon; now 700 s.
+  - *Existing tests amended (justified):* `test_ac_per_45_same_person_through_three_modules_in_five_minutes_is_one_
+    track` now expects the split at the third module (it is the live blue-shirt over-merge) and a new test proves a
+    distinctive look still crosses three modules; `test_ac_per_48_real_sequence_produces_far_fewer_tracks` bound 0.6 →
+    0.71 of AC-PER-35's 37 tracks (measured 21 → 26 with the hair/legwear clashes) plus a new purity assertion
+    (clashing pairs inside tracks ≤ 1, was 3); `test_ac_per_43_existing_entity_sighted_privately_gets_no_description`
+    now asserts no same_or_new decision in a private window (AC-PER-71) instead of the class-name decision subject.
+- **AC-PER-71 private windows.** In the same red run (2 of its 5 tests red; the other 3 held already). Green:
+  `_match_private`, no embedding in no_capture windows.
+- **AC-PER-67 revisit location.** Red 11/17. Green: `locations.RevisitLocator`, `Reconciler._revisit_step`, config.
+  Rule refined on data before green: a caption scene change does not block the visual match ("To COL" at 08:19:00 is
+  not even a mention; truth COL1). *Existing tests amended (justified):* five carry tests in test_ac_per_39_42 /
+  test_ac_per_60_63 run with `revisit_location_sim=0`: their synthetic windows paint identical frames, which match at
+  cosine 1.0; they test the carry in isolation.
+- **AC-PER-68/69/70.** Red 26/37. Green: `labels.kind_family/class_families/description_phrases/is_worn_item`,
+  `CatalogMapper._kind_clash`, `Reconciler._check_label` (remap or `label_doubt`: confidence cap + low_confidence
+  review), worn filter next to the structure filter, `_within_one_place` for omni and speech moves. Test bugs before
+  green: two tests did not account for the person assignment of people[]. *Existing tests amended (justified):*
+  `test_ac_per_51_object_moved_and_seen_in_the_same_place_keeps_no_destination` now asserts the event is dropped
+  (it is the live "moved from LAB1 to USOS" rendering); round-5 cap tests swap "wristwatch" for the real loose label
+  "green bag" (the watch is worn now); `test_ac_per_10_same_event_in_overlapping_windows_is_recorded_once` uses a later
+  move to Destiny and `test_ac_per_14_replay_default_windowing_dedups_repeated_omni_event` seeds the drill in LAB1
+  (NOD2 → NOD2 is no move any more). The dedup of overlapping-window moves is now mostly covered by AC-PER-70 itself.
+- **UI6-03 root cause** (spec AC-PER-67): not a regression; title-caption sampling phase drifts 3.2 s per pass (30 s
+  stride, 896.8 s loop). eval-real on the live API (4 passes, API mode): pass 1 11/15 = 0.733, pass 2 6/14 = 0.429,
+  pass 3 5/13 = 0.385 (1 wrong: a privacy-hold window, reply not stored), pass 4 4/13 = 0.308; export mode for passes
+  1–2: 11/15 and 6/15. Simulated on the real embeddings over 4 passes, the revisit location (0.94) adds +1 in pass 2
+  (08:04:30 → JPM1, 0.941) and +1 in pass 3 (08:19:00 → COL1, 0.943), 0 wrong, nothing in uncaptioned stretches.
+- **Effects on the real two-pass fixture** (replay through the reconciler, FakeInventory, no detector, revisit off;
+  HEAD vs new, script /tmp/ui6/measure_two_pass.py): person tracks 18 → 20, of which stowed-suit tracks 3 → 0 (the
+  one remaining "white suit" has an arm moving), suits as objects 0 → 4; most modules on one person track within
+  10 min 3 → 2; colour-clashing sighting pairs inside object entities 68 → 7; unknown entities 28 → 24 (wristwatch ×3,
+  yellow helmet filtered as worn); with the two live dismissals as memory 24 → 21 (insulated hose, hatch cover, white
+  padded tube suppressed; "white covering" kept); label-doubted sightings 1 (the "vacuum cleaner" drill); moved events
+  without a destination 2 → 0. "orange tool" no longer maps to the operator class "Orange ball".
+- **Runs:** perception **1633 passed** (1483 → +150), ruff clean; `make eval` gate PASSED (person_tracks_per_person
+  1.0); `make test` all suites passed (api 545, perception 1633, agent 668, eval 408 + 1 skipped, dashboard 473,
+  e2e 29 + 1 new); `make lint` clean.
+- **New env vars:** PERCEPTION_STRUCTURE_MEMORY_REFRESH_S (60, 0 = off), PERCEPTION_STRUCTURE_MEMORY_TOKEN_FLOOR
+  (0.6), PERCEPTION_PERSON_SPREAD_S (600, 0 = off), PERCEPTION_PERSON_SPREAD_MODULES (2), PERCEPTION_PERSON_SPREAD_FLOOR
+  (0.8), PERCEPTION_REVISIT_LOCATION_SIM (0.94, 0 = off), PERCEPTION_REVISIT_LOCATION_MARGIN (0.04),
+  PERCEPTION_LABEL_CONFLICT_CONFIDENCE (0.4).
+- **Adversarial review** (independent reviewer agent; 4 P1, 6 P2, 7 P3; each reproduced red in
+  tests/test_ac_per_64_71_review_round.py, 22 of 26 red, then fixed; one vacuous case found by me and rewritten:
+  "bag" maps to a catalog class, now "strap"):
+  1. *P1 remap through a verb* ("crew member wearing a headset" → headset): phrases end at "-ing" verb forms.
+  2. *P1 kind guard rejected coffee/drink/meal/food* (fungible seed classes): class families from every name word;
+     every seed name and synonym asserted to map.
+  3. *P1 worn phrasing about a nearby person* ("... crew member wearing a blue shirt", "on the face of the rack"): only
+     "worn" counts; body places need a possessive.
+  4. *P1 converted suit dropped as worn* ("astronaut wearing white spacesuit"): converted suits are exempt.
+  5. *P2 memory scope:* spec aligned with the live USOS/USOS case (text: same module or same location outside
+     modules); nearby label evidence needs a specific (≥ 2 words, not generic) label.
+  6. *P2 colour gate missed candidates outside the 50-row listing:* uses the candidate row and the sighting memory.
+  7. *P2 colour false clashes* ("laptop displaying a blue screen", "bag containing red tools"; white vs grey): more
+     phrase cuts; white/grey compatible.
+  8. *P2 refinements dropped* (speech USOS → NOD2): only coarsening moves are dropped (perception and API).
+  9. *P2 privacy:* a converted person object keeps no box (no crop/exemplar of a possibly suited crew member).
+  10. *P3:* embedding dimension guard; truthy `is_speaking`; carried/revisit modules not counted for the spread.
+  - *Existing tests amended in the review round (justified):* `test_object_colour_conflict_on_the_live_chain`
+    (white vs grey no longer clash, green still does); the AC-PER-65 person-object test now asserts no box and no
+    exemplar.
+  - Accepted (spec residual risks): continuity cost of the spread/clash rules, private-only check limited to the class
+    listing, per-window cost (class listing per class, 6 frame embeddings per roaming window), memory reactivation
+    handled API-side, in-memory per-entity histories not pruned.
+- **After review:** perception **1660 passed** (1483 → +177), ruff clean. Re-measured on the two-pass fixture: person
+  tracks 18 → 20 (stowed-suit tracks 3 → 0 by the spec's rule), unknown entities 28 → 24 (21 with the two live
+  dismissals as memory), moved without destination 2 → 0, label-doubted 1; colour-clashing pairs inside object
+  entities 68 → 18 by the naive metric of the measuring script, which still counts white vs grey (now deliberately
+  compatible). People fixture (AC-PER-48): 25 tracks (bound 26), 1 clashing pair. `make test` all suites passed (api
+  549, perception 1660, agent 668, eval 408 + 1 skipped, dashboard 473, e2e 30); `make eval` gate PASSED; `make lint`
+  clean.

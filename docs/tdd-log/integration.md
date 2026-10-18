@@ -215,3 +215,9 @@ Reported, not changed (they need spec or contract owners):
   allows `facts` (contract alignment, not a weakening).
 - `make test`: inventory-api 506, perception 1228, agent 632, eval 408 + 1 skipped, dashboard 422, e2e 29: all passed.
   `make eval`: gate PASSED. `make lint`: clean.
+
+## UI review round 6 e2e (2026-10-18)
+- `tests/e2e/test_e2e_structure_memory.py` (AC-API-46 + AC-PER-64): through the real inventory-api, an unknown
+  "insulated hose" is raised in COL1, dismissed with note not_inventory, listed by GET /structure-memory (module COL1),
+  and the same duct 11 minutes later as "white padded tube" is suppressed (no entity, `structure_memory_suppressed` 1).
+  Written after the implementation (both halves had unit tests first); passes.

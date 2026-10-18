@@ -199,6 +199,7 @@ class _Pipeline:
             self.stats.decisions += len((outcome.payload or {}).get("decisions") or [])
             window_doc = (outcome.payload or {}).get("window") or {}
             self.stats.structure_filtered += int(window_doc.get("structure_filtered") or 0)
+            self.stats.structure_memory_suppressed += int(window_doc.get("structure_memory_suppressed") or 0)
             self.stats.person_crops_dropped += int(window_doc.get("person_crops_dropped") or 0)
             self.stats.unknown_queries += int(window_doc.get("unknown_queries") or 0)
             self.stats.unknown_boxes_linked += int(window_doc.get("unknown_boxes_linked") or 0)

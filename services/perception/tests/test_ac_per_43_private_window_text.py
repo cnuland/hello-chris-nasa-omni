@@ -100,9 +100,10 @@ def test_ac_per_43_existing_entity_sighted_privately_gets_no_description(make_re
                      frames=[[]], labels={})
     assert_no_text(payload)
     assert payload["assignments"], "the known object must still be sighted"
-    labelled = [d for d in payload["decisions"] if "label" in d["subject"]]
-    assert labelled, payload["decisions"]
-    assert all(d["subject"]["label"] == "laptop" for d in labelled)  # the catalog class, never the omni label
+    # AC-PER-71 amendment: a private window attaches by class and place without asking the decision model, so no
+    # model text can reach the decision log at all (it used to carry the catalog class name, never the omni label)
+    assert [d for d in payload["decisions"] if d["question"] == "same_or_new"] == []
+    assert payload["assignments"][0]["entity_id"] is not None
 
 
 def test_ac_per_43_no_person_and_no_actor_in_a_private_window(make_reconciler, inv, storage):

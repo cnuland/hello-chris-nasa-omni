@@ -379,6 +379,16 @@ def _withheld_crops(
     return withheld
 
 
+def _move_within_one_place(ev: Any, locs: _Locations) -> bool:
+    """AC-API-47: a pipeline/speech ``moved`` event whose destination is its origin or contains it (LAB1 -> USOS)."""
+    if ev.event_type != "moved" or ev.source not in ("pipeline", "speech"):
+        return False
+    if ev.from_location is None or ev.to_location is None:
+        return False
+    # review round: only a coarsening (to is from, or contains it); a refinement USOS -> LAB1 is information
+    return ev.to_location in locs.chain(ev.from_location)
+
+
 def _request_digest(body: IngestWindow) -> str:
     canonical = json.dumps(body.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()
@@ -620,7 +630,14 @@ def _record_window(
 
     touched: list[UUID] = created + updated
     event_ids: list[str] = []
+    moved_skipped = 0
     for ev, private in zip(body.events, privacy.private_events, strict=True):
+        if _move_within_one_place(ev, locs):
+            # AC-API-47 (UI6-08): LAB1 -> USOS is a loss of precision, not a move
+            moved_skipped += 1
+            logger.info("moved event inside one place skipped",
+                        extra={"from_location": ev.from_location, "to_location": ev.to_location})
+            continue
         ev_entity = target(ev.entity_ref, ev.entity_id)
         event_ids.append(
             str(
@@ -717,6 +734,7 @@ def _record_window(
             "review_ids": review_ids,
             "decisions": len(body.decisions),
             "stock_keys": [{"catalog_id": su.catalog_id, "location_id": su.location_id} for su in body.stock_updates],
+            "moved_events_skipped": moved_skipped,
             "privacy_dropped_uris": len(privacy.dropped_uris),
             "person_crops_withheld": len(withheld),
             "private": private_window,

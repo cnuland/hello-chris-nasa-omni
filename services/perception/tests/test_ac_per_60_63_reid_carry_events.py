@@ -168,7 +168,7 @@ def _carry_run(rec, start, hint=None, summary="crew working in the module"):
 
 def test_live_case_unresolved_caption_hint_ends_the_carry(make_reconciler):
     """063108 (hint 'Cupola') then 063138 (hint 'NOD 3', a 'To NOD 3' sign in Node 1), 30 s later."""
-    rec = make_reconciler(HANDHELD)
+    rec = make_reconciler(HANDHELD, revisit_location_sim=0.0)  # AC-PER-67 off: the synthetic frames are identical
     assert _carry_run(rec, 0, hint="Cupola")[1] == "CUP1"
     loc, sighting = _carry_run(rec, 30, hint="NOD 3",
                                summary="A person in a grey shirt works near a rack while another person is visible "
@@ -178,7 +178,7 @@ def test_live_case_unresolved_caption_hint_ends_the_carry(make_reconciler):
 
 
 def test_carry_stays_ended_after_a_scene_change(make_reconciler):
-    rec = make_reconciler(HANDHELD)
+    rec = make_reconciler(HANDHELD, revisit_location_sim=0.0)  # AC-PER-67 off: the synthetic frames are identical
     _carry_run(rec, 0, hint="Cupola")
     _carry_run(rec, 10, hint="To COL")
     assert _carry_run(rec, 20)[1] == "USOS"

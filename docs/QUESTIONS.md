@@ -241,3 +241,12 @@ I need from you.
       descriptions are kept there.
     - "Who was in the crew quarters?" is answered "I don't report who was in a private area."
     - Change this if NASA wants presence (but not content) reported for private zones.
+40. **Second-pass location drop is sampling phase, not code (UI6-03).**
+    - **Cause:** Gemma reads module names almost only from NASA's on-screen title captions, which are up about 16 s.
+      With a 30 s stride on an 896.8 s loop, each pass samples 3.2 s later and misses captions.
+    - **Per-pass accuracy:** 0.73 / 0.43 / 0.39 / 0.31.
+    - A conservative DINOv2 "revisit location" (AC-PER-67) recovers a few windows with 0 wrong modules.
+    - **For a real ISS feed:** there are no captions, so location must come from fixed camera placement, signage or
+      speech.
+    - **Need:** NASA's camera inventory (fixed vs handheld, positions). That is the real location source for
+      production.

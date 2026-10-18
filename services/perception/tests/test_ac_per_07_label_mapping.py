@@ -150,4 +150,4 @@ def test_ac_per_07_reconciler_never_writes_catalog(make_reconciler):
     omni = OmniResult(status="ok", observation=observation([obj("mysterious widget", box)]), model="m")
     make_reconciler(api=api).process(scene_window(frames), omni, detections_for(frames, {"orb-1": "widget"}))
     assert set(api.calls) <= {"get_catalog", "get_locations", "candidates", "post_window", "count_live_entities",
-                              "list_items", "patch_item"}
+                              "list_items", "patch_item", "list_structure_memory"}  # AC-PER-64: a read
