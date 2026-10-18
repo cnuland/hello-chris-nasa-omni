@@ -153,3 +153,39 @@ I need from you.
 - **Cloud policy:** out of scope. NASA will handle it; the POC targets what NASA asked for (#15, #16, #26).
 - **Licences:** Gemma and NVIDIA Cosmos are accepted, since NASA already partners with Google and NVIDIA (#6). Both
   are now open as omni or perception options.
+30. **Gemma 4 12B on T4: measured (2026-10-18).**
+    - **Setup:** vLLM v0.31.0 with the sm75 patches, fp16, TP4, on its own 4×T4 node. It started cleanly in 10 min.
+      One T4 in the first VM failed its GSP firmware boot ("GPU is likely in a bad state"), so that Machine was
+      replaced.
+    - **Results by input type:**
+
+      | Input | fp16 result |
+      |---|---|
+      | Text | Correct in 3.5 s |
+      | Images | Degenerate ("our our our…") on every NASA window, 0 of 5 valid. The encoder-free image path overflows fp16 |
+      | Audio | Answered, but described a non-existent face, so the audio likely isn't being read correctly |
+
+    - **Action:** retry with `--dtype float32`, about 48 GB across 4×T4, slower decode.
+    - **Implication for GB10:** Blackwell has bf16 and FP8, so this overflow is a T4-only problem. T4 results for
+      Gemma (speed, and whether fp32 is needed) should not be read as GB10 expectations.
+    - **Qwen2.5-Omni on the same windows:** valid JSON 5 of 5, but often whole-frame boxes `[0,0,1,1]` with generic
+      labels ("space station interior"). This confirms omni boxes alone are too coarse, so OWLv2 stays.
+31. **Decision: Gemma 4 12B replaces Qwen2.5-Omni for perception (US-origin, better quality).**
+    - **fp32 on T4:** fp16 overflowed in the image path; fp32 fixes it. Same 8 NASA windows:
+
+      | | Qwen2.5-Omni | Gemma 4 (fp32) |
+      |---|---|---|
+      | Valid replies | 8/8 | 8/8 |
+      | Whole-frame junk boxes | 35 of 73 objects | 0 of 50 |
+      | Objects named | generic | specific ISS objects (hatch, EXPRESS rack, storage bags, monitor) |
+      | People | generic | "astronaut in a blue shirt floats in Kibo" |
+      | Latency | 22 s/window | 60 s/window on T4 |
+
+    - **Frame rate:** a 6-frame window every 60 s of video, per Chris ("doesn't need to be real time").
+    - **Audio:** vLLM dropped `input_audio` silently because librosa/soundfile were missing from the stock image. The
+      manifest now installs them at startup. ASR (/v1/audio/transcriptions) was unaffected: it has a fallback decoder,
+      verified with real speech.
+    - **Box sanity:** some Gemma boxes are inverted (x2<x1 or y2<y1) and need sanitising in perception.
+    - **Rest of the US-origin stack, planned:** chat Qwen3-8B → Gemma 4 12B QAT-W4A16 (text-only fp16 is fine on
+      T4); ASR Qwen3-ASR → Whisper large-v3-turbo (MIT). Decision (DiffusionGemma), OWLv2 (Google) and DINOv2 (Meta)
+      are already US-origin.

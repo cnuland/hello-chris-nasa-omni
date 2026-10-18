@@ -1,0 +1,307 @@
+[
+  {
+    "id": "UI2-01",
+    "priority": "P1",
+    "title": "\"Who used the drill?\" still answers \"I don't have a record of that.\" although the used event exists",
+    "page": "/chat",
+    "steps": "In /chat (in the 5-question conversation, and also as a single fresh question via POST /agent/chat) ask \"Who used the drill?\".",
+    "expected": "\"A person in a blue shirt with a headset used drill a454e74e at 2026-10-17 22:53 UTC in USOS\", with a citation. The event is in GET /api/events (fd45d05c, used, actor_desc 'in blue shirt, headset'), and the Overview feed shows it as \"USED drill a454e74e by person in blue shirt, headset\".",
+    "actual": "Both the conversation (15.3 s) and a fresh call (11 s) reply \"I don't have a record of that.\" with no citations. The status line shows that who_moved(name=\"drill\", event_types=[\"used\"]) ran, and it resolves up to 20 drill entities, so the event was in the tool payload. The most likely cause is the harness grounding check (harness.py ~l.494-500): `unsupported_claims(final, evidence)` rejects the LLM's paraphrase (e.g. \"person in a blue shirt\" or a reformatted time) and silently swaps in NO_RECORD_REPLY. A grounding rejection then looks the same to the operator as genuinely missing data.",
+    "suggested_fix": "When the grounding check rejects a reply but grounding data exists, fall back to a deterministic template built from the tool payload (\"<verb> by <actor> at <UTC>, <location>\"), as already done for catalog answers. Never return NO_RECORD_REPLY when the grounding payload is non-empty. Log the rejected claims. Add an e2e test: 'Who used the drill?' must mention a454e74e and the actor.",
+    "files": [
+      "services/agent/nasa_agent/harness.py",
+      "services/agent/nasa_agent/tools.py (_who_moved)"
+    ],
+    "screenshot": [
+      "63-chat-q3.png",
+      "80-overview.png"
+    ]
+  },
+  {
+    "id": "UI2-02",
+    "priority": "P1",
+    "title": "Follow-up questions silently inherit the previous turn's location filter",
+    "page": "/chat",
+    "steps": "In one conversation ask \"Where is the laptop right now?\" (answer mentions USOS), then the multimeter and drill questions, then \"What changed in the last hour?\". Separately, after \"What unknown objects are in Node 1?\", ask \"What changed in the last hour?\" again.",
+    "expected": "'What changed in the last hour?' is station-wide: recent_changes with no location argument.",
+    "actual": "Q4 called recent_changes(since=00:17:57Z, location=\"USOS\") and answered \"No changes were recorded in the last hour in the USOS location.\" Asked again after the NOD1 question, it called recent_changes scoped to NOD1 and answered \"In the last hour in Node 1 (NOD1)…\". This time the only change happened to be in NOD1, so a change anywhere else would have been hidden. Follow-ups now trigger tools (the round-1 UI-01 symptom is gone), but scope leaking from earlier turns makes multi-turn answers silently wrong.",
+    "suggested_fix": "Agent system prompt: carry location or time scope into a tool call only when the current question refers to it (\"there\", \"that module\"). Otherwise use the question's own scope. Consider stripping location arguments the current user turn doesn't mention (a cheap check against the last user message). Always state the scope in the reply, as it does now. Add a multi-turn eval with these 5 questions.",
+    "files": [
+      "services/agent/nasa_agent/context.py (system prompt)",
+      "services/agent/nasa_agent/harness.py"
+    ],
+    "screenshot": [
+      "64-chat-q4.png",
+      "69-chat-q9-after-edit.png"
+    ]
+  },
+  {
+    "id": "UI2-03",
+    "priority": "P2",
+    "title": "Chat answers are cut off mid-word at the 400-token cap, with no indication",
+    "page": "/chat",
+    "steps": "Ask \"Where is the laptop right now?\".",
+    "expected": "All 5 laptops are listed, or the answer is shortened deliberately (e.g. a table, or 'and 2 more, see citations') and says it was shortened.",
+    "actual": "The reply stops at \"…Last Seen: 2026-10-17T23:00:12Z **Conf\": 4 of the 5 cited laptops, with a dangling '**'. There's no 'truncated' notice. AGENT_MAX_OUTPUT_TOKENS=400 (config.py, AC-AGT-15) caps every LLM call, and finish_reason=length is not handled.",
+    "suggested_fix": "On finish_reason=length, either retry once asking for a compact format, or append \"(answer shortened, see the citations for all N items)\". Have the prompt ask for one line per item (\"laptop da9709e7: USOS, 22:51 UTC\") rather than 4-line bullets. Consider raising the cap for list answers.",
+    "files": [
+      "services/agent/nasa_agent/config.py",
+      "services/agent/nasa_agent/harness.py",
+      "services/agent/nasa_agent/context.py"
+    ],
+    "screenshot": [
+      "61-chat-q1.png"
+    ]
+  },
+  {
+    "id": "UI2-04",
+    "priority": "P2",
+    "title": "\"Last hour\" window is computed by the LLM and can be wrong; one call took 61 s and returned non-JSON",
+    "page": "/agent/chat",
+    "steps": "POST /agent/chat {messages:[{user:'What changed in the last hour?'}]} at about 01:20 UTC (twice).",
+    "expected": "since = now - 1 h (≈00:20Z). Latency within the AC-AGT-15 bounds. The response is always JSON.",
+    "actual": "Attempt 1: after 61 s the body was not JSON (likely a gateway timeout page). Attempt 2 (17 s) called recent_changes(since=\"2026-10-17T23:20:16Z\"), a 2-hour window, and reported the 00:06-00:07 operator changes from more than an hour earlier as \"in the last hour\". Inside the dashboard conversation, since was correct (00:17:57Z at 01:17), so the error is intermittent.",
+    "suggested_fix": "Give recent_changes a `window_minutes` (or `relative: '1h'`) argument and compute `since` on the server from its clock. Use the LLM-supplied ISO `since` only for explicit absolute times. Make sure non-stream /agent/chat returns a JSON error inside the latency bound instead of hitting the route timeout.",
+    "files": [
+      "services/agent/nasa_agent/tools.py (RecentChangesArgs, _recent_changes)",
+      "services/agent (route timeout)"
+    ],
+    "screenshot": [
+      "64-chat-q4.png"
+    ]
+  },
+  {
+    "id": "UI2-05",
+    "priority": "P2",
+    "title": "Merge is one click, irreversible, with no confirm or undo, and the merged item doesn't say where it went",
+    "page": "/review, /items/:id",
+    "steps": "Set an operator on /review and click \"Merge subject into this\" on a candidate (done on review 85c4f568). Then open the source item d34865e0.",
+    "expected": "Merge is the most destructive review action, so it should have a confirm step (as Dismiss now does) or an Undo toast. The API already keeps undo data (merging.py). The toast should name and link the target item. The source item page should show \"Merged into cargo transfer bag 99eba10e\" with a link (the API returns merged_into).",
+    "actual": "One click POSTs merge_into immediately. The toast reads \"Review resolved (merge into)\", with no link and no Undo. /items/d34865e0 shows only Status 'merged', Sightings (0) and an audit line \"merge by ui-review-2\". ItemDetailPage never reads merged_into, so a bookmarked or cited item turns into a dead end.",
+    "suggested_fix": "ReviewPage: add an inline confirm (\"Merge cargo transfer bag d34865e0 into 99eba10e (USOS)? Sightings move to the target.\") and a toast with a link to the target. Add an Undo if the API exposes an unmerge endpoint (the data is already stored). ItemDetailPage: when status=merged, show a banner with a link to merged_into.",
+    "files": [
+      "dashboard/src/pages/ReviewPage.tsx",
+      "dashboard/src/pages/ItemDetailPage.tsx",
+      "services/inventory-api (unmerge endpoint)"
+    ],
+    "screenshot": [
+      "43-review-dup-cargo-1.png",
+      "48-after-merge.png",
+      "49-merged-source.png",
+      "49b-merge-target.png"
+    ]
+  },
+  {
+    "id": "UI2-06",
+    "priority": "P2",
+    "title": "\"Suggested: nearest same-class items\" are not nearest: every review of a class gets the same unranked list",
+    "page": "/review",
+    "steps": "Open /review?kind=possible_duplicate and compare the candidates of the drill reviews (c1b5a06f, 06754783, 33b8bc6e, 386c5ef0…) and the camera reviews.",
+    "expected": "Candidates ranked by similarity (or by same location and time proximity), with the similarity shown, as for the 14 'stored' reviews.",
+    "actual": "23 of 37 duplicate reviews use candidates_source=suggested. All drill reviews list the same 8 entities in the same order (a454e74e, 09d2a49c, 9aa9f4df…, USOS first) with Similarity '—'. A NOD1 drill subject has its NOD1 sibling 29dd3373 in 4th place. All camera reviews share one list too. The heading claims \"nearest\", so the operator trusts the first tile, and the 9aa9f4df 'drill' thumbnail is a toy space shuttle.",
+    "suggested_fix": "inventory-api: rank suggested candidates by embedding similarity when exemplars exist, otherwise by same location and then |Δ last_seen|, and return the similarity. Exclude the subject's own other reviews. Dashboard: if similarity is missing, label the section \"Other items of this class (unranked)\".",
+    "files": [
+      "services/inventory-api (review candidates)",
+      "dashboard/src/pages/ReviewPage.tsx (DuplicateCompare heading)"
+    ],
+    "screenshot": [
+      "41-review-filter-nod1-drill.png",
+      "42-review-duplicate-card-1024.png"
+    ]
+  },
+  {
+    "id": "UI2-07",
+    "priority": "P2",
+    "title": "Bounding boxes can point at the wrong spot, and candidate tiles and item heroes have no box at all",
+    "page": "/review, /items/:id, /",
+    "steps": "Open /review, then the first unknown card (\"tool: a black tool with a long handle\", review 46b7f28c), and click to enlarge.",
+    "expected": "The box surrounds the object described.",
+    "actual": "image_bbox [0.70,0.55,0.80,0.65] frames a blank strip of white bag. The black long-handled object (a brush) sits to its right, at about x 0.88-1.0. Coordinates are coarse (0.05 steps). Duplicate candidate tiles and the item detail hero (72 of 123 inventory snapshots are whole frames) still show the whole frame with no box. Example: the laptop da9709e7 hero is a corridor with no visible laptop.",
+    "suggested_fix": "Perception: check the omni bbox against a detector or crop, or store the crop. Draw boxes only above a confidence threshold. API: expose the snapshot bbox on items and candidates so that FrameImage can draw it in the hero, the tiles and the inventory thumbnails. Pad the drawn box by about 30% while boxes are coarse.",
+    "files": [
+      "services/perception",
+      "services/inventory-api (items/candidates bbox)",
+      "dashboard/src/components/FrameImage.tsx"
+    ],
+    "screenshot": [
+      "44-review-lightbox.png",
+      "20-detail-laptop-used.png",
+      "42-review-duplicate-card-1024.png"
+    ]
+  },
+  {
+    "id": "UI2-08",
+    "priority": "P2",
+    "title": "\"What unknown objects are in Node 1?\" still answers \"I don't have a record of that.\"",
+    "page": "/chat",
+    "steps": "Ask \"What unknown objects are in Node 1?\" in the conversation and as a fresh question.",
+    "expected": "\"There are no open unknown objects in Node 1 Unity (NOD1).\" (GET /api/items?location=NOD1&status=unknown returns 0), or a list of any that exist.",
+    "actual": "In the conversation, list_unknowns(location=\"NOD1\") ran and returned nothing, and the reply was \"I don't have a record of that.\" A fresh call passed location=\"Node 1\" (a display name, not resolved to NOD1) and got the same reply. An empty scoped result needs an explicit 'none in <scope>' answer: AC-AGT-13 did this for recent_changes but not for list_unknowns.",
+    "suggested_fix": "Apply the AC-AGT-13 empty-scope rule to list_unknowns (and search_items): \"No open unknown objects in <name> (<code>).\" Resolve module names and aliases to codes in the tool layer (\"Node 1\", \"Unity\" -> NOD1) before calling the API.",
+    "files": [
+      "services/agent/nasa_agent/tools.py (list_unknowns)",
+      "services/agent/nasa_agent/harness.py"
+    ],
+    "screenshot": [
+      "65-chat-q5.png"
+    ]
+  },
+  {
+    "id": "UI2-09",
+    "priority": "P3",
+    "title": "Event wording: uses read as moves to \"an unknown location\", timeline events are still raw, and added/used events say \"from X\"",
+    "page": "/items/:id, /overview",
+    "steps": "Open /items/da9709e7-4ed6-4b2d-beb0-aa6c814ae764 (Activity and History) and /overview.",
+    "expected": "\"Used by person (blue shirt, black shorts, headset) at 22:50:05 UTC in US Orbital Segment (USOS)\". History EVENT rows use the same phrasing. Overview: \"ADDED … at Node 3 Tranquility\" (as AC-UI-18 specifies) and \"USED … in USOS\".",
+    "actual": "Activity: \"Used by … from US Orbital Segment (USOS) to an unknown location\", although a use is not a move. The History EVENT rows still show the round-1 raw text \"used USOS -> ? by Blue shirt, black shorts, headset\". Overview: \"ADDED cargo transfer bag 84a753de from Node 3 Tranquility (NOD3)\", \"ADDED camera ad2b2a65 … from Node 1 Unity\", \"USED camera f66bf370 from US Orbital Segment\".",
+    "suggested_fix": "format.ts: one eventSentence(e) shared by Activity, Timeline and the Overview feed. For non-move types (used, handed_over, added, stowed) with only one location, render \"in/at <from ?? to>\". Use \"to an unknown location\" only for moved.",
+    "files": [
+      "dashboard/src/lib/format.ts",
+      "dashboard/src/pages/ItemDetailPage.tsx (Timeline event rows)",
+      "dashboard/src/pages/OverviewPage.tsx"
+    ],
+    "screenshot": [
+      "20-detail-laptop-used.png",
+      "80-overview.png"
+    ]
+  },
+  {
+    "id": "UI2-10",
+    "priority": "P3",
+    "title": "Operator ids are shown as people: \"Moved by person (ui-review-2)\"",
+    "page": "/, /items/:id, /overview",
+    "steps": "Edit an item's location as operator ui-review-2, then view the detail page, the inventory's Last handled column and the overview feed.",
+    "expected": "\"Moved by operator ui-review-2 · 01:24 UTC\". It's an operator action, not a camera-observed person.",
+    "actual": "Detail and Activity read \"Moved by person (ui-review-2)\". The overview reads \"by person (ui-review)\". actorPhrase wraps any bare string as \"person (…)\".",
+    "suggested_fix": "When event.source is operator/api, or actor_desc equals the item's location_set_by, render \"operator <id>\". Optionally add an 'operator' badge. Keep actorPhrase for pipeline actors only.",
+    "files": [
+      "dashboard/src/lib/format.ts (actorPhrase)",
+      "dashboard/src/components/LastHandled.tsx",
+      "dashboard/src/pages/OverviewPage.tsx"
+    ],
+    "screenshot": [
+      "31-edit-saved.png",
+      "22-detail-operator-edited.png",
+      "80-overview.png"
+    ]
+  },
+  {
+    "id": "UI2-11",
+    "priority": "P3",
+    "title": "History grouping double-counts in its label: \"9 × 9 pipeline updates (sighting refresh…)\"",
+    "page": "/items/:id",
+    "steps": "Open /items/ec044362-a184-449b-a016-8d011373ee10, then History.",
+    "expected": "\"9 pipeline updates (sighting refresh: last_seen_at/confidence)\" or \"9 × update by pipeline\".",
+    "actual": "The API-collapsed summary already contains the count, and the UI adds \"N ×\" in front: \"9 × 9 pipeline updates…\", \"3 × 3 pipeline updates…\". API-collapsed groups also have no 'Show N entries' disclosure, unlike client-folded groups.",
+    "suggested_fix": "groupTimeline: when an entry has count>1 from the API, don't add the 'N ×' prefix (or strip the leading count from the summary). Offer the disclosure consistently, or label the row 'collapsed by server'.",
+    "files": [
+      "dashboard/src/pages/ItemDetailPage.tsx (groupTimeline)"
+    ],
+    "screenshot": [
+      "21-detail-person.png",
+      "20-detail-laptop-used.png"
+    ]
+  },
+  {
+    "id": "UI2-12",
+    "priority": "P3",
+    "title": "Chat Markdown: ordered lists with nested bullets restart at \"1.\", underscores aren't italic, and timestamps are raw ISO",
+    "page": "/chat",
+    "steps": "Ask \"Where is the laptop right now?\". A mocked reply \"1. one\\n   - sub\\n2. two\" was also tested.",
+    "expected": "1, 2, 3, 4 numbering. _x_ renders as italic. Times in the app's \"2026-10-17 22:51 UTC\" format.",
+    "actual": "Every laptop entry shows \"1.\": a nested list closes the <ol> and the renderer opens a new one (2 <ol> in the mock). _it_ renders literally. Answers carry \"2026-10-17T22:51:03Z\" while the chips show \"2026-10-17 22:51 UTC\". The renderer is safe: <img onerror>, <script> and javascript: links all stayed text (73-chat-markdown-safety).",
+    "suggested_fix": "markdown.tsx: nest indented list items inside the parent <li>, or keep the counter and render <ol start={n}>. Support _em_. Optionally reformat ISO-Z timestamps in assistant text with formatUtc, or ask the agent to use the UI format.",
+    "files": [
+      "dashboard/src/lib/markdown.tsx",
+      "services/agent (prompt)"
+    ],
+    "screenshot": [
+      "61-chat-q1.png",
+      "73-chat-markdown-safety.png"
+    ]
+  },
+  {
+    "id": "UI2-13",
+    "priority": "P3",
+    "title": "Review queue shows no result count after filtering; the tab counts stay global",
+    "page": "/review",
+    "steps": "On /review choose Location NOD1 and search 'drill'.",
+    "expected": "\"4 matching reviews\" (the API sends X-Total-Count: 4). Tab counts reflect the active location and search, or say they're totals.",
+    "actual": "No count at all. \"Showing N of M\" only appears when the list is truncated (total > rendered). The tabs still read All (67) / Unknown objects (30) / Possible duplicates (37).",
+    "suggested_fix": "ReviewPage: always render \"{reviews.length} of {total} open reviews\" when a filter is active. Mark the tab counts as totals, or recompute them for the active filters.",
+    "files": [
+      "dashboard/src/pages/ReviewPage.tsx (~l.523)"
+    ],
+    "screenshot": [
+      "41-review-filter-nod1-drill.png"
+    ]
+  },
+  {
+    "id": "UI2-14",
+    "priority": "P3",
+    "title": "axe landmark-unique: every duplicate card repeats the same \"Subject\" and \"Possible matches\" region names",
+    "page": "/review",
+    "steps": "Run axe on /review (at 1440 and 1024).",
+    "expected": "0 violations, as in round 1.",
+    "actual": "landmark-unique (moderate): <section className=\"dup-subject\"> and \"dup-candidates\" are labelled by identical headings on 37 cards, so a screen reader's landmark list shows dozens of identical regions. It's the only axe violation on any route.",
+    "suggested_fix": "Name the sections uniquely (aria-label=\"Subject: camera e9294f67\" / \"Possible matches for camera e9294f67\"), or use <div role=group> instead of <section>.",
+    "files": [
+      "dashboard/src/pages/ReviewPage.tsx (DuplicateCompare l.157/166)"
+    ],
+    "screenshot": [
+      "42b-review-duplicate-card-1440.png"
+    ]
+  },
+  {
+    "id": "UI2-15",
+    "priority": "P3",
+    "title": "Review result toasts use API jargon: \"Review resolved (assign catalog)\" after \"Not a duplicate (keep both)\"",
+    "page": "/review",
+    "steps": "Click \"Not a duplicate (keep both)\" on review 8ac61810. Also merge a duplicate.",
+    "expected": "\"Kept both: cargo transfer bag 9abfabbc stays a separate item\" / \"Merged d34865e0 into cargo transfer bag 99eba10e\", each with a link.",
+    "actual": "The toasts read \"Review resolved (assign catalog)\" and \"Review resolved (merge into)\". The keep-both one contradicts the button the operator just pressed.",
+    "suggested_fix": "ReviewPage resolve(): build the toast text from the UI action (keep-both, merge, classify, dismiss) and the subject and target labels, not from humanize(body.action).",
+    "files": [
+      "dashboard/src/pages/ReviewPage.tsx (~l.459)"
+    ],
+    "screenshot": [
+      "50-after-keep-both.png",
+      "48-after-merge.png"
+    ]
+  },
+  {
+    "id": "UI2-16",
+    "priority": "P3",
+    "title": "Chat tokens are still buffered: the first text arrives at the same moment as the end of the answer",
+    "page": "/chat",
+    "steps": "Ask any question and watch the reply.",
+    "expected": "Text appears progressively once the 'Writing the answer' phase starts.",
+    "actual": "Status events arrive promptly ('Reading the question' → tool name → 'Writing the answer' → 'Checking the answer against the records'), with elapsed seconds and Stop. All tokens are sent after the grounding check, so the first token equals the done time for every question (10.2-29.7 s). Acceptable given the status line, but the 'streaming' label is cosmetic.",
+    "suggested_fix": "Either stream the draft and show a 'verifying…' badge that can retract it, or keep buffering and drop the token-by-token replay (send the reply in one event) to save the overhead. Document the choice.",
+    "files": [
+      "services/agent/nasa_agent/harness.py",
+      "dashboard/src/pages/ChatPage.tsx"
+    ],
+    "screenshot": [
+      "70-chat-thinking-1024.png"
+    ]
+  },
+  {
+    "id": "UI2-17",
+    "priority": "P3",
+    "title": "Filter bar alignment: date fields sit higher at 1440, the 'Needs review' checkbox is still isolated, and Sort is clipped at 1024",
+    "page": "/",
+    "steps": "Load / at 1440×1000 and at 1024×1000.",
+    "expected": "Filter controls share baselines; status and needs-review are grouped; the select text isn't clipped.",
+    "actual": "At 1440 the Seen after/before inputs (y=156) sit about 20 px above Kind/Location (y=177) because of their hint line, and 'Needs review' floats alone at the far right (x=1220) away from the Status group. At 1024, the Sort select shows \"Last seen (newest first)\" with the text under the caret.",
+    "suggested_fix": "theme.css .filters: align-items:end for the grid row, or put the hint below without affecting the label offset. Move 'Needs review' into the Status fieldset. Give the Sort select min-width: 14rem, or span 2 columns at narrow widths.",
+    "files": [
+      "dashboard/src/styles/theme.css",
+      "dashboard/src/pages/InventoryPage.tsx"
+    ],
+    "screenshot": [
+      "01-inventory-default.png",
+      "01-inventory-default-1024.png"
+    ]
+  }
+]

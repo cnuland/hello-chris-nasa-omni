@@ -1,6 +1,8 @@
 # Google Gemma 4 12B "Unified" (Apache-2.0, US-origin): images + speech audio in, JSON (incl. box_2d) out.
 # Candidate replacement for Qwen2.5-Omni (research/07-us-models.md). Plain vLLM /v1/chat/completions (no vLLM-Omni
-# pipeline exists for Gemma 4); structured outputs (xgrammar) available. T4 (sm75): fp16, TP4 on its own 4xT4 node,
+# pipeline exists for Gemma 4); structured outputs (xgrammar) available. T4 (sm75) has no bf16 and in fp16 the
+# encoder-free image path overflows (measured: text OK, images -> 'our our our...'), so it runs FLOAT32 (~48 GB),
+# TP4 on its own 4xT4 node. On GB10 (Blackwell) use bf16/FP8 instead.
 # with the same Triton attention / sampler patches as DiffusionGemma (Gemma 4's 512-wide heads, vLLM issue #38918).
 apiVersion: v1
 kind: ServiceAccount
@@ -36,6 +38,9 @@ spec:
         - /bin/bash
         - -c
         - |
+          # vllm[audio] extras are not in the stock image: without them vLLM drops input_audio with only a log line
+          # ("Please install vllm[audio]") and the model answers without the audio. Measured 2026-10-18.
+          pip install --quiet --no-cache-dir 'librosa>=0.10' 'soundfile>=0.12' || echo 'WARNING: audio extras install failed'
           F=/usr/local/lib/python3.12/dist-packages/vllm/v1/attention/ops/triton_unified_attention.py
           python3 - "$F" <<'PY'
           import sys
@@ -72,10 +77,10 @@ spec:
         - --host=0.0.0.0
         - --port=8000
         - --tensor-parallel-size=4
-        - --dtype=half
-        - --max-model-len=16384
+        - --dtype=float32   # fp16 overflows in the image path on T4 (no bf16 on sm75)
+        - --max-model-len=8192
         - --max-num-seqs=2
-        - --gpu-memory-utilization=0.85
+        - --gpu-memory-utilization=0.92
         - --limit-mm-per-prompt={"image":8,"audio":1}
         env:
         - {name: HOME, value: /cache}

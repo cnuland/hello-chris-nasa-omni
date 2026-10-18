@@ -1,5 +1,8 @@
-# Qwen3-8B (Apache-2.0) for the chatbot and inventory agent: tool calling (hermes parser). T4 has no FP8, so the
-# official AWQ 4-bit checkpoint (~5.7 GB) runs fp16 on GPU 2 of the perception node; Qwen3-ASR has GPU 3.
+# US-origin chat + ASR on the perception node (GPUs 2 and 3), replacing Qwen3-8B-AWQ and Qwen3-ASR (QUESTIONS #31).
+# - agent-llm: Google Gemma 4 12B QAT W4A16 (Apache-2.0), tool calling via the gemma4 parsers. Text-only fp16 works
+#   on T4 (only the image path overflows), with the same sm75 attention/sampler patches as Gemma 4 / DiffusionGemma.
+# - asr: OpenAI Whisper large-v3-turbo (MIT) on /v1/audio/transcriptions, served as "asr".
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata: {name: agent-llm, namespace: nasa-inference, labels: {app: agent-llm}}
@@ -10,22 +13,58 @@ spec:
   template:
     metadata: {labels: {app: agent-llm}}
     spec:
+      serviceAccountName: gemma4   # anyuid for the sm75 start-up patches (see gemma4.yaml)
       nodeSelector: {nasa-role: perception}
       tolerations: [{key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}]
       containers:
         - name: vllm
           image: docker.io/vllm/vllm-openai:v0.31.0
-          args: ["Qwen/Qwen3-8B-AWQ", "--served-model-name", "agent", "--host", "0.0.0.0", "--port", "8000",
-                 "--max-model-len", "16384", "--gpu-memory-utilization", "0.90", "--dtype", "half",
-                 "--enable-auto-tool-choice", "--tool-call-parser", "hermes", "--reasoning-parser", "qwen3",
-                 "--default-chat-template-kwargs", '{"enable_thinking": false}']   # T4 ~42 tok/s: thinking made tool turns exceed 30 s
-          env: [{name: HOME, value: /cache}, {name: HF_HOME, value: /cache/hf}]
+          command:
+          - /bin/bash
+          - -c
+          - |
+            pip install --quiet --no-cache-dir 'librosa>=0.10' 'soundfile>=0.12' || echo 'WARNING: audio extras install failed'   # vllm[audio]
+            F=/usr/local/lib/python3.12/dist-packages/vllm/v1/attention/ops/triton_unified_attention.py
+            python3 - "$F" <<'PY'
+            import sys
+            p = sys.argv[1]; s = open(p).read()
+            anchor = "        launch_num_stages = 2\n"
+            patch = anchor + "    if not current_platform.has_device_capability(80):  # T4/sm75: 64KB smem per block\n        launch_num_stages = 1\n"
+            anchor2 = "        TILE_SIZE_DECODE = min(TILE_SIZE_DECODE, block_size)\n"
+            patch2 = anchor2 + "    if not current_platform.has_device_capability(80):  # T4/sm75 tile: head_size 512 x 32-token K/V tiles need 96KB\n        TILE_SIZE_PREFILL = min(TILE_SIZE_PREFILL, 16)\n        TILE_SIZE_DECODE = min(TILE_SIZE_DECODE, 16)\n"
+            if "T4/sm75" not in s:
+                if anchor in s and anchor2 in s:
+                    s = s.replace(anchor, patch, 1).replace(anchor2, patch2, 1); open(p, "w").write(s)
+                    print("patched triton_unified_attention for sm75 (1 stage, 16-token tiles)")
+                else:
+                    print("WARNING: sm75 patch anchors not found in this vLLM build - running unpatched")
+            PY
+            # sm75: keep top-k/top-p sampling off Triton. Only the sampling rank runs it, and its JIT warm-up loads kernels
+            # while the other tensor-parallel ranks sit in collectives: the pod hung in triton _init_handles for 77 min.
+            S=/usr/local/lib/python3.12/dist-packages/vllm/v1/sample/ops/topk_topp_sampler.py
+            python3 - "$S" <<'PY'
+            import sys
+            p = sys.argv[1]; s = open(p).read(); a = "    if HAS_TRITON:\n        return apply_top_k_top_p_triton(logits, k, p)\n"
+            if a in s and "sm75 sampler" not in s:
+                s = s.replace(a, "    from vllm.platforms import current_platform  # sm75 sampler: pytorch path\n"
+                                 "    if HAS_TRITON and current_platform.has_device_capability(80):\n        return apply_top_k_top_p_triton(logits, k, p)\n", 1)
+                open(p, "w").write(s); print("patched top-k/top-p sampler: pytorch on sm75")
+            else:
+                print("WARNING: sampler patch anchor not found")
+            PY
+            exec vllm serve "$@"
+          - vllm-serve
+          args: ["google/gemma-4-12B-it-qat-w4a16-ct", "--served-model-name", "agent", "--host", "0.0.0.0", "--port", "8000", "--dtype", "half", "--max-model-len", "16384", "--gpu-memory-utilization", "0.90", "--max-num-seqs", "4", "--enable-auto-tool-choice", "--tool-call-parser", "gemma4", "--reasoning-parser", "gemma4"]
+          env:
+            - {name: HOME, value: /cache}
+            - {name: HF_HOME, value: /cache/hf}
+            - {name: CUDA_MODULE_LOADING, value: EAGER}
           ports: [{containerPort: 8000, name: openai}]
           resources:
             requests: {cpu: "2", memory: 16Gi, nvidia.com/gpu: "1"}
             limits: {cpu: "8", memory: 32Gi, nvidia.com/gpu: "1"}
           volumeMounts: [{name: cache, mountPath: /cache}]
-          startupProbe: {httpGet: {path: /health, port: 8000}, periodSeconds: 15, failureThreshold: 120}
+          startupProbe: {httpGet: {path: /health, port: 8000}, periodSeconds: 15, failureThreshold: 240}
           readinessProbe: {httpGet: {path: /health, port: 8000}, periodSeconds: 10}
       volumes: [{name: cache, emptyDir: {sizeLimit: 40Gi}}]
 ---
@@ -44,22 +83,60 @@ spec:
   template:
     metadata: {labels: {app: asr}}
     spec:
+      serviceAccountName: gemma4   # anyuid for the sm75 start-up patches (see gemma4.yaml)
       nodeSelector: {nasa-role: perception}
       tolerations: [{key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}]
       containers:
         - name: vllm
           image: docker.io/vllm/vllm-openai:v0.31.0
-          args: ["Qwen/Qwen3-ASR-1.7B", "--served-model-name", "asr", "--host", "0.0.0.0", "--port", "8000",
-                 "--gpu-memory-utilization", "0.85", "--dtype", "half", "--max-model-len", "8192", "--trust-remote-code"]
-          env: [{name: HOME, value: /cache}, {name: HF_HOME, value: /cache/hf}]
+          command:
+          - /bin/bash
+          - -c
+          - |
+            pip install --quiet --no-cache-dir 'librosa>=0.10' 'soundfile>=0.12' || echo 'WARNING: audio extras install failed'   # vllm[audio]
+            F=/usr/local/lib/python3.12/dist-packages/vllm/v1/attention/ops/triton_unified_attention.py
+            python3 - "$F" <<'PY'
+            import sys
+            p = sys.argv[1]; s = open(p).read()
+            anchor = "        launch_num_stages = 2\n"
+            patch = anchor + "    if not current_platform.has_device_capability(80):  # T4/sm75: 64KB smem per block\n        launch_num_stages = 1\n"
+            anchor2 = "        TILE_SIZE_DECODE = min(TILE_SIZE_DECODE, block_size)\n"
+            patch2 = anchor2 + "    if not current_platform.has_device_capability(80):  # T4/sm75 tile: head_size 512 x 32-token K/V tiles need 96KB\n        TILE_SIZE_PREFILL = min(TILE_SIZE_PREFILL, 16)\n        TILE_SIZE_DECODE = min(TILE_SIZE_DECODE, 16)\n"
+            if "T4/sm75" not in s:
+                if anchor in s and anchor2 in s:
+                    s = s.replace(anchor, patch, 1).replace(anchor2, patch2, 1); open(p, "w").write(s)
+                    print("patched triton_unified_attention for sm75 (1 stage, 16-token tiles)")
+                else:
+                    print("WARNING: sm75 patch anchors not found in this vLLM build - running unpatched")
+            PY
+            # sm75: keep top-k/top-p sampling off Triton. Only the sampling rank runs it, and its JIT warm-up loads kernels
+            # while the other tensor-parallel ranks sit in collectives: the pod hung in triton _init_handles for 77 min.
+            S=/usr/local/lib/python3.12/dist-packages/vllm/v1/sample/ops/topk_topp_sampler.py
+            python3 - "$S" <<'PY'
+            import sys
+            p = sys.argv[1]; s = open(p).read(); a = "    if HAS_TRITON:\n        return apply_top_k_top_p_triton(logits, k, p)\n"
+            if a in s and "sm75 sampler" not in s:
+                s = s.replace(a, "    from vllm.platforms import current_platform  # sm75 sampler: pytorch path\n"
+                                 "    if HAS_TRITON and current_platform.has_device_capability(80):\n        return apply_top_k_top_p_triton(logits, k, p)\n", 1)
+                open(p, "w").write(s); print("patched top-k/top-p sampler: pytorch on sm75")
+            else:
+                print("WARNING: sampler patch anchor not found")
+            PY
+            exec vllm serve "$@"
+          - vllm-serve
+          args: ["openai/whisper-large-v3-turbo", "--served-model-name", "asr", "--host", "0.0.0.0", "--port", "8000", "--dtype", "half", "--gpu-memory-utilization", "0.85", "--max-num-seqs", "4"]
+          env:
+            - {name: HOME, value: /cache}
+            - {name: HF_HOME, value: /cache/hf}
+            - {name: CUDA_MODULE_LOADING, value: EAGER}
           ports: [{containerPort: 8000, name: openai}]
           resources:
-            requests: {cpu: "2", memory: 8Gi, nvidia.com/gpu: "1"}
-            limits: {cpu: "4", memory: 16Gi, nvidia.com/gpu: "1"}
+            requests: {cpu: "2", memory: 16Gi, nvidia.com/gpu: "1"}
+            limits: {cpu: "8", memory: 32Gi, nvidia.com/gpu: "1"}
           volumeMounts: [{name: cache, mountPath: /cache}]
-          startupProbe: {httpGet: {path: /health, port: 8000}, periodSeconds: 15, failureThreshold: 80}
+          startupProbe: {httpGet: {path: /health, port: 8000}, periodSeconds: 15, failureThreshold: 240}
           readinessProbe: {httpGet: {path: /health, port: 8000}, periodSeconds: 10}
-      volumes: [{name: cache, emptyDir: {sizeLimit: 20Gi}}]
+      volumes: [{name: cache, emptyDir: {sizeLimit: 40Gi}}]
 ---
 apiVersion: v1
 kind: Service

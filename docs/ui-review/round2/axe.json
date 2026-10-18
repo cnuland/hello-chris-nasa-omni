@@ -1,0 +1,126 @@
+{
+ "1440/": {
+  "v": [],
+  "p": 47
+ },
+ "1440/items/da9709e7-4ed6-4b2d-beb0-aa6c814ae764": {
+  "v": [],
+  "p": 42
+ },
+ "1440/items/new": {
+  "v": [],
+  "p": 39
+ },
+ "1440/review": {
+  "v": [
+   {
+    "id": "landmark-unique",
+    "impact": "moderate",
+    "n": 3,
+    "help": "Landmarks should have a unique role or role/label/title (i.e. accessible name) combination",
+    "targets": [
+     ".review-card-wide:nth-child(3) > .review-body-dup > .dup-compare > .dup-subject",
+     ".review-card-wide:nth-child(3) > .review-body-dup > .dup-compare > .dup-candidates",
+     ".review-card-wide:nth-child(8) > .review-body-dup > .dup-compare > .dup-candidates"
+    ],
+    "summary": "Fix any of the following:\n  The landmark must have a unique aria-label, aria-labelledby, or title to make landmarks distinguishable"
+   }
+  ],
+  "p": 47
+ },
+ "1440/review?kind=possible_duplicate": {
+  "v": [
+   {
+    "id": "landmark-unique",
+    "impact": "moderate",
+    "n": 3,
+    "help": "Landmarks should have a unique role or role/label/title (i.e. accessible name) combination",
+    "targets": [
+     "article:nth-child(1) > .review-body-dup > .dup-compare > .dup-subject",
+     "article:nth-child(1) > .review-body-dup > .dup-compare > .dup-candidates",
+     "article:nth-child(3) > .review-body-dup > .dup-compare > .dup-candidates"
+    ],
+    "summary": "Fix any of the following:\n  The landmark must have a unique aria-label, aria-labelledby, or title to make landmarks distinguishable"
+   }
+  ],
+  "p": 47
+ },
+ "1440/chat": {
+  "v": [],
+  "p": 38
+ },
+ "1440/overview": {
+  "v": [],
+  "p": 33
+ },
+ "1440lightbox": [
+  [
+   "landmark-unique",
+   "moderate",
+   3,
+   ".review-card-wide:nth-child(3) > .review-body-dup > .dup-compare > .dup-subject"
+  ]
+ ],
+ "1024/": {
+  "v": [],
+  "p": 47
+ },
+ "1024/items/da9709e7-4ed6-4b2d-beb0-aa6c814ae764": {
+  "v": [],
+  "p": 42
+ },
+ "1024/items/new": {
+  "v": [],
+  "p": 39
+ },
+ "1024/review": {
+  "v": [
+   {
+    "id": "landmark-unique",
+    "impact": "moderate",
+    "n": 3,
+    "help": "Landmarks should have a unique role or role/label/title (i.e. accessible name) combination",
+    "targets": [
+     ".review-card-wide:nth-child(3) > .review-body-dup > .dup-compare > .dup-subject",
+     ".review-card-wide:nth-child(3) > .review-body-dup > .dup-compare > .dup-candidates",
+     ".review-card-wide:nth-child(8) > .review-body-dup > .dup-compare > .dup-candidates"
+    ],
+    "summary": "Fix any of the following:\n  The landmark must have a unique aria-label, aria-labelledby, or title to make landmarks distinguishable"
+   }
+  ],
+  "p": 47
+ },
+ "1024/review?kind=possible_duplicate": {
+  "v": [
+   {
+    "id": "landmark-unique",
+    "impact": "moderate",
+    "n": 3,
+    "help": "Landmarks should have a unique role or role/label/title (i.e. accessible name) combination",
+    "targets": [
+     "article:nth-child(1) > .review-body-dup > .dup-compare > .dup-subject",
+     "article:nth-child(1) > .review-body-dup > .dup-compare > .dup-candidates",
+     "article:nth-child(3) > .review-body-dup > .dup-compare > .dup-candidates"
+    ],
+    "summary": "Fix any of the following:\n  The landmark must have a unique aria-label, aria-labelledby, or title to make landmarks distinguishable"
+   }
+  ],
+  "p": 47
+ },
+ "1024/chat": {
+  "v": [],
+  "p": 38
+ },
+ "1024/overview": {
+  "v": [],
+  "p": 33
+ },
+ "1024lightbox": [
+  [
+   "landmark-unique",
+   "moderate",
+   3,
+   ".review-card-wide:nth-child(3) > .review-body-dup > .dup-compare > .dup-subject"
+  ]
+ ]
+}

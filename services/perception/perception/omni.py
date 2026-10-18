@@ -188,6 +188,34 @@ def _capped(obj: dict[str, Any], max_objects: int) -> tuple[dict[str, Any], int]
     return ({**obj, "objects": kept} if dropped else obj), dropped
 
 
+#: AC-PER-33: boxes thinner than this (normalised) on either side are dropped as degenerate.
+MIN_BOX_SIDE = 0.02
+
+
+def _sane_box(box: Any) -> Any:
+    """Four numbers: swap inverted coordinates, clamp to [0, 1], None when degenerate (AC-PER-33). Anything else is
+    returned unchanged so schema validation still rejects it (AC-PER-3: a malformed box makes the reply invalid)."""
+    if not (isinstance(box, (list, tuple)) and len(box) == 4) or not all(
+        isinstance(v, (int, float)) and not isinstance(v, bool) for v in box
+    ):
+        return box
+    x1, y1, x2, y2 = (min(max(float(v), 0.0), 1.0) for v in box)
+    x1, x2 = sorted((x1, x2))
+    y1, y2 = sorted((y1, y2))
+    if x2 - x1 < MIN_BOX_SIDE or y2 - y1 < MIN_BOX_SIDE:
+        return None
+    return [x1, y1, x2, y2]
+
+
+def _sanitize_boxes(obj: dict[str, Any]) -> dict[str, Any]:
+    objects = obj.get("objects")
+    if isinstance(objects, list):
+        for o in objects:
+            if isinstance(o, dict) and o.get("bbox") is not None:
+                o["bbox"] = _sane_box(o["bbox"])
+    return obj
+
+
 def interpret_reply(
     raw: str, *, finish_reason: str | None = None, max_objects: int = DEFAULT_MAX_OBJECTS
 ) -> Reply:
@@ -197,13 +225,13 @@ def interpret_reply(
     obj = extract_first_json_object(raw or "")
     errors = ["no JSON object found in the reply"]
     if obj is not None:
-        capped, dropped = _capped(obj, max_objects)
+        capped, dropped = _capped(_sanitize_boxes(obj), max_objects)
         errors = validate_observation(capped)
         if not errors:
             return Reply(capped, [], False, dropped)
     salvaged = salvage_observation(raw or "")
     if salvaged is not None:
-        capped, dropped = _capped(salvaged, max_objects)
+        capped, dropped = _capped(_sanitize_boxes(salvaged), max_objects)
         if not validate_observation(capped):
             return Reply(capped, [], True, dropped)
     if finish_reason == "length":
