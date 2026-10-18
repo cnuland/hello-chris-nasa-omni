@@ -99,7 +99,8 @@ describe('UI2-05 merge confirm step', () => {
     await user.click(within(toastRegion()).getByRole('button', { name: /^undo/i }));
     await waitFor(() => expect(requestsTo('POST', unmergePath)).toHaveLength(1));
     expect(requestsTo('POST', unmergePath)[0].body).toMatchObject({ operator: 'ui-review-2' });
-    expect(await findToast(/merge undone/i)).toBeInTheDocument();
+    // Amended (UI3-11): one verb for undoing a merge, "Unmerged: <label> <id> …", as on the item page.
+    expect(await findToast(/unmerged: headset 55555555 is a separate item again/i)).toBeInTheDocument();
     await waitFor(() => expect(requestsTo('GET', '/api/review').length).toBeGreaterThan(before));
   });
 

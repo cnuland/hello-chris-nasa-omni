@@ -5,7 +5,8 @@ import { Link } from 'react-router-dom';
 import { getStats, listEvents, listItems } from '../api/client';
 import type { Event, Stats } from '../api/types';
 import { Timestamp } from '../components/Timestamp';
-import { eventActor, eventPlace, humanize, shortId } from '../lib/format';
+import { eventActor, eventPlace, humanize, isPersonEvent, personEventSentence, shortId } from '../lib/format';
+import { personLabel } from '../lib/person';
 import { useToasts } from '../state/toasts';
 
 export const REFRESH_MS = 10_000;
@@ -29,7 +30,31 @@ export function eventRoute(e: Event): string {
   return eventPlace(e);
 }
 
+/**
+ * UI3-04: a person's own track event: "Person: grey t-shirt seen in Cupola (CUP1)", with no "by <actor>" (the actor
+ * description of a person's own event is that person's appearance, used for the label when nothing better is sent).
+ */
+function PersonEventLine({ e }: { e: Event }) {
+  const label = personLabel({
+    entity_id: e.entity_id ?? '', label: e.entity_label, description: e.entity_description || e.actor_desc,
+  });
+  return (
+    <li className={`event event-person event-${e.event_type ?? 'other'}`}>
+      <span className="event-type">person</span>{' '}
+      {e.entity_id ? (
+        <Link to={`/items/${e.entity_id}`} className="event-entity">
+          {label}
+          {!label.endsWith(shortId(e.entity_id)) && <span className="muted">{` ${shortId(e.entity_id)}`}</span>}
+        </Link>
+      ) : label}{' '}
+      <span className="event-route">{personEventSentence(e)}</span>{' '}
+      <Timestamp iso={e.occurred_at} empty="unknown time" />
+    </li>
+  );
+}
+
 function EventLine({ e }: { e: Event }) {
+  if (isPersonEvent(e)) return <PersonEventLine e={e} />;
   const route = eventRoute(e);
   const label = e.entity_label?.trim() || (e.entity_id ? `item ${shortId(e.entity_id)}` : '');
   const who = eventActor(e);
@@ -106,7 +131,7 @@ export default function OverviewPage() {
         <Tile label="Items" value={items} hint="live objects (excl. people, merged, dismissed)" />
         <Tile label="Unknowns" value={stats ? open.unknown_object ?? 0 : null} hint="open unknown objects" />
         <Tile label="Possible duplicates" value={stats ? open.possible_duplicate ?? 0 : null} hint="open duplicate reviews" />
-        <Tile label="People seen (last hour)" value={people} hint="crew sightings" />
+        <Tile label="Person tracks seen (last hour)" value={people} hint="tracks, not people: one person can have several" />
       </div>
       <section className="card">
         <h2 id="events-h">Recent events</h2>

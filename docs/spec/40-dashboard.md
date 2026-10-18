@@ -175,3 +175,44 @@ Every new API field below is optional; each AC holds with and without it (tested
   - Duplicate cards show at most 4 candidates until "Show N more candidates". Their actions (catalog select, buttons,
     merge/dismiss confirm) sit in a footer that sticks to the bottom of the viewport while the card is on screen.
   - Checked with Playwright at 1024 and 1440 px (scripts/ui_check.py) and axe (0 violations).
+
+## UI review round 3 amendments (2026-10-18, from docs/ui-review/round3/)
+
+Every new API field below is optional (`entity_kind` / `entity_description` on events; `kind`, `description` and
+`catalog_name` on review entities). Each AC holds with and without them.
+
+- AC-UI-33 **Person display** (UI3-03): a person (`kind: person` or catalog `crew-member`) is shown as
+  "Person: <appearance>". The appearance is the description, else a descriptive label, with any "person:" prefix,
+  internal count note, "wearing" or "person (…)" wrapper removed, cut at 40 characters with "…". With no appearance
+  the label is "Person <short id>". This applies to inventory rows, the detail h1, review subject and candidates,
+  merge confirm, overview events, and chat citations / id links (the cached item wins over an agent label "person").
+  Person images are scene frames only: `/crops/`, `/exemplars/` and `/faces/` URLs are never rendered or requested;
+  the placeholder is shown instead.
+- AC-UI-34 **Person events** (UI3-04, amends AC-UI-28): an event whose subject is a person
+  (`entity_catalog_id === 'crew-member'`, `entity_kind: person`, or the item kind) reads "seen in X", "left X",
+  "arrived in X" or "moved from A to B", with no "by <actor>". Last handled for a person reads "Seen moving". A move
+  with no destination reads "from X (destination not seen)" (never "to an unknown location").
+- AC-UI-35 **Person duplicate reviews** (UI3-05):
+  - A description containing "(N live 'X' entities would exceed the expected count of M)" is shown without it. The
+    reason line reads "More person tracks than the expected crew size — these may be the same person" (objects:
+    "More X items than the expected count (M) — some may be duplicates").
+  - The subject and each candidate show "Appearance" chips (colour/shape words + garment, at most 6).
+  - A person image with no box is captioned "Whole frame, several people may be visible".
+- AC-UI-36 **Overview tile** (UI3-06): "Person tracks seen (last hour)", with a hint that tracks are not people.
+- AC-UI-37 **Crops** (UI3-07): an image whose URL contains `/crops/` (or with `crop` set) is captioned "Close-up
+  crop", rendered at natural size (`max-width: 100%`, `object-fit: contain`), and enlarged at most 2× in the
+  lightbox.
+- AC-UI-38 **Catalog names** (UI3-08): review cards show "Catalog: <display name>" (`catalog_name`, else
+  /api/catalog), with the slug only in the `title` tooltip. The keep-both hint also uses the name.
+- AC-UI-39 **Compact duplicate footer** (UI3-09, amends AC-UI-32): one row ("Choose catalog…" disclosure with search,
+  select and Classify; "New catalog item"; "Not a duplicate (keep both)"; "Dismiss…"), at most 64 px tall. The
+  keep-both hint is screen-reader text plus a tooltip. Between 861 and 1100 px the subject is a 200 px column beside
+  the candidates. Playwright at 1024×768 checks that every Merge button can be scrolled into view without the footer
+  covering it.
+- AC-UI-40 **Wording** (UI3-11, amends AC-UI-29): the audit op "split" reads "Unmerge". "update by pipeline" reads
+  "Pipeline update", and folded runs read "N pipeline updates". A single pipeline-update row within 2 s of a sighting
+  is hidden, including from the chip counts. The merged banner and both unmerge toasts name items as
+  "<label> <short id>" ("Unmerged: <label> <id> is a separate item again.").
+- AC-UI-41 **Not-found pages** (UI3-12): /<unknown route> renders `<h1>Page not found</h1>`. /items/<missing>
+  renders `<h1>Item not found</h1>` (and `<h1>Item unavailable</h1>` on a load error).
+  Tests: tests/ui3_wording.test.ts, tests/ui3_pages.test.tsx, tests/ui3_layout_css.test.tsx.

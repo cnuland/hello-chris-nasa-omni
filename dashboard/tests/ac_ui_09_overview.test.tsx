@@ -41,7 +41,8 @@ describe('AC-UI-9 stats tiles', () => {
     fakeTimers(NOW);
     useOverviewStats();
     renderApp('/overview');
-    const t = await tile(/people/i);
+    // Amended (UI3-06): the tile counts person tracks, so it is labelled "Person tracks seen (last hour)".
+    const t = await tile(/person tracks seen/i);
     await waitFor(() => expect(t).toHaveTextContent(/\b2\b/));
     const req = requestsTo('GET', '/api/items').find((r) => r.url.searchParams.get('kind') === 'person');
     expect(req).toBeDefined();

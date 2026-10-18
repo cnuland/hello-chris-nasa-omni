@@ -39,7 +39,8 @@ describe('UI2-05 merged item banner and Unmerge', () => {
     detailIs(mergedSource);
     await openDetail();
     const banner = screen.getByRole('region', { name: /merged/i });
-    expect(banner).toHaveTextContent(/Merged into cargo transfer bag at 2026-10-18 00:07 UTC/);
+    // Amended (UI3-11): the banner names the target with its short id.
+    expect(banner).toHaveTextContent(/Merged into cargo transfer bag 44444444 at 2026-10-18 00:07 UTC/);
     expect(within(banner).getByRole('link', { name: /cargo transfer bag/i })).toHaveAttribute('href', `/items/${TARGET}`);
   });
 

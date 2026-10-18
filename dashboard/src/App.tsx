@@ -42,7 +42,13 @@ function RouteBoundary({ children }: { children: React.ReactNode }) {
 }
 
 function NotFound() {
-  return <p className="empty">Page not found.</p>;
+  // UI3-12: every page has an h1 (axe page-has-heading-one).
+  return (
+    <div className="page">
+      <h1>Page not found</h1>
+      <p className="empty">There is no page at this address.</p>
+    </div>
+  );
 }
 
 export default function App() {

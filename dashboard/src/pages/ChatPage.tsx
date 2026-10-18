@@ -8,6 +8,7 @@ import type { Citation, ItemDetail, Proposal } from '../api/types';
 import { proposalPatch } from '../lib/agent';
 import { formatUtcMinute, locationLabel, shortId } from '../lib/format';
 import { log } from '../lib/log';
+import { displayLabel, isPerson } from '../lib/person';
 import { renderMarkdown } from '../lib/markdown';
 import {
   buildHistory, clearChat, loadChat, newSessionId, saveChat, type ProposalState, type UiMessage,
@@ -89,7 +90,8 @@ function ProposalCard({ proposal, state, canConfirm, onConfirm }: ProposalCardPr
 function EntityCitation({ id, at, c }: { id: string; at?: string; c?: Citation }) {
   const item = useCachedItem(id);
   // AC-UI-24: prefer the agent's own label/location (as of the answer); fall back to the cached item lookup.
-  const label = c?.label || item?.label || `Item ${shortId(id)}`;
+  // UI3-03: a person is named by appearance from the item (the agent's label is often just "person").
+  const label = item && isPerson(item) ? displayLabel(item) : c?.label || item?.label || `Item ${shortId(id)}`;
   const loc = c?.location || c?.location_name
     ? locationLabel(c?.location ?? '', c?.location_name)
     : item ? locationLabel(item.last_location, item.last_location_name) : '';
@@ -104,7 +106,8 @@ function EntityCitation({ id, at, c }: { id: string; at?: string; c?: Citation }
 /** A cited entity id mentioned in the reply text: rendered as a link named by the item label (or its short id). */
 function IdLink({ id }: { id: string }) {
   const item = useCachedItem(id);
-  return <Link to={`/items/${id}`} title={id} className="id-link">{item?.label ? `${item.label} (${shortId(id)})` : shortId(id)}</Link>;
+  const label = item && (isPerson(item) || item.label) ? displayLabel(item) : '';
+  return <Link to={`/items/${id}`} title={id} className="id-link">{label && !label.endsWith(shortId(id)) ? `${label} (${shortId(id)})` : label || shortId(id)}</Link>;
 }
 
 function Citations({ citations }: { citations: Citation[] }) {

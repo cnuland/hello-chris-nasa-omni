@@ -127,7 +127,9 @@ describe('AC-UI-13 possible-duplicate cards support a merge decision', () => {
     const card = await findReviewCard(ID.rvDup);
     const keep = within(card).getByRole('button', { name: /keep both/i });
     expect(keep).toBeDisabled();
-    expect(keep).toHaveAccessibleDescription(/choose one/i);
+    // Amended (UI3-09): the catalog search on duplicate cards opens from "Choose catalog…" (one-row footer).
+    expect(keep).toHaveAccessibleDescription(/choose catalog/i);
+    await user.click(within(card).getByRole('button', { name: /choose catalog/i }));
     const select = within(card).getByLabelText(/^catalog item$/i) as HTMLSelectElement;
     await waitFor(() => expect(select.options.length).toBeGreaterThanOrEqual(4));
     await user.selectOptions(select, 'camera-dslr');

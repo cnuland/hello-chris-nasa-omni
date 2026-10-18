@@ -1,5 +1,6 @@
 import type { Item } from '../api/types';
 import { capitalize, eventActor, eventVerb, formatUtcMinute } from '../lib/format';
+import { isPerson } from '../lib/person';
 
 const DASH = '—';
 
@@ -17,9 +18,13 @@ export function LastHandledCell({ item }: { item: Item }) {
   const setBy = item.location_set_by?.trim();
   const kind = h?.actor_kind ?? (!h?.source && setBy && actor?.trim() === setBy ? 'operator' : undefined);
   const utc = formatUtcMinute(at);
+  // UI3-04: a person's own track event has no separate actor ("Seen moving", never "Moved by person (…)").
+  const text = isPerson(item)
+    ? (type === 'moved' ? 'Seen moving' : capitalize(eventVerb(type)))
+    : `${capitalize(eventVerb(type))} by ${eventActor({ actor_desc: actor, actor_kind: kind, source: h?.source })}`;
   return (
     <span className="handled">
-      <span>{`${capitalize(eventVerb(type))} by ${eventActor({ actor_desc: actor, actor_kind: kind, source: h?.source })}`}</span>
+      <span>{text}</span>
       {utc && <time className="muted" dateTime={at ?? undefined}>{utc}</time>}
     </span>
   );

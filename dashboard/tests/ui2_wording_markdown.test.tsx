@@ -23,10 +23,11 @@ describe('UI2-09 eventPlace / eventSentence', () => {
     expect(eventPlace({ event_type: 'handed_over', from_location: 'LAB1', to_location: 'LAB1' })).toBe('at LAB1');
   });
 
-  test('a move reads "from A to B"; a one-sided move keeps "to an unknown location"', () => {
+  // Amended (UI3-04, UI2-09 / UI-13 PARTIAL): a one-sided move says "(destination not seen)".
+  test('a move reads "from A to B"; a one-sided move says "(destination not seen)"', () => {
     expect(eventPlace({ event_type: 'moved', from_location: 'NOD3', from_location_name: 'Node 3', to_location: 'NOD1', to_location_name: 'Node 1' }))
       .toBe('from Node 3 (NOD3) to Node 1 (NOD1)');
-    expect(eventPlace({ event_type: 'moved', from_location: 'NOD3' })).toBe('from NOD3 to an unknown location');
+    expect(eventPlace({ event_type: 'moved', from_location: 'NOD3' })).toBe('from NOD3 (destination not seen)');
     expect(eventPlace({ event_type: 'moved', to_location: 'NOD1' })).toBe('to NOD1');
   });
 
@@ -107,7 +108,10 @@ describe('UI2-11 history label has no double count', () => {
   test('a client-folded run keeps "N × summary"', () => {
     const e: TimelineEntry = { at, kind: 'audit', summary: 'update by pipeline' };
     const [g] = groupTimeline([e, { ...e, at: '2026-10-17T11:00:00Z' }]);
-    expect(timelineLabel(g)).toBe('2 × update by pipeline');
+    // Amended (UI3-11): pipeline updates use one label ("N pipeline updates"); other folded summaries keep "N ×".
+    expect(timelineLabel(g)).toBe('2 pipeline updates');
+    const o: TimelineEntry = { at, kind: 'audit', summary: 'update by ui-review-3' };
+    expect(timelineLabel(groupTimeline([o, { ...o, at: '2026-10-17T11:00:00Z' }])[0])).toBe('2 × update by ui-review-3');
   });
 
   test('two adjacent server-collapsed runs add up and the leading number is the total', () => {

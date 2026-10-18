@@ -12,6 +12,7 @@ import { LocationOptions } from '../components/LocationSelect';
 import { Timestamp } from '../components/Timestamp';
 import { SEARCH_DEBOUNCE_MS } from '../lib/filters';
 import { humanize, locationLabel, shortId } from '../lib/format';
+import { appearanceChips, appearanceOf, displayLabel, displayLabelWithId, isPerson, personAppearance, reviewReason } from '../lib/person';
 import { useCachedItem } from '../state/itemCache';
 import { useCatalog, useLocations } from '../state/reference';
 import { useOperator } from '../state/operator';
@@ -34,11 +35,26 @@ type Resolve = (body: ResolveBody, outcome: ResolveOutcome) => Promise<void>;
 /** Candidate tiles shown before "Show N more" (keeps the card's actions near the top at 1024 px). */
 export const COMPACT_CANDIDATES = 4;
 
-/** "headset 55555555" (label + short id), or "item 55555555". */
-function entityName(e: { entity_id: string; label?: string | null } | null | undefined, fallbackId?: string | null): string {
-  const id = e?.entity_id ?? fallbackId ?? '';
-  const label = e?.label?.trim();
-  return label ? `${label} ${shortId(id)}` : `item ${shortId(id)}`;
+/** "headset 55555555" (label + short id), "Person: grey hoodie 87dbd193" (UI3-03), or "item 55555555". */
+function entityName(e: ReviewEntity | null | undefined, fallbackId?: string | null): string {
+  return displayLabelWithId(e ?? { entity_id: fallbackId ?? '' });
+}
+
+/** UI3-08: catalog display name for a slug (the slug itself when the catalog does not list it). */
+type CatalogName = (id: string) => string;
+
+/** Person text shown when a person review frame has no box (UI3-05). */
+export const PERSON_NO_BOX = 'Whole frame, several people may be visible';
+
+/** UI3-05: colour + garment chips from the appearance, so outfits can be compared side by side. */
+function AppearanceChips({ text }: { text: string }) {
+  const chips = appearanceChips(text);
+  if (!chips.length) return null;
+  return (
+    <ul className="reason-chips appearance-chips" aria-label="Appearance">
+      {chips.map((c) => <li key={c} className="reason-chip appearance-chip">{c}</li>)}
+    </ul>
+  );
 }
 
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -157,10 +173,12 @@ interface EntityTileProps {
   entity: ReviewEntity | ReviewCandidate;
   nameOf: (id?: string | null) => string;
   role: 'subject' | 'candidate';
+  catalogName: CatalogName;
 }
 
-function EntityFacts({ entity, nameOf, role }: EntityTileProps) {
-  const label = entity.label || `Item ${shortId(entity.entity_id)}`;
+function EntityFacts({ entity, nameOf, role, catalogName }: EntityTileProps) {
+  const person = isPerson(entity);
+  const label = person || entity.label ? displayLabel(entity) : `Item ${shortId(entity.entity_id)}`;
   const loc = locationLabel(entity.last_location, entity.last_location_name || nameOf(entity.last_location));
   const similarity = 'similarity' in entity ? entity.similarity : undefined;
   const score = 'score' in entity ? entity.score : undefined;
@@ -169,7 +187,10 @@ function EntityFacts({ entity, nameOf, role }: EntityTileProps) {
     <div className="entity-facts">
       <Link to={`/items/${entity.entity_id}`} className="entity-label">{label}</Link>{' '}
       <code className="loc-code" title={entity.entity_id}>{shortId(entity.entity_id)}</code>
-      {entity.catalog_id && <div className="muted">{`Catalog: ${entity.catalog_id}`}</div>}
+      {entity.catalog_id && (
+        <div className="muted" title={entity.catalog_id}>{`Catalog: ${entity.catalog_name || catalogName(entity.catalog_id)}`}</div>
+      )}
+      {person && <AppearanceChips text={appearanceOf(entity)} />}
       <dl className="mini-facts">
         <dt>Location</dt>
         <dd>{loc || '—'}</dd>
@@ -204,6 +225,11 @@ function EntityFacts({ entity, nameOf, role }: EntityTileProps) {
 interface DuplicateProps {
   review: ReviewItem;
   subject: ReviewEntity | null;
+  /** UI3-05: the review is about a person (scene frames, appearance labels, "several people" caption). */
+  person: boolean;
+  /** Review description without internal text (UI3-05). */
+  text: string;
+  catalogName: CatalogName;
   nameOf: (id?: string | null) => string;
   disabled: boolean;
   /** Opens the merge confirm step for this candidate (UI2-05); nothing is posted yet. */
@@ -211,11 +237,13 @@ interface DuplicateProps {
 }
 
 /** The candidate image: the snapshot with its box when the API sends one (UI2-07), else the thumbnail. */
-function CandidateImage({ c, label }: { c: ReviewCandidate; label: string }) {
+function CandidateImage({ c, label, person }: { c: ReviewCandidate; label: string; person: boolean }) {
   if (c.snapshot_url && validBBox(c.snapshot_bbox)) {
-    return <FrameImage src={c.snapshot_url} alt={label} size="md" bbox={c.snapshot_bbox} bboxSource={c.snapshot_bbox_source} caption="compact" />;
+    return <FrameImage src={c.snapshot_url} alt={label} size="md" bbox={c.snapshot_bbox} bboxSource={c.snapshot_bbox_source} caption="compact"
+      person={person} />;
   }
-  return <FrameImage src={c.thumbnail_url ?? c.snapshot_url} alt={label} size="md" caption="compact" />;
+  return <FrameImage src={c.thumbnail_url ?? c.snapshot_url} alt={label} size="md" caption="compact" person={person}
+    noBoxCaption={person ? PERSON_NO_BOX : undefined} />;
 }
 
 function candidatesHeading(review: ReviewItem, candidates: ReviewCandidate[]): string {
@@ -228,23 +256,23 @@ function candidatesHeading(review: ReviewItem, candidates: ReviewCandidate[]): s
   return 'Possible matches';
 }
 
-function DuplicateCompare({ review, subject, nameOf, disabled, onMerge }: DuplicateProps) {
+function DuplicateCompare({ review, subject, person, text, catalogName, nameOf, disabled, onMerge }: DuplicateProps) {
   const candidates = useMemo(() => rankCandidates(review.candidates ?? []), [review.candidates]);
   const [showAll, setShowAll] = useState(false);
   const shown = showAll ? candidates : candidates.slice(0, COMPACT_CANDIDATES);
   const hidden = candidates.length - shown.length;
   const p = `rv-${review.review_id}`;
-  const searchFor = subject?.label || review.model_guess || '';
+  const searchFor = (person ? '' : subject?.label) || review.model_guess || '';
   // UI2-14: every card has its own landmark names (subject + review id), so no two regions share a name.
   const who = `${entityName(subject, review.entity_id)}, review ${shortId(review.review_id)}`;
   return (
     <div className="dup-compare">
       <section className="dup-subject" aria-label={`Subject: ${who}`}>
         <h3 id={`${p}-subj`}>Subject (this sighting)</h3>
-        <FrameImage src={review.image_url} alt={`Review image: ${review.description}`} bbox={review.image_bbox}
-          bboxSource={review.image_bbox_source} caption />
+        <FrameImage src={review.image_url} alt={`Review image: ${text}`} bbox={review.image_bbox}
+          bboxSource={review.image_bbox_source} caption person={person} noBoxCaption={person ? PERSON_NO_BOX : undefined} />
         {subject ? (
-          <EntityFacts entity={subject} nameOf={nameOf} role="subject" />
+          <EntityFacts entity={subject} nameOf={nameOf} role="subject" catalogName={catalogName} />
         ) : (
           <p className="muted">{review.entity_id ? `Item ${shortId(review.entity_id)} (details unavailable)` : 'No item attached.'}</p>
         )}
@@ -255,14 +283,15 @@ function DuplicateCompare({ review, subject, nameOf, disabled, onMerge }: Duplic
           <>
             <ul className="candidates" aria-label="Candidates">
               {shown.map((c) => {
-                const label = c.label || `Item ${shortId(c.entity_id)}`;
+                const cand = person && !c.kind ? { ...c, kind: 'person' as const } : c;
+                const label = isPerson(cand) || c.label ? displayLabel(cand) : `Item ${shortId(c.entity_id)}`;
                 const where = c.last_location ? ` (${c.last_location})` : '';
                 return (
                   <li key={c.entity_id} className="candidate">
-                    <CandidateImage c={c} label={label} />
-                    <EntityFacts entity={c} nameOf={nameOf} role="candidate" />
+                    <CandidateImage c={c} label={label} person={isPerson(cand)} />
+                    <EntityFacts entity={cand} nameOf={nameOf} role="candidate" catalogName={catalogName} />
                     <button type="button" disabled={disabled}
-                      aria-label={`Merge subject into this: ${label} ${shortId(c.entity_id)}${where}`}
+                      aria-label={`Merge subject into this: ${displayLabelWithId(cand)}${where}`}
                       onClick={() => onMerge(c)}>
                       Merge subject into this
                     </button>
@@ -317,12 +346,12 @@ function MergeConfirm({ review, subject, target, nameOf, disabled, onConfirm, on
     <div className="confirm-merge" role="group" aria-label="Confirm merge">
       <div className="confirm-merge-images">
         <figure>
-          <Thumb src={subject?.thumbnail_url ?? subject?.snapshot_url ?? review.image_url} alt={`Subject: ${subj}`} size="md" />
+          <Thumb src={subject?.thumbnail_url ?? subject?.snapshot_url ?? review.image_url} alt={`Subject: ${subj}`} size="md" person={isPerson(subject)} />
           <figcaption className="muted small">{subj}</figcaption>
         </figure>
         <span aria-hidden="true" className="confirm-merge-arrow">→</span>
         <figure>
-          <Thumb src={target.thumbnail_url ?? target.snapshot_url} alt={`Target: ${tgt}`} size="md" />
+          <Thumb src={target.thumbnail_url ?? target.snapshot_url} alt={`Target: ${tgt}`} size="md" person={isPerson(target) || isPerson(subject)} />
           <figcaption className="muted small">{tgt}</figcaption>
         </figure>
       </div>
@@ -366,6 +395,7 @@ function ReviewCard({ review, catalog, nameOf, canAct, resolve }: CardProps) {
   const [selected, setSelected] = useState('');
   const [showNew, setShowNew] = useState(false);
   const [confirmDismiss, setConfirmDismiss] = useState(false);
+  const [showClassify, setShowClassify] = useState(false);
   const [mergeTarget, setMergeTarget] = useState<ReviewCandidate | null>(null);
   const [newId, setNewId] = useState('');
   const [newClass, setNewClass] = useState('');
@@ -374,7 +404,14 @@ function ReviewCard({ review, catalog, nameOf, canAct, resolve }: CardProps) {
   const isDup = review.kind === 'possible_duplicate';
   // Older APIs send no `subject`: fall back to GET /items/{entity_id} (cached) for duplicate cards.
   const fetched = useCachedItem(isDup && !review.subject && review.entity_id ? review.entity_id : null);
-  const subject: ReviewEntity | null = review.subject ?? fetched ?? null;
+  const rawSubject: ReviewEntity | null = review.subject ?? fetched ?? null;
+  // UI3-05: internal reconciler text is rewritten into a readable reason; UI3-03: a person subject is named by its
+  // appearance (its own description, else the appearance in the review description).
+  const { text, reason } = reviewReason(review.description);
+  const person = isPerson(rawSubject) || review.model_guess === 'person' || /^person\b/i.test(text);
+  const subject: ReviewEntity | null = rawSubject && person
+    ? { ...rawSubject, kind: 'person', description: rawSubject.description || personAppearance(text) || null }
+    : rawSubject;
 
   const options = useMemo(() => catalog.filter((c) => catalogMatches(c, query)), [catalog, query]);
   const chosen = options.some((c) => c.catalog_id === selected) ? selected : '';
@@ -396,7 +433,7 @@ function ReviewCard({ review, catalog, nameOf, canAct, resolve }: CardProps) {
   };
 
   const subj = entityName(subject, review.entity_id);
-  const catalogName = (id: string) => catalog.find((c) => c.catalog_id === id)?.display_name ?? id;
+  const catalogName: CatalogName = (id) => catalog.find((c) => c.catalog_id === id)?.display_name ?? id;
 
   const keepBoth = () =>
     run(
@@ -422,8 +459,8 @@ function ReviewCard({ review, catalog, nameOf, canAct, resolve }: CardProps) {
     );
   };
 
-  const actions = (
-    <div className="review-actions">
+  const catalogFields = (
+    <>
       <div className="field">
         <label htmlFor={`${p}-search`}>Search catalog</label>
         <input id={`${p}-search`} type="search" value={query} onChange={(e) => setQuery(e.target.value)} />
@@ -435,32 +472,30 @@ function ReviewCard({ review, catalog, nameOf, canAct, resolve }: CardProps) {
           {options.map((c) => <option key={c.catalog_id} value={c.catalog_id}>{c.display_name}</option>)}
         </select>
       </div>
-      <div className="actions">
-        <button type="button" className="primary" disabled={disabled || !chosen}
-          onClick={() => run({ action: 'assign_catalog', catalog_id: chosen }, { message: `Classified as ${catalogName(chosen)}.` })}>
-          Classify
-        </button>
-        <button type="button" aria-expanded={showNew} onClick={() => setShowNew((v) => !v)}>New catalog item</button>
-        {isDup && (
-          <button type="button" disabled={disabled || !keepCatalog} aria-describedby={`${p}-keep-hint`} onClick={keepBoth}>
-            Not a duplicate (keep both)
-          </button>
-        )}
-        <button type="button" className="danger" disabled={disabled} aria-expanded={confirmDismiss}
-          aria-controls={`${p}-dismiss`} onClick={() => {
-            setMergeTarget(null);
-            setConfirmDismiss((v) => !v);
-          }}>
-          Dismiss…
-        </button>
-      </div>
-      {isDup && (
-        <p id={`${p}-keep-hint`} className="muted small">
-          {keepCatalog
-            ? `Keep both: closes this review and keeps the subject as its own item (catalog ${keepCatalog}).`
-            : 'Keep both needs a catalog item for the subject: choose one above first.'}
-        </p>
-      )}
+    </>
+  );
+  const classifyButton = (
+    <button type="button" className="primary" disabled={disabled || !chosen}
+      onClick={() => run({ action: 'assign_catalog', catalog_id: chosen }, { message: `Classified as ${catalogName(chosen)}.` })}>
+      Classify
+    </button>
+  );
+  const newButton = <button type="button" aria-expanded={showNew} onClick={() => setShowNew((v) => !v)}>New catalog item</button>;
+  const dismissButton = (
+    <button type="button" className="danger" disabled={disabled} aria-expanded={confirmDismiss}
+      aria-controls={`${p}-dismiss`} onClick={() => {
+        setMergeTarget(null);
+        setConfirmDismiss((v) => !v);
+      }}>
+      Dismiss…
+    </button>
+  );
+  const keepHint = keepCatalog
+    ? `Keep both: closes this review and keeps the subject as its own item (catalog ${catalogName(keepCatalog)}).`
+    : 'Keep both needs a catalog item for the subject: open "Choose catalog…" and pick one first.';
+
+  const confirms = (
+    <>
       {mergeTarget && (
         <MergeConfirm review={review} subject={subject} target={mergeTarget} nameOf={nameOf} disabled={disabled}
           onConfirm={() => void confirmMerge(mergeTarget)} onCancel={() => setMergeTarget(null)} />
@@ -508,7 +543,44 @@ function ReviewCard({ review, catalog, nameOf, canAct, resolve }: CardProps) {
           </button>
         </div>
       )}
+    </>
+  );
+
+  const actions = (
+    <div className="review-actions">
+      {catalogFields}
+      <div className="actions">
+        {classifyButton}
+        {newButton}
+        {dismissButton}
+      </div>
+      {confirms}
     </div>
+  );
+
+  // UI3-09: duplicate cards get one compact row (at most 64 px); the catalog search opens on demand, so the
+  // candidates and their Merge buttons stay visible at 1024×768.
+  const dupFooter = (
+    <>
+      <div className="review-footer-row">
+        <button type="button" aria-expanded={showClassify} aria-controls={`${p}-classify`} onClick={() => setShowClassify((v) => !v)}>
+          Choose catalog…
+        </button>
+        {newButton}
+        <button type="button" disabled={disabled || !keepCatalog} aria-describedby={`${p}-keep-hint`} title={keepHint} onClick={keepBoth}>
+          Not a duplicate (keep both)
+        </button>
+        {dismissButton}
+      </div>
+      <p id={`${p}-keep-hint`} className="keep-hint">{keepHint}</p>
+      {showClassify && (
+        <div id={`${p}-classify`} className="review-actions review-classify" role="group" aria-label="Classify with a catalog item">
+          {catalogFields}
+          <div className="actions">{classifyButton}</div>
+        </div>
+      )}
+      {confirms}
+    </>
   );
 
   return (
@@ -533,19 +605,21 @@ function ReviewCard({ review, catalog, nameOf, canAct, resolve }: CardProps) {
       </header>
       <div className={isDup ? 'review-body-dup' : 'review-body'}>
         {isDup ? (
-          <DuplicateCompare review={review} subject={subject} nameOf={nameOf} disabled={disabled}
+          <DuplicateCompare review={review} subject={subject} person={person} text={text} catalogName={catalogName}
+            nameOf={nameOf} disabled={disabled}
             onMerge={(c) => {
               setConfirmDismiss(false);
               setMergeTarget(c);
             }} />
         ) : (
           <div className="review-media">
-            <FrameImage src={review.image_url} alt={`Review image: ${review.description}`} bbox={review.image_bbox}
-              bboxSource={review.image_bbox_source} caption />
+            <FrameImage src={review.image_url} alt={`Review image: ${text}`} bbox={review.image_bbox}
+              bboxSource={review.image_bbox_source} caption person={person} noBoxCaption={person ? PERSON_NO_BOX : undefined} />
           </div>
         )}
         <div className="review-info">
-          <p className="review-desc">{review.description}</p>
+          <p className="review-desc">{text}</p>
+          {reason && <p className="review-reason">{reason}</p>}
           <dl className="facts">
             <dt>Location</dt>
             <dd>{locName || '—'}</dd>
@@ -556,7 +630,7 @@ function ReviewCard({ review, catalog, nameOf, canAct, resolve }: CardProps) {
           {!isDup && actions}
         </div>
       </div>
-      {isDup && <div className="review-footer">{actions}</div>}
+      {isDup && <div className="review-footer">{dupFooter}</div>}
     </article>
   );
 }
@@ -635,7 +709,7 @@ export default function ReviewPage() {
   const undoMerge = (entityId: string, label: string, who: string) => {
     unmergeItem(entityId, { operator: who })
       .then(() => {
-        toasts.success(`Merge undone: ${label} is a separate item again.`);
+        toasts.success(`Unmerged: ${label} is a separate item again.`);
         setReloadKey((k) => k + 1);
         refreshCount();
       })

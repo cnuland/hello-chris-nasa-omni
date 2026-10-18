@@ -80,6 +80,9 @@ export interface Event {
   location_role?: 'at' | 'from_to' | null;
   /** UI2-10: "operator" (dashboard/API action) | "person" (seen on camera). Optional; `source` is the fallback. */
   actor_kind?: 'operator' | 'person' | null;
+  /** UI3-04: the subject's kind / appearance, when the API joins them. Optional. */
+  entity_kind?: Kind | null;
+  entity_description?: string | null;
 }
 
 export interface Sighting {
@@ -142,6 +145,10 @@ export interface ReviewEntity {
   entity_id: string;
   label?: string | null;
   catalog_id?: string | null;
+  /** UI3-03 / UI3-08: optional joined fields (persons are shown by appearance; catalogs by display name). */
+  catalog_name?: string | null;
+  kind?: Kind | null;
+  description?: string | null;
   status?: string | null;
   last_location?: string | null;
   last_location_name?: string | null;

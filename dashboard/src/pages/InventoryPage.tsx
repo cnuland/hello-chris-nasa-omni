@@ -14,6 +14,7 @@ import { Timestamp } from '../components/Timestamp';
 import { LastHandledCell } from '../components/LastHandled';
 import { isoToLocalInput, localInputToIso } from '../lib/format';
 import { useLocations } from '../state/reference';
+import { displayLabel, isPerson } from '../lib/person';
 import { useToasts } from '../state/toasts';
 
 const SORT_LABELS: Record<SortKey, string> = {
@@ -32,13 +33,15 @@ const QUICK_RANGES = [
 ];
 
 function ItemRow({ item }: { item: Item }) {
+  // UI3-03: persons are named by appearance; their thumbnail is a scene frame, never a crop.
+  const label = displayLabel(item);
   return (
     <tr data-testid={`item-${item.entity_id}`}>
       <td className="cell-thumb">
-        <Thumb src={item.snapshot_url} alt={item.label} />
+        <Thumb src={item.snapshot_url} alt={label} person={isPerson(item)} />
       </td>
       <td>
-        <Link className="item-link" to={`/items/${item.entity_id}`}>{item.label}</Link>
+        <Link className="item-link" to={`/items/${item.entity_id}`}>{label}</Link>
         <div className="muted">{item.catalog_name || 'Uncatalogued'}</div>
       </td>
       <td>

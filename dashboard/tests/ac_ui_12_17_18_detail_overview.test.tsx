@@ -42,7 +42,8 @@ describe('AC-UI-12 item detail Activity', () => {
     const lines = within(list).getAllByRole('listitem').map((li) => li.textContent ?? '');
     expect(lines).toHaveLength(4);
     // Amended (UI2-09): "<Verb> by <actor> <place> · <UTC>"; a use with no location has no place.
-    expect(lines[0]).toMatch(/^Moved by person wearing a blue tank top from Lab starboard rack 2 \(LAB1S2\) to an unknown location · 2026-10-17 11:45:00 UTC/);
+    // Amended (UI3-04): a move with no destination says "(destination not seen)".
+    expect(lines[0]).toMatch(/^Moved by person wearing a blue tank top from Lab starboard rack 2 \(LAB1S2\) \(destination not seen\) · 2026-10-17 11:45:00 UTC/);
     expect(lines[1]).toMatch(/^Used by person \(blue shirt, black shorts, headset\) · 2026-10-17 11:30:00 UTC/);
     expect(lines.join('\n')).not.toMatch(/\?|No recorded/);
   });
@@ -86,7 +87,8 @@ describe('AC-UI-17 history grouping', () => {
     const list = await screen.findByRole('list', { name: /^history$/i });
     const rows = within(list).getAllByRole('listitem');
     expect(rows).toHaveLength(4);
-    expect(rows[0]).toHaveTextContent('14 × update by pipeline');
+    // Amended (UI3-11): one "Pipeline update" label; folded runs read "N pipeline updates".
+    expect(rows[0]).toHaveTextContent('14 pipeline updates');
     await user.click(within(rows[0]).getByRole('button', { name: /show 14 entries/i }));
     expect(within(rows[0]).getByRole('list', { name: /folded entries/i }).children).toHaveLength(14);
   });
@@ -99,7 +101,8 @@ describe('AC-UI-17 history grouping', () => {
     );
     await openDetail();
     const list = await screen.findByRole('list', { name: /^history$/i });
-    expect(within(list).getByText('9 × update by pipeline')).toBeInTheDocument();
+    // Amended (UI3-11): one "Pipeline update" label.
+    expect(within(list).getByText('9 pipeline updates')).toBeInTheDocument();
     expect(within(list).getByText(/back to 2026-10-17 12:00:00 UTC/)).toBeInTheDocument();
   });
 

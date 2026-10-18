@@ -1,5 +1,7 @@
-# Playwright layout + axe check of the dashboard (UI review round 2) against `vite preview` with mocked /api and /agent
-# routes (page.route), at 1024 and 1440 px. Prints measurements as JSON, then the axe violations per page.
+# Playwright layout + axe check of the dashboard (UI review rounds 2 and 3) against `vite preview` with mocked /api and
+# /agent routes (page.route), at 1024×768 and 1440×1000. Prints measurements as JSON, then the axe violations per page.
+# Round 3 adds person items / events / a person duplicate review, a crop snapshot, the not-found pages, and the
+# 1024×768 check that every Merge button can be reached (scrolled into view and not covered by the sticky footer).
 #   npm run build && npx vite preview --port 4179 --strictPort &
 #   python3 -m venv /tmp/pw2 && /tmp/pw2/bin/pip install playwright && /tmp/pw2/bin/playwright install chromium
 #   npm i --prefix /tmp/axe axe-core
@@ -29,6 +31,7 @@ def png(w=640, h=360):
     return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b'')
 
 IMG = png()
+CROP = png(220, 140)
 U = lambda n: f'{n:08x}-0000-4000-8000-{n:012x}'
 LOCS = [
     {'location_id': 'USOS', 'parent_id': None, 'kind': 'segment', 'display_name': 'US Orbital Segment'},
@@ -36,7 +39,8 @@ LOCS = [
     {'location_id': 'NOD3', 'parent_id': 'USOS', 'kind': 'module', 'display_name': 'Node 3 Tranquility'},
     {'location_id': 'ZARYA', 'parent_id': None, 'kind': 'module', 'display_name': 'Zarya FGB'},
 ]
-CATALOG = [{'catalog_id': 'camera-dslr', 'class_name': 'camera', 'display_name': 'Nikon Z9 camera', 'category': 'object'},
+CATALOG = [{'catalog_id': 'crew-member', 'class_name': 'person', 'display_name': 'Crew member', 'category': 'person'},
+           {'catalog_id': 'camera-dslr', 'class_name': 'camera', 'display_name': 'Nikon Z9 camera', 'category': 'object'},
            {'catalog_id': 'ctb-half', 'class_name': 'cargo transfer bag', 'display_name': 'Cargo Transfer Bag (half)', 'category': 'container'}]
 def item(n, label, **kw):
     d = {'entity_id': U(n), 'catalog_id': 'camera-dslr', 'catalog_name': 'Nikon Z9 camera', 'kind': 'object', 'status': 'provisional',
@@ -78,6 +82,38 @@ HISTORY = [
     {'at': '2026-10-17T22:40:00Z', 'kind': 'audit', 'summary': '9 pipeline updates (sighting refresh: last_seen_at/confidence)', 'count': 9, 'first_at': '2026-10-17T22:00:00Z', 'image_url': None},
 ]
 
+# ---------------- round 3 fixtures: persons, a person duplicate review, a crop snapshot
+def person(n, desc, **kw):
+    kw = {'snapshot_url': f'/media/frames/{n}.png', **kw}
+    return item(n, 'person', kind='person', catalog_id='crew-member', catalog_name='Crew member', description=desc, **kw)
+PERSONS = [person(500, 'black shirt, grey pants'), person(501, 'Short hair, blue shorts, orange top',
+           last_handled={'event_type': 'moved', 'actor_desc': 'spacesuit, dark visor', 'occurred_at': '2026-10-18T03:10:00Z'}),
+           person(502, None, snapshot_url='/media/crops/502-5.png')]
+PERSON_DETAIL = dict(PERSONS[1], events=[{'event_id': U(410), 'event_type': 'moved', 'entity_id': U(501), 'actor_desc': 'spacesuit, dark visor',
+                     'from_location': 'NOD1', 'from_location_name': 'Node 1 Unity', 'to_location': None, 'occurred_at': '2026-10-18T03:10:00Z',
+                     'source': 'pipeline'}], sightings=[])
+CROP_ITEM = dict(item(600, 'cargo transfer bag', catalog_id='ctb-half', catalog_name='Cargo Transfer Bag (half)', snapshot_url='/media/crops/600-5.png'),
+                 events=[], sightings=[])
+PCANDS = [dict(person(510 + i, d), thumbnail_url=f'/media/frames/c{i}.png', score=s, match_reasons=['seen around the same time'])
+          for i, (d, s) in enumerate([('grey hoodie, black pants', 0.37), ('blue shirt, tan pants', 0.31), (None, 0.27)])]
+REVIEWS.insert(0, {'review_id': U(310), 'kind': 'possible_duplicate', 'entity_id': U(500), 'subject': dict(person(500, None), thumbnail_url='/media/frames/meal.png'),
+                   'candidates': PCANDS, 'candidates_source': 'suggested', 'image_url': '/media/frames/meal.png', 'image_bbox': None,
+                   'description': "person: grey hoodie (15 live 'person' entities would exceed the expected count of 7)",
+                   'observed_at': '2026-10-18T03:22:00Z', 'created_at': '2026-10-18T03:22:00Z', 'location_id': 'USOS', 'model_guess': 'person', 'status': 'open'})
+EVENTS += [
+    {'event_id': U(411), 'event_type': 'moved', 'entity_id': U(501), 'entity_label': 'person', 'entity_catalog_id': 'crew-member', 'actor_desc': 'spacesuit, dark visor',
+     'from_location': 'NOD1', 'from_location_name': 'Node 1 Unity', 'to_location': None, 'occurred_at': '2026-10-18T03:10:00Z', 'source': 'pipeline'},
+    {'event_id': U(412), 'event_type': 'seen', 'entity_id': U(500), 'entity_label': 'person', 'entity_catalog_id': 'crew-member', 'actor_desc': 'grey t-shirt',
+     'to_location': 'CUP1', 'to_location_name': 'Cupola', 'location_role': 'at', 'occurred_at': '2026-10-18T03:09:00Z', 'source': 'pipeline'},
+    {'event_id': U(413), 'event_type': 'moved', 'entity_id': U(4), 'entity_label': 'cargo transfer bag', 'actor_desc': 'blue shirt',
+     'from_location': 'USOS', 'from_location_name': 'US Orbital Segment', 'to_location': None, 'occurred_at': '2026-10-18T03:08:00Z', 'source': 'pipeline'},
+]
+HISTORY += [
+    {'at': '2026-10-17T22:30:01Z', 'kind': 'audit', 'summary': 'update by pipeline', 'image_url': None},
+    {'at': '2026-10-17T22:30:00Z', 'kind': 'sighting', 'summary': 'seen in USOS', 'location_id': 'USOS', 'image_url': '/media/frames/h.png'},
+    {'at': '2026-10-17T22:20:00Z', 'kind': 'audit', 'summary': 'split by ui-review-3', 'image_url': None},
+]
+
 def handler(route):
     url = route.request.url
     path = re.sub(r'^https?://[^/]+', '', url).split('?')[0]
@@ -85,9 +121,17 @@ def handler(route):
     def j(body, status=200, headers=None):
         route.fulfill(status=status, content_type='application/json', body=json.dumps(body), headers=headers or {})
     if path.startswith('/api/media/'):
-        return route.fulfill(status=200, content_type='image/png', body=IMG)
+        return route.fulfill(status=200, content_type='image/png', body=CROP if '/crops/' in path else IMG)
     if path == '/api/items' and m == 'GET':
+        if 'kind=person' in url:
+            return j({'items': PERSONS, 'total': len(PERSONS)})
         return j({'items': ITEMS, 'total': 124})
+    if path == f'/api/items/{U(501)}':
+        return j(PERSON_DETAIL)
+    if path == f'/api/items/{U(600)}':
+        return j(CROP_ITEM)
+    if path == '/api/items/00000000-0000-4000-8000-000000000000':
+        return j({'detail': 'not found'}, 404)
     if path == f'/api/items/{U(200)}':
         return j(MERGED)
     if path == f'/api/items/{U(100)}':
@@ -120,13 +164,101 @@ def axe(page, label, results):
 def rect(page, sel):
     return page.eval_on_selector(sel, 'e => { const r = e.getBoundingClientRect(); return {x: r.x, y: r.y, w: r.width, h: r.height, b: r.bottom}; }')
 
+MERGE_REACH = """(sel) => {
+  // Every Merge button, scrolled to the vertical centre: is it the topmost element at its centre (not under the footer)?
+  const out = [];
+  for (const b of document.querySelectorAll(sel)) {
+    b.scrollIntoView({block: 'center'});
+    const r = b.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    out.push({name: b.getAttribute('aria-label').slice(0, 60), top: Math.round(r.top), bottom: Math.round(r.bottom),
+              reachable: !!hit && (hit === b || b.contains(hit))});
+  }
+  return out;
+}"""
+
+def round3(page, width, H, axe_results):
+    r = {}
+    # UI3-03 / UI3-04 inventory person rows
+    page.goto(f'{BASE}/?kind=person')
+    page.wait_for_selector(f'[data-testid="item-{U(500)}"]')
+    r['person rows'] = page.eval_on_selector_all('tbody tr', 'rows => rows.map(t => t.querySelector(".item-link").textContent + " | " + t.lastElementChild.textContent)')
+    r['person thumbnails requesting /crops/'] = page.eval_on_selector_all('tbody img', 'imgs => imgs.filter(i => i.src.includes("/crops/")).length')
+    page.screenshot(path=f'{OUT}/r3-inventory-person-{width}.png')
+    axe(page, f'/?kind=person @{width}', axe_results)
+    # UI3-03 / UI3-04 person detail
+    page.goto(f'{BASE}/items/{U(501)}')
+    page.wait_for_selector('ul.moves')
+    r['person detail'] = {'h1': page.inner_text('h1'), 'activity': page.inner_text('ul.moves')}
+    axe(page, f'/items person @{width}', axe_results)
+    # UI3-07 crop hero
+    page.goto(f'{BASE}/items/{U(600)}')
+    page.wait_for_selector('.detail-media img')
+    page.wait_for_function("document.querySelector('.detail-media img').complete")
+    r['crop hero'] = page.evaluate("""() => { const i = document.querySelector('.detail-media img'); const cs = getComputedStyle(i);
+        return {caption: document.querySelector('.detail-media .frame-caption').textContent, natural: [i.naturalWidth, i.naturalHeight],
+                rendered: [Math.round(i.getBoundingClientRect().width), Math.round(i.getBoundingClientRect().height)],
+                scale: +(i.getBoundingClientRect().width / i.naturalWidth).toFixed(2), objectFit: cs.objectFit}; }""")
+    page.click('.detail-media .frame-trigger')
+    page.wait_for_selector('.lightbox img')
+    page.wait_for_timeout(200)
+    r['crop lightbox scale (<= 2)'] = page.evaluate("(() => { const i = document.querySelector('.lightbox img'); return +(i.getBoundingClientRect().width / i.naturalWidth).toFixed(2); })()")
+    page.keyboard.press('Escape')
+    page.screenshot(path=f'{OUT}/r3-crop-{width}.png')
+    axe(page, f'/items crop @{width}', axe_results)
+    # history wording (UI3-11) on the default item
+    page.goto(f'{BASE}/items/{U(1)}')
+    page.wait_for_selector('ol.timeline')
+    r['history'] = page.inner_text('ol.timeline')
+    # UI3-05 / UI3-08 / UI3-09 duplicate queue at this viewport
+    page.goto(f'{BASE}/review?kind=possible_duplicate')
+    pc = f'[data-testid="review-{U(310)}"]'
+    page.wait_for_selector(pc)
+    page.wait_for_function("[...document.querySelectorAll('.candidate .muted[title]')].some(e => e.textContent.includes('Crew member'))")
+    r['person review'] = {
+        'desc': page.inner_text(f'{pc} .review-desc'), 'reason': page.inner_text(f'{pc} .review-reason'),
+        'subject caption': page.inner_text(f'{pc} .dup-subject .frame-caption'),
+        'subject label': page.inner_text(f'{pc} .dup-subject .entity-label'),
+        'chips': page.eval_on_selector_all(f'{pc} [aria-label="Appearance"]', 'ls => ls.map(l => [...l.children].map(c => c.textContent).join(" / "))'),
+        'candidate labels': page.eval_on_selector_all(f'{pc} .candidate .entity-label', 'ls => ls.map(l => l.textContent)'),
+        'catalog lines': page.eval_on_selector_all(f'{pc} .entity-facts > .muted[title]', 'ls => ls.map(l => l.textContent + " [title=" + l.title + "]")'),
+        'footer heights (px)': page.eval_on_selector_all('.review-footer', 'fs => fs.map(f => Math.round(f.getBoundingClientRect().height))'),
+    }
+    page.evaluate(f"document.querySelector('{pc}').scrollIntoView({{block: 'start'}})")
+    page.evaluate('window.scrollBy(0, -60)')
+    page.wait_for_timeout(100)
+    first = page.locator(f'{pc} ul.candidates > li > button[aria-label^="Merge subject"]').first
+    fr = first.bounding_box()
+    footer = rect(page, f'{pc} .review-footer')
+    r['person review']['first Merge button with the card at the top'] = {'bottom': round(fr['y'] + fr['height']), 'viewport': H,
+        'footer top': round(footer['y']), 'visible above footer': fr['y'] + fr['height'] <= min(H, footer['y'])}
+    page.screenshot(path=f'{OUT}/r3-review-person-{width}x{H}.png')
+    r['merge buttons reachable'] = page.evaluate(MERGE_REACH, '.review-card ul.candidates > li > button[aria-label^="Merge subject"]')
+    r['all merge buttons reachable'] = all(x['reachable'] for x in r['merge buttons reachable'])
+    axe(page, f'/review duplicates @{width}', axe_results)
+    page.get_by_role('button', name='Choose catalog…').first.click()
+    r['footer height with catalog search open (px)'] = round(rect(page, f'{pc} .review-footer')['h'])
+    axe(page, f'/review choose-catalog @{width}', axe_results)
+    # UI3-04 / UI3-06 overview
+    page.goto(f'{BASE}/overview')
+    page.wait_for_selector('ul.events li')
+    r['overview tiles'] = page.eval_on_selector_all('.tile', 'ts => ts.map(t => t.getAttribute("aria-label"))')
+    r['overview events'] = page.inner_text('ul.events')
+    # UI3-12 not-found pages
+    for path in ('/items/00000000-0000-4000-8000-000000000000', '/nope'):
+        page.goto(f'{BASE}{path}')
+        page.wait_for_selector('h1')
+        r[f'h1 {path}'] = page.inner_text('h1')
+        axe(page, f'{path} @{width}', axe_results)
+    return r
+
 def main():
     report = {}
     axe_results = {}
     with sync_playwright() as p:
         b = p.chromium.launch()
-        for width in (1024, 1440):
-            ctx = b.new_context(viewport={'width': width, 'height': 1000})
+        for width, H in ((1024, 768), (1440, 1000)):
+            ctx = b.new_context(viewport={'width': width, 'height': H})
             ctx.add_init_script("localStorage.setItem('nasa-omni.operator', 'ui-review-2')")
             page = ctx.new_page()
             page.route(re.compile(r'.*/(api|agent)/.*'), handler)
@@ -154,12 +286,15 @@ def main():
             page.goto(f'{BASE}/review')
             card = f'[data-testid="review-{U(300)}"]'
             page.wait_for_selector(card)
+            page.evaluate(f"document.querySelector('{card}').scrollIntoView({{block: 'start'}})")
+            page.evaluate('window.scrollBy(0, -60)')
             head = rect(page, f'{card} header')
-            keep = rect(page, f'{card} .review-footer .actions button:nth-child(3)')
+            keep = rect(page, f'{card} .review-footer-row button:nth-child(3)')
             report[f'{width} review'] = {'flow distance header->actions (px)': page.evaluate(f"""() => {{
                 const c = document.querySelector('{card}'); const f = c.querySelector('.review-footer');
                 return f.offsetTop - c.querySelector('header').offsetTop; }}"""),
-                'keep-both visible at load (bottom <= 1000)': keep['b'] <= 1000, 'keep-both bottom': keep['b'], 'header top': head['y'],
+                f'keep-both visible with the card at the top (bottom <= {H})': keep['b'] <= H, 'keep-both bottom': keep['b'], 'header top': head['y'],
+                'footer height (px)': rect(page, f'{card} .review-footer')['h'],
                 'candidate tiles shown': page.locator(f'{card} ul.candidates > li').count(),
                 'page overflow-x': page.evaluate('document.documentElement.scrollWidth - document.documentElement.clientWidth')}
             page.screenshot(path=f'{OUT}/02-review-{width}.png')
@@ -168,14 +303,14 @@ def main():
             page.evaluate(f"document.querySelector('{card}').scrollIntoView({{block: 'start'}})")
             page.mouse.wheel(0, 300)
             page.wait_for_timeout(200)
-            keep2 = rect(page, f'{card} .review-footer .actions button:nth-child(3)')
-            report[f'{width} review']['keep-both in viewport after scrolling 300px into card'] = 0 <= keep2['y'] and keep2['b'] <= 1000
+            keep2 = rect(page, f'{card} .review-footer-row button:nth-child(3)')
+            report[f'{width} review']['keep-both in viewport after scrolling 300px into card'] = 0 <= keep2['y'] and keep2['b'] <= H
             page.screenshot(path=f'{OUT}/03-review-scrolled-{width}.png')
             # merge confirm + toast
             page.locator(f'{card} ul.candidates > li').first.get_by_role('button', name=re.compile('Merge subject into this')).click()
             page.wait_for_selector(f'{card} .confirm-merge'); page.wait_for_function("[...document.querySelectorAll('.confirm-merge img')].every(i => i.complete && i.naturalWidth > 0)")
             cm = rect(page, f'{card} .confirm-merge')
-            report[f'{width} review']['confirm visible'] = cm['y'] >= 0 and cm['y'] < 1000
+            report[f'{width} review']['confirm visible'] = cm['y'] >= 0 and cm['y'] < H
             page.screenshot(path=f'{OUT}/04-merge-confirm-{width}.png')
             axe(page, f'/review merge-confirm @{width}', axe_results)
             page.get_by_role('button', name='Confirm merge').click()
@@ -210,7 +345,8 @@ def main():
             report[f'{width} overview'] = page.inner_text('ul.events')
             page.screenshot(path=f'{OUT}/07-overview-{width}.png')
             axe(page, f'/overview @{width}', axe_results)
-            report[f'{width} console errors'] = errors
+            report[f'{width} round3'] = round3(page, width, H, axe_results)
+            report[f'{width} console errors'] = [e for e in errors if '404' not in e]
             ctx.close()
         b.close()
     print(json.dumps(report, indent=1))

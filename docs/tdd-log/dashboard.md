@@ -413,3 +413,110 @@ item, its target and an overview feed. The pages were checked at 1024×1000 and 
   an extra `?collapse=false` request. Not done.
 - **UI2-12 ISO timestamps in chat text:** left to the agent prompt (optional in the finding).
 - **Inventory list thumbnails with boxes:** not requested (only tiles and the hero were). `Thumb` is unchanged.
+
+## UI review round 3 fixes (2026-10-18, docs/ui-review/round3/)
+
+Strict red → green again. Each new test file was written first and run against the unchanged code, and the failure
+reasons were checked before any implementation. For cycle 1, the new module `src/lib/person.ts` existed only as an
+empty skeleton (`export {}`), so each test failed on its own assertion rather than the whole file failing on an import
+error. Baseline: 341 tests. Final: **389 tests** (48 new), `tsc --noEmit` clean, `npm run build` clean, axe 0
+violations on 28 page states.
+
+### Red evidence
+
+| Cycle | Test file | Red | Failure reason (checked) | Passed on red (why) |
+|---|---|---|---|---|
+| 1 | `tests/ui3_wording.test.ts` | 23 / 23 | `personLabel` / `personAppearance` / `appearanceChips` / `reviewReason` / `safePersonImage` / `isPersonEvent` / `personEventSentence` / `isCropUrl` / `cropDisplayWidth` / `auditText` / `hideMirroredAudits` not exported; `eventSentence` still "Moved by person (…)" for a person and "to an unknown location"; `timelineLabel` "2 × update by pipeline" | – |
+| 2 | `tests/ui3_pages.test.tsx` | 20 / 20 | rows and h1 read "person"; a `/crops/` thumbnail was rendered for a person; the citation read "person (USOS)"; "MOVED person … by person (spacesuit…)"; the internal "(15 live 'person' entities…)" text was shown; no appearance chips; "Whole frame (no box)"; "Catalog: ctb-half"; no `.review-footer-row`; tile "People seen (last hour)"; crop captioned "Whole frame"; "split by …"; the mirrored pipeline row was shown; banner and toast without ids; no h1 on either not-found page | – |
+| 3 | `tests/ui3_layout_css.test.tsx` | 4 / 4 | no `.review-footer-row` rule; footer padding `4px 16px 12px`; no `.keep-hint` rule; no `.frame-crop` rules | – |
+| 4 | `ui3_layout_css` side-by-side test (added after the first Playwright run) | 1 / 1 | no 861–1100 px media block, so the subject stacked above the candidates | – |
+
+Cycle 4 comes from Playwright. After cycles 1–3 the footer was 51 px and every Merge button could be scrolled into
+view. But at 1024×768, with the card at the top, the first Merge button ended at y = 960, below the fold and under the
+footer (top at 717). That happened because the round-2 1100 px rule stacks the subject above the candidates. The
+new test went red first; the fix keeps a 200 px subject column beside the candidates between 861 and 1100 px.
+
+Test bugs fixed before green (in my own new tests only):
+
+- The overview person-event test first asserted that the line never contains "spacesuit". The person label's
+  appearance comes from the event's `actor_desc`, which for a person's own event is that person's appearance. The
+  test now asserts the label "Person: spacesuit, dark visor" and that there is no "by".
+- The unmerge-toast test first expected "Merge undone: …". I chose one verb for both toasts instead: "Unmerged:
+  <label> <id> is a separate item again." is used for the item-page Unmerge and for the toast Undo.
+
+**Amended existing tests** (intended behaviour changes):
+
+- `ui2_wording_markdown`, `ac_ui_12_17_18`: a one-sided move reads "from X (destination not seen)". A folded "update
+  by pipeline" run reads "N pipeline updates"; other folded summaries keep "N × …" (a new assertion covers that).
+- `ac_ui_12_17_18`: "14 pipeline updates" / "9 pipeline updates" (was "14 × update by pipeline").
+- `ui2_detail_overview`: the banner reads "Merged into cargo transfer bag 44444444 at …".
+- `ui2_review`: the Undo toast reads "Unmerged: headset 55555555 is a separate item again."
+- `ac_ui_09_overview`: the tile is found as "Person tracks seen".
+- `ac_ui_13_16_review_ui`: on a duplicate card the catalog select is behind "Choose catalog…", and the keep-both
+  description points there.
+
+### Findings → fix → tests
+
+| Finding | Fix | Tests |
+|---|---|---|
+| UI3-03 "person / Crew member" rows | `lib/person.ts`: `personAppearance` (drops "person:", the internal count note, "wearing", "person (…)" and trailing punctuation; generic words are not an appearance) and `personLabel` "Person: <appearance>" (cut at 40 chars with "…"), else "Person <short id>". `displayLabel` / `displayLabelWithId` are used for inventory rows, the detail h1, review subject and candidates (subject appearance falls back to the review description), merge-confirm captions, the overview and chat citations / id links (the cached item wins over the agent's "person"). `safePersonImage` drops `/crops/`, `/exemplars/` and `/faces/` URLs; `Thumb` and `FrameImage` take a `person` flag and show the placeholder instead. | `ui3_wording` ×8, `ui3_pages` ×4 |
+| UI3-04 person events / "to an unknown location" | `isPersonEvent` (`entity_catalog_id === 'crew-member'`, `entity_kind`, or the item kind) and `personEventSentence`: "seen in X", "left X", "arrived in X", "moved from A to B", with no actor. Used in the overview (a `person` badge, the person label and the sentence), Activity, history event rows (also the legacy summary) and Last handled ("Seen moving"). `eventPlace`: a move with no destination reads "from X (destination not seen)". | `ui3_wording` ×4, `ui3_pages` ×4 |
+| UI3-05 person duplicate reviews | `reviewReason` turns "(N live 'X' entities would exceed the expected count of M)" into "More person tracks than the expected crew size — these may be the same person" (objects: "More X items than the expected count (M) — some may be duplicates"). The cleaned text is used in the description and alt texts, and the reason is shown on its own line. "Appearance" chips (colour/shape words + garment, at most 6) appear for the subject and each candidate. A person image with no box is captioned "Whole frame, several people may be visible". | `ui3_wording` ×5, `ui3_pages` ×3 |
+| UI3-06 "People seen" tile | Label "Person tracks seen (last hour)", hint "tracks, not people: one person can have several". The API gives no sighting count. | `ui3_pages` ×1, `ac_ui_09` amended |
+| UI3-07 crops | `isCropUrl` (`/crops/`) or a `crop` prop: `.frame-crop` (natural size, `max-width: 100%`, `object-fit: contain`), caption "Close-up crop". The lightbox enlarges crops to at most 2× (`cropDisplayWidth`). | `ui3_wording` ×3, `ui3_pages` ×1, `ui3_layout_css` ×1 |
+| UI3-08 catalog slugs | `Catalog: <display name>` (`catalog_name`, else the /api/catalog name) with `title=<slug>`. The keep-both hint uses the name too. | `ui3_pages` ×1 |
+| UI3-09 171 px footer | The duplicate footer is one flex row: "Choose catalog…" (disclosure with search + select + Classify), "New catalog item", "Not a duplicate (keep both)" and "Dismiss…". The keep-both hint is screen-reader text and the button tooltip. Padding is 8 px, `max-height: 70vh`. At 861–1100 px the subject stays in a 200 px column. | `ui3_pages` ×1, `ui3_layout_css` ×4 (incl. cycle 4) + Playwright |
+| UI3-11 wording | `auditText`: "split" reads "Unmerge", "update by pipeline" reads "Pipeline update"; folded runs read "N pipeline updates". `hideMirroredAudits` drops single pipeline-update rows within 2 s of a sighting (also from the chip counts). The banner and both unmerge toasts name items as "<label> <short id>". | `ui3_wording` ×3, `ui3_pages` ×3 |
+| UI3-12 no h1 on not-found | `<h1>Page not found</h1>` (App NotFound), `<h1>Item not found</h1>` / `<h1>Item unavailable</h1>` on the item page. | `ui3_pages` ×2 + axe |
+
+### Playwright measurements (vite preview, mocked routes, `dashboard/scripts/ui_check.py`)
+
+The round-2 fixture gained 3 person items (one whose snapshot is a crop), a person event pair and a one-sided object
+move, a person duplicate review (internal reason, no box, 3 person candidates), a 220×140 crop item, mirrored and
+"split" history rows, and the two not-found pages. Viewports: **1024×768** and **1440×1000**.
+
+- **Duplicate footer:** 51 px at both sizes (was 171 px); 114 px with the catalog search open.
+  - Round-2 camera card scrolled to the top: "Keep both" ends at y = 760 of 768 and 992 of 1000. It is still in the
+    viewport after scrolling 300 px into the card. Page overflow-x is 0.
+- **Merge reachability:** every "Merge subject into this" button (10 at each size) was scrolled to the centre, and
+  `elementFromPoint` hit the button itself, not the footer: all reachable.
+  - Person card at the top: the first Merge button ends at y = 609 at 1024×768 (footer top 717) and at 537 at
+    1440×1000. Before cycle 4 it ended at y = 960 at 1024×768.
+- **Person rows:** "Person: black shirt, grey pants", "Person: short hair, blue shorts, orange top | Seen moving
+  2026-10-18 03:10 UTC", "Person 000001f6". 0 thumbnails request `/crops/`.
+- **Person detail:** h1 "Person: short hair, blue shorts, orange top"; Activity "Left Node 1 Unity (NOD1) · …".
+- **Crop hero:** 220×140 natural, rendered 220×140 (scale 1), `object-fit: contain`, caption "Close-up crop. Click
+  to enlarge.". The lightbox scale is 1.45 (≤ 2; limited by the available width).
+- **Person review:**
+  - The description reads "person: grey hoodie", followed by the readable reason line.
+  - Subject caption: "Whole frame, several people may be visible. Click to enlarge.".
+  - Chips: "grey hoodie" for the subject, "grey hoodie / black pants" and "blue shirt / tan pants" for candidates.
+  - Candidates are named "Person: grey hoodie, black pants", "Person: blue shirt, tan pants", "Person 00000200".
+  - Catalog lines read "Catalog: Crew member [title=crew-member]".
+- **History:** "Unmerge by ui-review-3"; the 22:30:01 pipeline update next to the 22:30:00 sighting is hidden; "9
+  pipeline updates (sighting refresh: …)" is kept.
+- **Overview:**
+  - Tile "Person tracks seen (last hour)".
+  - Person events read "PERSON Person: spacesuit, dark visor 000001f5 left Node 1 Unity (NOD1)" and "PERSON Person:
+    grey t-shirt 000001f4 seen in Cupola (CUP1)".
+  - The object move reads "… from US Orbital Segment (USOS) (destination not seen)".
+- **Not found:** h1 "Item not found" and "Page not found".
+- **axe-core:** 0 violations on 28 page states at both sizes. That covers the round-2 pages plus /?kind=person, the
+  person detail, the crop detail (after the lightbox), the duplicate queue, the queue with "Choose catalog…" open,
+  /items/<missing> and /nope.
+- **Console:** only the two mocked 409s and the expected 404s for the missing id.
+
+### Deferred / not dashboard-side
+
+- **UI3-01 (people count), UI3-02 (private-window summaries), UI3-10 (chat change-list phrasing):** agent and
+  inventory-api; not touched (services/agent and services/perception are owned by others).
+- **UI3-05 server side:** person-region boxes on sightings (perception), appearance-based candidate scoring and
+  conflicting-attribute reasons, rate-limiting person duplicate reviews (inventory-api). The dashboard draws any box
+  that arrives, and shows `match_reasons` and the client-side appearance chips.
+- **UI3-04 server side:** not attaching an `actor_desc` to a person's own move (or `actor_kind: self`). The dashboard
+  already drops the actor clause for person subjects. `entity_kind` / `entity_description` on events are read when
+  sent (optional).
+- **UI3-06 sightings count:** the API has no per-hour person sighting count, so the tile is relabelled rather than
+  recounted.
+- **UI3-11 server fold:** sighting-refresh audit rows are hidden client-side when they mirror a sighting. Folding them
+  in `/items/{id}/history` itself is left to inventory-api.

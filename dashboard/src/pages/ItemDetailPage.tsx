@@ -11,6 +11,7 @@ import { Timestamp } from '../components/Timestamp';
 import { UUID_RE } from '../lib/agent';
 import { eventSentence, formatUtc, formatUtcMinute, legacyEventSummary, shortId } from '../lib/format';
 import { LastHandledCell } from '../components/LastHandled';
+import { displayLabel, displayLabelWithId, isPerson } from '../lib/person';
 import { useCatalog, useLocations } from '../state/reference';
 import { useOperator } from '../state/operator';
 import { errorMessage, useToasts } from '../state/toasts';
@@ -67,13 +68,40 @@ export function groupTimeline(entries: TimelineEntry[]): TimelineGroup[] {
   return out;
 }
 
+/** UI3-11: history wording: the audit op "split" reads "Unmerge"; "update by pipeline" reads "Pipeline update". */
+export function auditText(summary: string | null | undefined): string {
+  const s = (summary ?? '').trim();
+  if (/^split\b/i.test(s)) return `Unmerge${s.slice('split'.length)}`;
+  if (/^update by pipeline$/i.test(s)) return 'Pipeline update';
+  return s;
+}
+
+/** Seconds within which a pipeline update counts as the mirror of a sighting (the sighting refresh it records). */
+export const MIRROR_WINDOW_MS = 2000;
+
 /**
- * Row text (UI2-11): "14 × update by pipeline" for folded runs. A server-collapsed summary already starts with its
+ * UI3-11: drops single "Pipeline update" audit rows that only mirror a sighting at the same time (every sighting
+ * refreshes last_seen_at/confidence and writes one). Server-collapsed rows (count > 1) and other audits stay.
+ */
+export function hideMirroredAudits(entries: TimelineEntry[]): TimelineEntry[] {
+  const seen = entries.filter((e) => e.kind === 'sighting').map((e) => Date.parse(e.at)).filter((t) => !Number.isNaN(t));
+  if (!seen.length) return entries;
+  return entries.filter((e) => {
+    if (e.kind !== 'audit' || (typeof e.count === 'number' && e.count > 1)) return true;
+    if (auditText(e.summary) !== 'Pipeline update') return true;
+    const t = Date.parse(e.at);
+    return Number.isNaN(t) || !seen.some((x) => Math.abs(x - t) <= MIRROR_WINDOW_MS);
+  });
+}
+
+/**
+ * Row text (UI2-11, UI3-11): "14 pipeline updates" / "14 × <summary>" for folded runs. A server-collapsed summary already starts with its
  * count ("9 pipeline updates (…)"), so that number is replaced by the group total instead of prefixing "9 × ".
  */
 export function timelineLabel(g: TimelineGroup): string {
-  const s = g.entry.summary || '';
+  const s = g.entry.kind === 'audit' ? auditText(g.entry.summary) : g.entry.summary || '';
   if (g.count <= 1) return s;
+  if (s === 'Pipeline update') return `${g.count} pipeline updates`;
   const m = /^(\d+)\s+(.+)$/.exec(s);
   return m ? `${g.count} ${m[2]}` : `${g.count} × ${s || 'audit entry'}`;
 }
@@ -81,6 +109,8 @@ export function timelineLabel(g: TimelineGroup): string {
 /** Context from the item detail used to render history rows in the shared wording (UI-04) and with boxes (UI2-07). */
 interface RowContext {
   label: string;
+  /** UI3-04: the item is a person: its own events read "left X" / "seen in X", with no actor. */
+  person: boolean;
   events: Map<string, Event>;
   sightings: Map<string, Sighting>;
 }
@@ -90,8 +120,9 @@ function rowText(g: TimelineGroup, ctx: RowContext): string {
   const e = g.entry;
   if (e.kind !== 'event' || g.count > 1) return timelineLabel(g);
   const ev = e.id ? ctx.events.get(e.id) : undefined;
-  if (ev) return eventSentence(ev);
-  return legacyEventSummary(e.summary, { source: e.source, actor_kind: e.actor_kind, location_role: e.location_role }) ?? e.summary ?? '';
+  if (ev) return eventSentence(ev, { person: ctx.person });
+  return legacyEventSummary(e.summary, { source: e.source, actor_kind: e.actor_kind, location_role: e.location_role }, { person: ctx.person })
+    ?? e.summary ?? '';
 }
 
 function TimelineRow({ g, ctx }: { g: TimelineGroup; ctx: RowContext }) {
@@ -118,7 +149,7 @@ function TimelineRow({ g, ctx }: { g: TimelineGroup; ctx: RowContext }) {
           {open && (
             <ul className="tl-members" aria-label="Folded entries">
               {g.members.map((m, i) => (
-                <li key={`${m.at}-${i}`}><time dateTime={m.at}>{formatUtc(m.at)}</time>{` ${m.summary ?? ''}`}</li>
+                <li key={`${m.at}-${i}`}><time dateTime={m.at}>{formatUtc(m.at)}</time>{` ${m.kind === 'audit' ? auditText(m.summary) : m.summary ?? ''}`}</li>
               ))}
             </ul>
           )}
@@ -126,9 +157,9 @@ function TimelineRow({ g, ctx }: { g: TimelineGroup; ctx: RowContext }) {
       )}
       {e.image_url && (sighting && validBBox(sighting.bbox) ? (
         <FrameImage src={e.image_url} alt={`Evidence for ${label}: ${text || e.kind}`} bbox={sighting.bbox}
-          bboxSource={sighting.bbox_source} size="md" />
+          bboxSource={sighting.bbox_source} size="md" person={ctx.person} />
       ) : (
-        <Thumb src={e.image_url} alt={`Evidence for ${label}: ${text || e.kind}`} size="md" />
+        <Thumb src={e.image_url} alt={`Evidence for ${label}: ${text || e.kind}`} size="md" person={ctx.person} />
       ))}
     </li>
   );
@@ -136,13 +167,14 @@ function TimelineRow({ g, ctx }: { g: TimelineGroup; ctx: RowContext }) {
 
 function Timeline({ entries, ctx }: { entries: TimelineEntry[] | null; ctx: RowContext }) {
   const [hidden, setHidden] = useState<Set<TimelineKind>>(() => new Set());
+  const shown = useMemo(() => (entries ? hideMirroredAudits(entries) : null), [entries]);
   const groups = useMemo(
-    () => groupTimeline((entries ?? []).filter((e) => !hidden.has(e.kind))),
-    [entries, hidden],
+    () => groupTimeline((shown ?? []).filter((e) => !hidden.has(e.kind))),
+    [shown, hidden],
   );
-  if (entries === null) return <p className="muted">Loading history…</p>;
-  if (entries.length === 0) return <p className="empty">No history recorded yet.</p>;
-  const counts = entries.reduce<Record<string, number>>((acc, e) => {
+  if (shown === null) return <p className="muted">Loading history…</p>;
+  if (shown.length === 0) return <p className="empty">No history recorded yet.</p>;
+  const counts = shown.reduce<Record<string, number>>((acc, e) => {
     acc[e.kind] = (acc[e.kind] ?? 0) + (typeof e.count === 'number' && e.count > 1 ? e.count : 1);
     return acc;
   }, {});
@@ -184,14 +216,15 @@ function MergedBanner({ item, onUnmerged }: { item: ItemDetail; onUnmerged: () =
   const [conflict, setConflict] = useState<string | null>(null);
   const op = operator.trim();
   const target = item.merged_into;
-  const targetLabel = target ? target.label?.trim() || `item ${shortId(target.entity_id)}` : '';
+  // UI3-11: items are named with their short id in banners and toasts (two items often share a label).
+  const targetLabel = target ? displayLabelWithId({ entity_id: target.entity_id, label: target.label }) : '';
   const unmerge = async () => {
     if (!op || busy) return;
     setBusy(true);
     setConflict(null);
     try {
       await unmergeItem(item.entity_id, { operator: op });
-      toasts.success(`Unmerged: ${item.label} is a separate item again.`);
+      toasts.success(`Unmerged: ${displayLabelWithId(item)} is a separate item again.`);
       onUnmerged();
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
@@ -329,7 +362,8 @@ export default function ItemDetailPage() {
   if (state.kind === 'notfound') {
     return (
       <div className="page">
-        <p className="empty">Item not found.</p>
+        <h1>Item not found</h1>
+        <p className="empty">{`No item has the id ${id.slice(0, 80)}.`}</p>
         <Link to="/">Back to inventory</Link>
       </div>
     );
@@ -337,6 +371,7 @@ export default function ItemDetailPage() {
   if (state.kind === 'error') {
     return (
       <div className="page">
+        <h1>Item unavailable</h1>
         <p className="empty">This item could not be loaded.</p>
         <Link to="/">Back to inventory</Link>
       </div>
@@ -348,8 +383,11 @@ export default function ItemDetailPage() {
     (a, b) => (Date.parse(b.occurred_at ?? '') || 0) - (Date.parse(a.occurred_at ?? '') || 0),
   );
   const attributes = Object.entries(item.attributes ?? {});
+  const person = isPerson(item);
+  const title = displayLabel(item);
   const rowCtx: RowContext = {
-    label: item.label,
+    label: title,
+    person,
     events: new Map((item.events ?? []).filter((e) => e.event_id).map((e) => [e.event_id as string, e])),
     sightings: new Map(
       (item.sightings ?? []).filter((x) => x && typeof x.sighting_id === 'string').map((x) => [x.sighting_id as string, x]),
@@ -374,7 +412,7 @@ export default function ItemDetailPage() {
       <div className="page-head">
         <div>
           <Link to="/" className="muted">← Inventory</Link>
-          <h1>{item.label}</h1>
+          <h1>{title}</h1>
         </div>
         {!editing && (
           <button type="button" className="primary" onClick={() => setEditing(true)}>Edit item</button>
@@ -385,8 +423,8 @@ export default function ItemDetailPage() {
 
       <div className="detail-grid">
         <div className="detail-media" data-testid="detail-media">
-          <FrameImage src={item.snapshot_url} alt={item.label} size="lg" bbox={item.snapshot_bbox}
-            bboxSource={item.snapshot_bbox_source} caption />
+          <FrameImage src={item.snapshot_url} alt={title} size="lg" bbox={item.snapshot_bbox}
+            bboxSource={item.snapshot_bbox_source} caption person={person} />
         </div>
         <div className="card">
           <dl className="facts">
@@ -451,11 +489,11 @@ export default function ItemDetailPage() {
         {activity.length ? (
           <ul className="moves" aria-label="Activity">
             {activity.map((m, i) => {
-              const sentence = eventSentence(m);
+              const sentence = eventSentence(m, { person });
               return (
                 <li key={m.event_id ?? i} className="activity">
                   <span>{`${sentence} · ${formatUtc(m.occurred_at) || 'unknown time'}`}</span>
-                  {m.evidence_url && <FrameImage src={m.evidence_url} alt={`Evidence: ${sentence}`} size="md" />}
+                  {m.evidence_url && <FrameImage src={m.evidence_url} alt={`Evidence: ${sentence}`} size="md" person={person} />}
                 </li>
               );
             })}
