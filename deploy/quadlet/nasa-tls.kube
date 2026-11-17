@@ -1,0 +1,19 @@
+# The only port published to the outside world (443). nginx resolves the dashboard pod once at start-up, so this
+# unit is bound to the application tier: restarting nasa-app also restarts this one and the address is re-resolved.
+[Unit]
+Description=NASA POC - TLS front door for the dashboard
+Documentation=file:/etc/nasa/kube/tls.yaml
+Requires=nasa-app.service
+After=nasa-app.service
+PartOf=nasa-app.service
+
+[Kube]
+Yaml=/etc/nasa/kube/tls.yaml
+Network=nasa.network
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

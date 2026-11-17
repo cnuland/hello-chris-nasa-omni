@@ -527,7 +527,7 @@ None. No existing test was changed or weakened.
 
 ### Deployment notes
 
-- `deploy/app/perception.yaml` sets `CAMERA_ID=cam-lab1-fwd`. For the handheld ISS tour video set
+- `k8s/app/perception.yaml` sets `CAMERA_ID=cam-lab1-fwd` (the Podman unit uses `cam-handheld`). For the handheld ISS tour video set
   `CAMERA_ID=cam-handheld`, so that hints set the location without the low-confidence flag. On `cam-lab1-fwd` the
   tour still lands in COL1, but with sighting confidence ≤ 0.5.
 - The new `PERCEPTION_*` vars all have working defaults. Optional: `PERCEPTION_DETECT_LONG_SIDE` (1280; raise only

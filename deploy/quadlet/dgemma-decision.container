@@ -1,4 +1,4 @@
-# Structured "same object or new?" decision server in front of dgemma (calibrated label probabilities on :8011).
+# Structured "same object or new?" decision server in front of dgemma: calibrated label probabilities on :8011.
 [Unit]
 Description=NASA POC - decision server for dgemma
 Requires=dgemma.service
@@ -13,10 +13,16 @@ Volume=/var/lib/nasa/models:/cache:z
 Environment=HOME=/cache HF_HOME=/cache/hf
 PodmanArgs=--entrypoint=python3
 Exec=/vllm-workspace/examples/features/structured_diffusion/structured_server.py --upstream=http://dgemma:8000 --tokenizer=aidendle94/diffusiongemma-26B-A4B-it-INT8-dynamic --model=dgemma --canvas=64 --no-constrained --host=0.0.0.0 --port=8011
+HealthCmd=curl -sf http://127.0.0.1:8011/health
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=3
+# It cannot serve until dgemma upstream is warm, which on T4 takes far longer than this server's own start-up.
+HealthStartPeriod=2400s
 
 [Service]
 Restart=always
-RestartSec=20
+RestartSec=30
 
 [Install]
 WantedBy=multi-user.target

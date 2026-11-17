@@ -1,7 +1,9 @@
-# Decision model: Google DiffusionGemma 26B-A4B (INT8) on vLLM. GB10: one GPU. This is the 4x T4 development variant.
-# A fresh T4 host JIT-compiles the patched Triton kernels during warm-up for 30+ minutes before /health is ready.
+# Decision model: Google DiffusionGemma 26B-A4B (INT8) on vLLM. GB10: one GPU, TP 1. This is the 4x T4 variant.
+# A fresh T4 host JIT-compiles the patched Triton kernels during warm-up for 30+ minutes before /health is ready,
+# which is why HealthStartPeriod is so long.
 [Unit]
 Description=NASA POC - dgemma (decision model, vLLM)
+Wants=network-online.target
 After=network-online.target
 
 [Container]
@@ -10,17 +12,20 @@ Image=docker.io/vllm/vllm-openai:v0.31.0
 AddDevice=nvidia.com/gpu=all
 Network=nasa.network
 PublishPort=8000:8000
-PodmanArgs=--shm-size=16g
 Volume=/var/lib/nasa/models:/cache:z
 Volume=/etc/nasa/vllm-start.sh:/vllm-start.sh:ro,z
 Environment=HOME=/cache HF_HOME=/cache/hf VLLM_CACHE_ROOT=/cache/vllm TRITON_CACHE_DIR=/cache/triton CUDA_MODULE_LOADING=EAGER HF_HUB_ENABLE_HF_TRANSFER=0
-PodmanArgs=--entrypoint=/bin/bash
+PodmanArgs=--shm-size=16g --entrypoint=/bin/bash
 Exec=/vllm-start.sh aidendle94/diffusiongemma-26B-A4B-it-INT8-dynamic --served-model-name=dgemma --host=0.0.0.0 --port=8000 '--diffusion-config={"canvas_length":64}' --max-logprobs=32 --max-model-len=4096 --max-num-seqs=1 --tensor-parallel-size=4 --dtype=half --moe-backend=humming '--limit-mm-per-prompt={"image":2}' --gpu-memory-utilization=0.78
 HealthCmd=curl -sf http://127.0.0.1:8000/health
 HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=3
+HealthStartPeriod=2400s
 
 [Service]
 Restart=on-failure
+RestartSec=30
 TimeoutStartSec=900
 
 [Install]

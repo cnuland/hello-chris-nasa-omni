@@ -1,15 +1,18 @@
 [Unit]
 Description=NASA POC - application tier (inventory API, agent + MCP server, dashboard)
+Documentation=file:/etc/nasa/kube/app.yaml
 Requires=nasa-data.service
 After=nasa-data.service
 
 [Kube]
 Yaml=/etc/nasa/kube/app.yaml
+# Model endpoints for this host, written by scripts/install-app.sh from deploy/kube/endpoints.yaml.
 ConfigMap=/etc/nasa/endpoints.yaml
 Network=nasa.network
 
 [Service]
 Restart=on-failure
+TimeoutStartSec=600
 
 [Install]
 WantedBy=multi-user.target

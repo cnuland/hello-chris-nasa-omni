@@ -26,12 +26,12 @@ minimised.
 | R9 | Postgres is the **source of truth**. Frame descriptions and audio transcripts go to long-term storage (RustFS). An agentic memory layer ("dreaming") compresses context, prioritising inventory state. |
 | R10 | Evaluation system for the identification pipeline: detection, classification, deduplication, location, events, chatbot QA. It runs in CI as regression gates. |
 | R11 | Open-source components only. Model licenses are recorded per model (see `docs/QUESTIONS.md`). |
-| R12 | Runs on OpenShift with Open Data Hub (the upstream of Red Hat OpenShift AI). Inference runs in a dedicated namespace. |
+| R12 | Runs as Podman containers managed by systemd (Quadlet) on the host OS the hardware already has: Ubuntu 22.04/24.04 or RHEL 9/10. Nothing replaces the host platform. (Was: OpenShift with Open Data Hub; see `k8s/README.md`.) |
 
 ## 3. System overview
 
 ```
-             ┌──────────────── nasa-app ──────────────────────────────────────────────┐
+             ┌──────────────── app tier (podman pods on the 'nasa' network) ──────────┐
  video feed ─┤ perception (Python)                                                    │
  audio feed ─┤  ingest(ffmpeg) → keyframes(1/s) + audio chunks(5 s)                   │
              │  → detector (OWLv2) + crop embeddings (DINOv2)        [fast path]      │
@@ -40,17 +40,17 @@ minimised.
              │    decide (auto / DiffusionGemma adjudication / review queue)          │
              │  → inventory-api (POST observations / events / unknowns)               │
              │                                                                        │
-             │ inventory-api (FastAPI) ── Postgres (CNPG + pgvector)  [source of truth]│
+             │ inventory-api (FastAPI) ── Postgres + pgvector         [source of truth]│
              │        │                └─ RustFS (frames, crops, transcripts)  [long-term]
              │ agent (FastAPI): chat + tools over inventory-api; "dreaming" memory job │
              │ dashboard (React/Vite): Inventory · Item · Unknowns · Manage · Chat     │
              └────────────────────────────────────────────────────────────────────────┘
-             ┌──────────────── nasa-inference ────────────────────────────────────────┐
+             ┌──────────────── inference tier (quadlet .container units, CDI GPUs) ───┐
              │ omni:     vLLM-Omni nightly, Qwen2.5-Omni-7B thinker (A10)             │
              │ agent-llm: vLLM, Qwen3-8B, tool calling + JSON schema (A10)            │
              │ decision: vLLM, DiffusionGemma-26B INT8 TP4, /v1/systemone (4×T4)      │
              └────────────────────────────────────────────────────────────────────────┘
-             nasa-data: CNPG Postgres cluster, RustFS     odh: Open Data Hub (KServe, etc.)
+             data tier: Postgres 16 + pgvector, RustFS (S3)   ·   deployment: deploy/README.md
 ```
 
 ## 4. Key design decisions (ADRs in `docs/adr/`)

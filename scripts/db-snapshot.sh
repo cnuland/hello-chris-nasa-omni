@@ -1,18 +1,28 @@
 #!/usr/bin/env bash
-# Save or restore the inventory DB (custom-format pg_dump), e.g. to keep a demo baseline between experiments.
-#   db-snapshot.sh save <file.dump>      |      db-snapshot.sh restore <file.dump>   (restore replaces all data)
+# Save or restore the inventory database, for example to keep a demo baseline between experiments.
+#
+#   scripts/db-snapshot.sh save <file.dump>        custom-format pg_dump
+#   scripts/db-snapshot.sh restore <file.dump>     REPLACES all data, then re-owns it to the inventory role
+#
+# Against a Quadlet host, run it with the root store:  PODMAN="sudo podman" scripts/db-snapshot.sh save x.dump
 set -euo pipefail
-NS=nasa-data; P="$(oc get pod -n $NS -l cnpg.io/cluster=inventory-db,cnpg.io/instanceRole=primary -o name | head -1)"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=../deploy/scripts/lib.sh
+. "$ROOT/deploy/scripts/lib.sh"
+
+PG=inventory-db-postgres
+$PODMAN container exists "$PG" || die "$PG is not running (scripts/stack.sh up, or PODMAN=\"sudo podman\")"
+
 case "${1:-}" in
-  save)    oc exec -n $NS "$P" -c postgres -- pg_dump -U postgres -d inventory -Fc > "${2:?file}";;
-  restore) oc exec -i -n $NS "$P" -c postgres -- pg_restore -U postgres -d inventory --clean --if-exists --no-owner < "${2:?file}"
-           # --no-owner leaves the restored objects owned by postgres; the API connects as the 'inventory' role.
-           oc exec -n $NS "$P" -c postgres -- psql -U postgres -d inventory -q -v ON_ERROR_STOP=1 -c "
-DO \$\$ DECLARE r record; BEGIN
- FOR r IN SELECT format('%I.%I', schemaname, tablename) t FROM pg_tables WHERE schemaname='public' LOOP EXECUTE 'ALTER TABLE '||r.t||' OWNER TO inventory'; END LOOP;
- FOR r IN SELECT format('%I.%I', sequence_schema, sequence_name) t FROM information_schema.sequences WHERE sequence_schema='public' LOOP EXECUTE 'ALTER SEQUENCE '||r.t||' OWNER TO inventory'; END LOOP;
- FOR r IN SELECT format('%I.%I', schemaname, viewname) t FROM pg_views WHERE schemaname='public' LOOP EXECUTE 'ALTER VIEW '||r.t||' OWNER TO inventory'; END LOOP;
- FOR r IN SELECT p.oid::regprocedure::text t FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.prokind='f' AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid=p.oid AND d.deptype='e') LOOP EXECUTE 'ALTER FUNCTION '||r.t||' OWNER TO inventory'; END LOOP;
-END \$\$;";;
-  *) echo "usage: $0 save|restore <file.dump>"; exit 2;;
+  save)
+    $PODMAN exec "$PG" pg_dump -U postgres -d inventory -Fc > "${2:?usage: $0 save <file.dump>}"
+    log "saved $2 ($(wc -c <"$2" | tr -d ' ') bytes)"
+    ;;
+  restore)
+    [ -f "${2:-}" ] || die "usage: $0 restore <file.dump>"
+    $PODMAN exec -i "$PG" pg_restore -U postgres -d inventory --clean --if-exists --no-owner < "$2"
+    nasa_db_reown
+    log "restored $2"
+    ;;
+  *) echo "usage: $0 save|restore <file.dump>" >&2; exit 2;;
 esac

@@ -1,0 +1,91 @@
+# Application tier: inventory API, agent (+ MCP server) and dashboard, one pod per service.
+#
+#   podman kube play --network nasa --configmap deploy/kube/endpoints.yaml deploy/kube/app.yaml
+#
+# Model endpoints come from the `nasa-endpoints` ConfigMap, which is supplied with --configmap rather than being
+# inlined here: it is the one part of the topology that differs per host (on the GB10 the model servers are local
+# container names; on the split T4 development hosts they are URLs of other machines).
+#
+# Credentials come from the `nasa-secrets` Secret created by scripts/install-app.sh. Nothing is mounted from the
+# host, so this file plays unchanged rootless, as root under Quadlet, and on a macOS podman machine.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: inventory-api
+  labels: {app: inventory-api, tier: app}
+spec:
+  restartPolicy: Always
+  containers:
+    - name: api
+      image: localhost/nasa/inventory-api:poc
+      env:
+        - {name: DATABASE_URL, valueFrom: {secretKeyRef: {name: nasa-secrets, key: database-url}}}
+        - {name: S3_ENDPOINT, value: "http://rustfs:9000"}
+        - {name: S3_BUCKET, value: inventory}
+        - {name: S3_ACCESS_KEY, valueFrom: {secretKeyRef: {name: nasa-secrets, key: s3-access-key}}}
+        - {name: S3_SECRET_KEY, valueFrom: {secretKeyRef: {name: nasa-secrets, key: s3-secret-key}}}
+      livenessProbe:
+        # python rather than curl: the UBI python image is the one binary guaranteed to be present.
+        exec: {command: ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=5)"]}
+        # The container applies contracts/db/*.sql before it serves, so give the first pass room.
+        initialDelaySeconds: 30
+        periodSeconds: 20
+        failureThreshold: 3
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: agent
+  labels: {app: agent, tier: app}
+spec:
+  restartPolicy: Always
+  containers:
+    - name: chat
+      image: localhost/nasa/agent:poc
+      env:
+        - {name: AGENT_LLM_URL, valueFrom: {configMapKeyRef: {name: nasa-endpoints, key: AGENT_LLM_URL}}}
+        - {name: AGENT_LLM_MODEL, valueFrom: {configMapKeyRef: {name: nasa-endpoints, key: AGENT_LLM_MODEL}}}
+        - {name: AGENT_HTTP_TIMEOUT_S, value: "120"}
+        - {name: INVENTORY_API_URL, value: "http://inventory-api:8080"}
+        - {name: DATABASE_URL, valueFrom: {secretKeyRef: {name: nasa-secrets, key: database-url}}}
+      livenessProbe:
+        exec: {command: ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=5)"]}
+        initialDelaySeconds: 20
+        periodSeconds: 20
+        failureThreshold: 3
+    # Same image, second entry point: the MCP attach point for an external agent platform. Port 8090 is not
+    # published on the host; reach it from the `nasa` network as agent:8090.
+    - name: mcp
+      image: localhost/nasa/agent:poc
+      command: ["python", "mcp_server.py"]
+      env:
+        - {name: AGENT_LLM_URL, valueFrom: {configMapKeyRef: {name: nasa-endpoints, key: AGENT_LLM_URL}}}
+        - {name: INVENTORY_API_URL, value: "http://inventory-api:8080"}
+        - {name: DATABASE_URL, valueFrom: {secretKeyRef: {name: nasa-secrets, key: database-url}}}
+        - {name: MCP_HOST, value: "0.0.0.0"}
+        - {name: MCP_PORT, value: "8090"}
+        - {name: MCP_ALLOWED_HOSTS, value: "agent:8090"}
+        - {name: MCP_AUTH_TOKEN, valueFrom: {secretKeyRef: {name: nasa-secrets, key: mcp-token}}}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: dashboard
+  labels: {app: dashboard, tier: app}
+spec:
+  restartPolicy: Always
+  containers:
+    - name: web
+      image: localhost/nasa/dashboard:poc
+      env:
+        - {name: API_UPSTREAM, value: "http://inventory-api:8080"}
+        - {name: AGENT_UPSTREAM, value: "http://agent:8080"}
+      ports:
+        # Loopback only. On a POC host, users come in through the TLS front door in tls.yaml, which reaches this
+        # pod over the `nasa` network; this mapping is for local development and for debugging on the host itself.
+        - {containerPort: 8080, hostPort: 8080, hostIP: 127.0.0.1}
+      livenessProbe:
+        exec: {command: ["wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]}
+        initialDelaySeconds: 10
+        periodSeconds: 30
+        failureThreshold: 3

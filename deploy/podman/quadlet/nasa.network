@@ -1,3 +1,0 @@
-# One container network per host; services find each other by name (aardvark-dns).
-[Network]
-NetworkName=nasa

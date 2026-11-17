@@ -1,0 +1,28 @@
+# Perception, one unit per camera feed: video + audio windows, OWLv2 boxes, DINOv2 embeddings, reconciler.
+# Installed but not enabled - start it when a feed is attached (`systemctl start perception`), because it begins
+# writing observations into the inventory as soon as it runs.
+[Unit]
+Description=NASA POC - perception (camera feed cam-handheld)
+Requires=nasa-app.service
+After=nasa-app.service
+
+[Container]
+ContainerName=perception
+Image=localhost/nasa/perception:poc
+# Built locally by scripts/build-images.sh; never go to a registry for it.
+Pull=never
+AddDevice=nvidia.com/gpu=all
+Network=nasa.network
+# Feed settings and the S3 credentials for frame upload. Root-only (0600), written by scripts/install-app.sh:
+# these are the one set of values that cannot come from the kube YAML, because this is not a kube pod.
+EnvironmentFile=/etc/nasa/perception.env
+Volume=nasa-media.volume:/media
+# Hugging Face cache for OWLv2 + DINOv2 weights: a host directory, so it survives `podman system reset` and can
+# be put on the same disk as the vLLM model cache.
+Volume=/var/lib/nasa/models/perception:/opt/app-root/src/.cache:z
+
+[Service]
+Restart=on-failure
+RestartSec=30
+# First start downloads the detector and embedder weights.
+TimeoutStartSec=900

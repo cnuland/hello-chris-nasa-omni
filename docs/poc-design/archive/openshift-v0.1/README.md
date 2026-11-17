@@ -22,7 +22,7 @@ Dell servers, may come back as a future discussion with NASA.
 
 ## Still live elsewhere in the repo
 
-The OpenShift manifests have not moved: `deploy/{platform,data,inference,app}` and `scripts/bootstrap.sh` still deploy
-the full stack to OpenShift (the prototype ran on ARO cluster `aro-cluster-zlknq`). `deploy/gb10/` is the untested
-single-node OpenShift / MicroShift profile. The Podman packaging that replaced them for the GB10 is in
-`deploy/podman/`.
+The OpenShift manifests still deploy the full stack (the prototype ran on ARO cluster `aro-cluster-zlknq`), but
+they have moved to `k8s/` and are now secondary: `k8s/{platform,data,inference,app}` with `k8s/scripts/bootstrap.sh`,
+and `k8s/gb10/` for the untested single-node OpenShift / MicroShift profile. See `k8s/README.md`. The Podman
+deployment that replaced them is the primary one, in `deploy/`.

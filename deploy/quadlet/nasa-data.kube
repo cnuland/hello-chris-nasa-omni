@@ -1,0 +1,17 @@
+[Unit]
+Description=NASA POC - data tier (Postgres 16 + pgvector, RustFS object store)
+Documentation=file:/etc/nasa/kube/data.yaml
+After=network-online.target
+Wants=network-online.target
+
+[Kube]
+Yaml=/etc/nasa/kube/data.yaml
+Network=nasa.network
+
+[Service]
+Restart=on-failure
+# First start pulls the Postgres and RustFS images and runs initdb.
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

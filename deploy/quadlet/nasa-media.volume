@@ -1,0 +1,5 @@
+# Sample or recorded camera footage for the perception worker. A named volume rather than a host directory so
+# the same reference works rootless; scripts/load-sample-video.sh streams a file into it through a helper
+# container. VolumeName= pins the real name, otherwise Quadlet would prefix it with "systemd-".
+[Volume]
+VolumeName=nasa-media

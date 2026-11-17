@@ -65,9 +65,10 @@ eval: | $(EVAL)/.venv
 	.venv/bin/python -m nasa_eval gate
 
 # Real-video location eval (docs/spec/50-eval.md AC-EVAL-10): scores the live run of the NASA tour against its
-# caption module timeline. REPORT-ONLY (needs the live cluster, never a CI gate); read-only GETs on EVAL_REAL_API,
+# caption module timeline. REPORT-ONLY (needs a running deployment, never a CI gate); read-only GETs on EVAL_REAL_API,
 # or EVAL_REAL_ARGS="--export export.json" (see `python -m nasa_eval.real.score_run --help`). Report: eval/reports/real.
-EVAL_REAL_API ?= https://dashboard-nasa-app.apps.bgrr25lx.eastus.aroapp.io/api
+# Default: the local Podman stack (scripts/stack.sh up). Point at a POC host with EVAL_REAL_API=https://<host>/api
+EVAL_REAL_API ?= http://localhost:8080/api
 EVAL_REAL_SRT ?= $(HOME)/nasa-media/iss-tour/tour.srt
 EVAL_REAL_ARGS ?= --api $(EVAL_REAL_API)
 .PHONY: eval-real

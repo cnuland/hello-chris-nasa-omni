@@ -1,5 +1,10 @@
 # GB10 (Dell Pro Max / DGX Spark class) single-node profile: UNTESTED
 
+> **This is the OpenShift / MicroShift variant, which is no longer the deployment path.** The GB10 runs the POC
+> on Podman: see [`deploy/README.md`](../../deploy/README.md#gb10-production-target--untested). The hardware
+> facts, the model-by-model comparison against the T4 hosts, the memory budget and the verification checklist
+> below all still apply — only the `oc apply` section at the end is superseded.
+
 Production target: one Dell GB10 on the ISS.
 - **GPU:** Blackwell (sm_121), with bf16, FP8 and NVFP4 support.
 - **Memory:** 128 GB LPDDR5x unified (shared by CPU and GPU), 273 GB/s.

@@ -1,0 +1,81 @@
+# Data tier: Postgres 16 + pgvector (source of truth) and RustFS (S3 object store), one pod per service.
+#
+#   podman kube play --network nasa deploy/kube/data.yaml
+#
+# Portability rules this file follows (see deploy/README.md "Conventions"):
+#   * state lives in PVCs, which podman turns into named volumes - no hostPath, so it runs rootless and on macOS;
+#   * config is carried in ConfigMaps in this file, so it is version-controlled and needs nothing staged on the host;
+#   * only secrets come from outside, via the `nasa-secrets` Secret that scripts/install-app.sh generates on the host;
+#   * each container has a livenessProbe, which podman installs as the container healthcheck.
+#
+# Services find each other by pod name on the `nasa` network (aardvark-dns): inventory-db:5432, rustfs:9000.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nasa-db-init
+  labels: {tier: data}
+data:
+  # Runs on first start only (empty data volume). The Postgres entrypoint sources *.sh in this directory.
+  10-inventory.sh: |
+    #!/bin/bash
+    # Create the application role and database with the extensions the schema needs. The inventory-api container
+    # applies contracts/db/*.sql itself at start-up, so no migration job is needed.
+    set -e
+    psql -v ON_ERROR_STOP=1 -U postgres <<SQL
+    CREATE ROLE inventory LOGIN PASSWORD '${INVENTORY_DB_PASSWORD}';
+    CREATE DATABASE inventory OWNER inventory;
+    \c inventory
+    CREATE EXTENSION IF NOT EXISTS vector;
+    CREATE EXTENSION IF NOT EXISTS pg_trgm;
+    SQL
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: inventory-db
+  labels: {app: inventory-db, tier: data}
+spec:
+  restartPolicy: Always
+  containers:
+    - name: postgres
+      image: docker.io/pgvector/pgvector:pg16
+      args: ["postgres", "-c", "shared_buffers=512MB", "-c", "max_connections=200"]
+      env:
+        - {name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: nasa-secrets, key: postgres-password}}}
+        - {name: INVENTORY_DB_PASSWORD, valueFrom: {secretKeyRef: {name: nasa-secrets, key: inventory-db-password}}}
+        # A sub-directory of the mount point, so a volume that is not empty (lost+found, a stray file) cannot
+        # make initdb refuse to start.
+        - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+      livenessProbe:
+        exec: {command: ["pg_isready", "-U", "postgres", "-d", "inventory"]}
+        initialDelaySeconds: 20
+        periodSeconds: 20
+        failureThreshold: 3
+      volumeMounts:
+        - {name: pgdata, mountPath: /var/lib/postgresql/data}
+        - {name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true}
+  volumes:
+    - {name: pgdata, persistentVolumeClaim: {claimName: nasa-pgdata}}
+    - {name: init, configMap: {name: nasa-db-init}}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: rustfs
+  labels: {app: rustfs, tier: data}
+spec:
+  restartPolicy: Always
+  containers:
+    - name: s3
+      # Digest-pinned: RustFS publishes moving tags, and the POC's stored keys must survive a restart unchanged.
+      image: docker.io/rustfs/rustfs@sha256:128220dc9382bac81940a1a9616ee8c274a3f3b8f647eedbeb50df5bb8b49922
+      args: ["/data"]
+      env:
+        - {name: RUSTFS_ADDRESS, value: ":9000"}
+        - {name: RUSTFS_ACCESS_KEY, valueFrom: {secretKeyRef: {name: nasa-secrets, key: s3-access-key}}}
+        - {name: RUSTFS_SECRET_KEY, valueFrom: {secretKeyRef: {name: nasa-secrets, key: s3-secret-key}}}
+      volumeMounts: [{name: objects, mountPath: /data}]
+  volumes:
+    # Podman chowns a fresh named volume to the image's directory owner, so the uid 10001 the RustFS image runs
+    # as owns /data without any host-side chown.
+    - {name: objects, persistentVolumeClaim: {claimName: nasa-objects}}

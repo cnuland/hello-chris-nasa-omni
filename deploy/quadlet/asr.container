@@ -1,15 +1,16 @@
-# Speech-to-text: OpenAI Whisper large-v3-turbo on vLLM (transcript of record). On the GB10 it gets its own memory
-# fraction of the one GPU. On the T4 development hosts it shares GPU 3 of the decision host, next to DiffusionGemma.
+# Speech-to-text: OpenAI Whisper large-v3-turbo on vLLM (the transcript of record). On the GB10 it takes a small
+# memory fraction of the one GPU. On the T4 development hosts it shares GPU 3 of the decision host.
 [Unit]
 Description=NASA POC - asr (Whisper, vLLM)
+Wants=network-online.target
 After=network-online.target
 
 [Container]
 ContainerName=asr
 Image=docker.io/vllm/vllm-openai:v0.31.0
 AddDevice=nvidia.com/gpu=3
-PublishPort=8001:8000
 Network=nasa.network
+PublishPort=8001:8000
 Volume=/var/lib/nasa/models:/cache:z
 Volume=/etc/nasa/vllm-start.sh:/vllm-start.sh:ro,z
 Environment=HOME=/cache HF_HOME=/cache/hf CUDA_MODULE_LOADING=EAGER VLLM_AUDIO_EXTRAS=1
@@ -17,9 +18,13 @@ PodmanArgs=--entrypoint=/bin/bash
 Exec=/vllm-start.sh openai/whisper-large-v3-turbo --served-model-name=asr --host=0.0.0.0 --port=8000 --dtype=half --gpu-memory-utilization=0.18 --enforce-eager --max-num-seqs=4
 HealthCmd=curl -sf http://127.0.0.1:8000/health
 HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=3
+HealthStartPeriod=600s
 
 [Service]
 Restart=on-failure
+RestartSec=30
 TimeoutStartSec=900
 
 [Install]

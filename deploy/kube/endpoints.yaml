@@ -1,0 +1,17 @@
+# Model endpoints for the application tier, passed to `podman kube play --configmap`.
+#
+# These defaults are the single-host (GB10) layout: every model server is a container on this host's `nasa`
+# network, and the one Gemma 4 server answers both perception and chat. scripts/install-app.sh writes a copy of
+# this file with any --omni / --decision / --asr / --chat overrides applied, so a split multi-host layout points
+# at other machines without editing the committed default.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nasa-endpoints
+  labels: {tier: app}
+data:
+  AGENT_LLM_URL: "http://gemma4:8000/v1"
+  AGENT_LLM_MODEL: "gemma4"
+  OMNI_URL: "http://gemma4:8000"
+  DECISION_URL: "http://dgemma-decision:8011"
+  ASR_URL: "http://asr:8000"

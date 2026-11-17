@@ -1,0 +1,6 @@
+# One container network per host. Every pod and model server joins it and finds the others by name
+# (aardvark-dns resolves pod names and container names). Quadlet creates it on demand: units that reference
+# nasa.network get an automatic dependency on nasa-network.service.
+[Network]
+NetworkName=nasa
+Driver=bridge

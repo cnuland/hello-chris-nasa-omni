@@ -115,7 +115,7 @@ DiffusionGemma-26B-A4B-it, our decision model, is a separate text+image diffusio
   - The 512-wide global heads make Triton unified attention request 96 KB of shared memory against Turing's 64 KB.
   - FlashAttention needs sm80 and FlashInfer rejects head size 512.
   - The fix is the community patch: 16-token tiles and 1 pipeline stage on pre-sm80, or the unmerged PR #39018.
-  - **We already carry exactly this patch** in `/Users/cnuland/hello-chris-dd-kuberay/k8s/aro/dgemma-t4.yaml` and `deploy/inference/dgemma.yaml` (`triton_unified_attention.py`: `launch_num_stages = 1`, `TILE_SIZE_{PREFILL,DECODE} = 16`). The same file also carries the PyTorch top-k/top-p sampler patch.
+  - **We already carry exactly this patch** in `/Users/cnuland/hello-chris-dd-kuberay/k8s/aro/dgemma-t4.yaml` and `k8s/inference/dgemma.yaml` (`triton_unified_attention.py`: `launch_num_stages = 1`, `TILE_SIZE_{PREFILL,DECODE} = 16`). The same file also carries the PyTorch top-k/top-p sampler patch.
   - **Reuse that init script verbatim for every Gemma 4 pod on T4.**
 - **Measured on a T4** (AWS write-up, vLLM 0.30.0, fp16, patched Triton attention, text-only QAT W4A16 builds):
 
@@ -224,7 +224,7 @@ Notes:
 
 ### 5a. T4 test cluster (now)
 
-All pods use `docker.io/vllm/vllm-openai:v0.31.0`. Every Gemma 4 pod gets the **sm75 init script from `deploy/inference/dgemma.yaml`** (Triton 1-stage / 16-token tiles + PyTorch sampler) and `CUDA_MODULE_LOADING=EAGER`. Add `pip install "vllm[audio]"` (or bake a derived image) wherever audio is used.
+All pods use `docker.io/vllm/vllm-openai:v0.31.0`. Every Gemma 4 pod gets the **sm75 init script, now `deploy/config/vllm-start.sh`** (Triton 1-stage / 16-token tiles + PyTorch sampler) and `CUDA_MODULE_LOADING=EAGER`. Add `pip install "vllm[audio]"` (or bake a derived image) wherever audio is used.
 
 | Node / GPU | Role | Model (HF id) | Key flags |
 |---|---|---|---|
@@ -366,4 +366,4 @@ vllm serve nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4 --trust-remote-co
 
 **Local**
 
-- `/Users/cnuland/hello-chris-dd-kuberay/k8s/aro/dgemma-t4.yaml`, `deploy/inference/{dgemma,agent-llm,omni}.yaml`
+- `/Users/cnuland/hello-chris-dd-kuberay/k8s/aro/dgemma-t4.yaml`, `k8s/inference/{dgemma,agent-llm,omni}.yaml`
