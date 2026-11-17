@@ -1,0 +1,25 @@
+# Chat model for the agent (development variant: Gemma 4 12B QAT W4A16 on a T4, with the whole GPU).
+# On the GB10 this service is not needed: the agent's endpoint points at the gemma4 server.
+[Unit]
+Description=NASA POC - agent-llm (chat model, vLLM)
+After=network-online.target
+
+[Container]
+ContainerName=agent-llm
+Image=docker.io/vllm/vllm-openai:v0.31.0
+AddDevice=nvidia.com/gpu=all
+Network=nasa.network
+Volume=/var/lib/nasa/models:/cache:z
+Volume=/etc/nasa/vllm-start.sh:/vllm-start.sh:ro,z
+Environment=HOME=/cache HF_HOME=/cache/hf CUDA_MODULE_LOADING=EAGER
+PodmanArgs=--entrypoint=/bin/bash
+Exec=/vllm-start.sh google/gemma-4-12B-it-qat-w4a16-ct --served-model-name=agent --host=0.0.0.0 --port=8000 --dtype=half --max-model-len=8192 --gpu-memory-utilization=0.90 --max-num-seqs=4 '--limit-mm-per-prompt={"image":0,"audio":0}' --enable-auto-tool-choice --tool-call-parser=gemma4 --reasoning-parser=gemma4
+HealthCmd=curl -sf http://127.0.0.1:8000/health
+HealthInterval=30s
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,8 @@
+[Unit]
+Description=NASA POC - agent memory compression ("dreaming"), one pass
+Requires=nasa-app.service
+After=nasa-app.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/podman exec agent-chat python -m nasa_agent.dreaming --once

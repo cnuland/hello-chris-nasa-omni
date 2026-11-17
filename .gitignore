@@ -8,3 +8,4 @@ dist/
 eval/reports/*.json
 *.env
 .env*
+.DS_Store

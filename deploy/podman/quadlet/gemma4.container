@@ -1,0 +1,27 @@
+# Omni perception model: Google Gemma 4 12B on vLLM. On the GB10: FP8 weights, one GPU, and the same server also answers
+# chat (the agent's "agent-llm" endpoint points here). This file is the 4x T4 development variant (fp32, tensor-parallel 4).
+[Unit]
+Description=NASA POC - gemma4 (omni perception model, vLLM)
+After=network-online.target
+
+[Container]
+ContainerName=gemma4
+Image=docker.io/vllm/vllm-openai:v0.31.0
+AddDevice=nvidia.com/gpu=all
+Network=nasa.network
+PublishPort=8000:8000
+PodmanArgs=--shm-size=16g
+Volume=/var/lib/nasa/models:/cache:z
+Volume=/etc/nasa/vllm-start.sh:/vllm-start.sh:ro,z
+Environment=HOME=/cache HF_HOME=/cache/hf VLLM_CACHE_ROOT=/cache/vllm TRITON_CACHE_DIR=/cache/triton CUDA_MODULE_LOADING=EAGER VLLM_AUDIO_EXTRAS=1
+PodmanArgs=--entrypoint=/bin/bash
+Exec=/vllm-start.sh google/gemma-4-12B-it --served-model-name=gemma4 --host=0.0.0.0 --port=8000 --tensor-parallel-size=4 --dtype=float32 --max-model-len=8192 --max-num-seqs=2 --gpu-memory-utilization=0.92 '--limit-mm-per-prompt={"image":8,"audio":1}'
+HealthCmd=curl -sf http://127.0.0.1:8000/health
+HealthInterval=30s
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

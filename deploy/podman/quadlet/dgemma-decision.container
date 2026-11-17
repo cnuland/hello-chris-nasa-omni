@@ -1,0 +1,22 @@
+# Structured "same object or new?" decision server in front of dgemma (calibrated label probabilities on :8011).
+[Unit]
+Description=NASA POC - decision server for dgemma
+Requires=dgemma.service
+After=dgemma.service
+
+[Container]
+ContainerName=dgemma-decision
+Image=docker.io/vllm/vllm-openai:v0.31.0
+Network=nasa.network
+PublishPort=8011:8011
+Volume=/var/lib/nasa/models:/cache:z
+Environment=HOME=/cache HF_HOME=/cache/hf
+PodmanArgs=--entrypoint=python3
+Exec=/vllm-workspace/examples/features/structured_diffusion/structured_server.py --upstream=http://dgemma:8000 --tokenizer=aidendle94/diffusiongemma-26B-A4B-it-INT8-dynamic --model=dgemma --canvas=64 --no-constrained --host=0.0.0.0 --port=8011
+
+[Service]
+Restart=always
+RestartSec=20
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,18 @@
+# Perception (one per camera feed): video + audio windows, OWLv2 boxes, DINOv2 embeddings, reconciler.
+# Installed but not enabled: start it when a feed is attached (systemctl start perception).
+[Unit]
+Description=NASA POC - perception (camera feed cam-handheld)
+Requires=nasa-app.service
+After=nasa-app.service
+
+[Container]
+ContainerName=perception
+Image=localhost/nasa/perception:poc
+AddDevice=nvidia.com/gpu=all
+Network=nasa.network
+EnvironmentFile=/etc/nasa/perception.env
+Volume=/var/lib/nasa/media:/media:z
+Volume=/var/lib/nasa/models/perception:/opt/app-root/src/.cache:z
+
+[Service]
+Restart=on-failure

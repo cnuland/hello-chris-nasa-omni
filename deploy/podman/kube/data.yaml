@@ -1,0 +1,36 @@
+# Data tier: one pod per service on the 'nasa' network. Secrets come from the 'nasa-secrets' Secret created at install.
+apiVersion: v1
+kind: Pod
+metadata: {name: inventory-db, labels: {app: inventory-db, tier: data}}
+spec:
+  restartPolicy: Always
+  containers:
+  - name: postgres
+    image: docker.io/pgvector/pgvector:pg16
+    env:
+    - {name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: nasa-secrets, key: postgres-password}}}
+    - {name: INVENTORY_DB_PASSWORD, valueFrom: {secretKeyRef: {name: nasa-secrets, key: inventory-db-password}}}
+    args: ["postgres", "-c", "shared_buffers=512MB", "-c", "max_connections=200"]
+    volumeMounts:
+    - {name: data, mountPath: /var/lib/postgresql/data}
+    - {name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true}
+  volumes:
+  - {name: data, hostPath: {path: /var/lib/nasa/postgres, type: DirectoryOrCreate}}
+  - {name: init, hostPath: {path: /etc/nasa/db-init, type: Directory}}
+---
+apiVersion: v1
+kind: Pod
+metadata: {name: rustfs, labels: {app: rustfs, tier: data}}
+spec:
+  restartPolicy: Always
+  containers:
+  - name: s3
+    image: docker.io/rustfs/rustfs@sha256:128220dc9382bac81940a1a9616ee8c274a3f3b8f647eedbeb50df5bb8b49922
+    args: ["/data"]
+    env:
+    - {name: RUSTFS_ADDRESS, value: ":9000"}
+    - {name: RUSTFS_ACCESS_KEY, valueFrom: {secretKeyRef: {name: nasa-secrets, key: s3-access-key}}}
+    - {name: RUSTFS_SECRET_KEY, valueFrom: {secretKeyRef: {name: nasa-secrets, key: s3-secret-key}}}
+    volumeMounts: [{name: data, mountPath: /data}]
+  volumes:
+  - {name: data, hostPath: {path: /var/lib/nasa/objects, type: DirectoryOrCreate}}
