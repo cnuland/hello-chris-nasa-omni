@@ -66,7 +66,8 @@ deploy/scripts/host-setup.sh
 PODMAN="sudo podman" scripts/build-images.sh
 PODMAN="sudo podman" TORCH_INDEX=cu128 scripts/build-images.sh perception    # GPU hosts only
 
-# Single host (GB10): every model server here.
+# Single host (GB10): every model server here. The profile is detected from the GPU count;
+# --profile gb10|t4 overrides it.
 deploy/scripts/install-inference.sh gemma4 dgemma dgemma-decision asr
 deploy/scripts/install-app.sh
 ```
@@ -141,10 +142,13 @@ Memory budget as fractions of 128 GB (vLLM total ≤ 0.85, leaving room for the 
 `gemma4` 0.24 (~31 GB) · `dgemma` 0.30 (~38 GB) · `asr` 0.05 (~6 GB) · perception torch ~3 GB ·
 OS + Postgres + RustFS + app ~20 GB → **~98 GB, about 30 GB headroom**.
 
-Changes to make before installing: in `quadlet/gemma4.container` switch the model to the FP8 weights, set
-`--tensor-parallel-size=1` and `--gpu-memory-utilization=0.24`; in `quadlet/dgemma.container` set TP 1, drop
-`--no-constrained` and use 0.30; give every unit `AddDevice=nvidia.com/gpu=all` (there is only one) and skip
-`agent-llm`. The full checklist, and the OpenShift/MicroShift variant of the same profile, are in
+No hand-editing is needed: `quadlet/gb10/*.container` holds these settings and
+`deploy/scripts/install-inference.sh` picks them automatically when it sees one GPU (override with
+`--profile gb10|t4`). Installing the T4 units on a GB10 fails four ways at once - tensor-parallel 4 on one
+GPU, `asr` pinned to a GPU 3 that does not exist, `gemma4` and `dgemma` both claiming host port 8000, and
+memory fractions summing past the box - which is why this is a profile rather than a note to remember.
+
+The full verification checklist, and the OpenShift/MicroShift variant of the same profile, are in
 [`../k8s/gb10/README.md`](../k8s/gb10/README.md).
 
 ## Local development (macOS or Linux, same command)

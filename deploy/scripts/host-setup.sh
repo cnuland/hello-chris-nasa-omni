@@ -69,6 +69,13 @@ if ! command -v nvidia-ctk >/dev/null; then
 fi
 
 echo "==> CDI spec (/etc/cdi/nvidia.yaml)"
+# Two warnings here are expected on a single-node machine and can be ignored:
+#   WARN Could not locate nvidia-imex: executable file not found in $PATH
+#   WARN Could not locate nvidia-imex-ctl: executable file not found in $PATH
+# IMEX is NVIDIA's Internode Memory Exchange service, which shares GPU memory across NVLink-connected hosts in
+# a multi-node system (GB200 NVL-class racks). A single GB10 has no IMEX domain and does not ship those
+# binaries, so the toolkit notes their absence and writes the spec without them. Warnings are not suppressed:
+# a real failure prints here too, and the device check below is what actually decides whether this step worked.
 sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml >/dev/null
 
 # Podman 4.9 (Ubuntu 24.04) predates the 'additionalGids' field that toolkit 1.20+ writes, and rejects the spec
@@ -76,6 +83,21 @@ sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml >/dev/null
 if podman --version | grep -qE ' 4\.'; then
   echo "    Podman 4.x: stripping additionalGids from the CDI spec"
   sudo sed -i -E '/additionalGids:/d;/^ +- [0-9]+$/d;s/^cdiVersion: .*/cdiVersion: 0.6.0/' /etc/cdi/nvidia.yaml
+fi
+
+# The spec is only useful if it actually declares devices. Checking this turns the ambiguous IMEX warnings
+# above into a clear pass or fail, instead of leaving the operator to guess whether they mattered.
+echo "==> CDI devices declared"
+CDI_LIST="$(sudo nvidia-ctk cdi list 2>/dev/null || true)"
+if printf '%s' "$CDI_LIST" | grep -q 'nvidia.com/gpu'; then
+  printf '%s\n' "$CDI_LIST" | grep 'nvidia.com/gpu' | sed 's/^/    /'
+elif sudo grep -q '^kind: nvidia.com/gpu' /etc/cdi/nvidia.yaml 2>/dev/null; then
+  # Older toolkits have no `cdi list`; read the generated spec instead.
+  sudo grep -E '^\s*name:' /etc/cdi/nvidia.yaml | sed 's/.*name: /    nvidia.com\/gpu=/'
+else
+  echo "no GPU devices in /etc/cdi/nvidia.yaml - the CDI spec was not generated correctly." >&2
+  echo "Re-run: sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml   and read the warnings." >&2
+  exit 1
 fi
 
 echo "==> verifying GPU passthrough"

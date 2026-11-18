@@ -1,0 +1,29 @@
+# GB10 variant of the structured decision server. See ../dgemma-decision.container for the 4x T4 one.
+# At TP 1 the constrained label read works, so --no-constrained (a TP-4 workaround) is dropped: decisions come
+# back as calibrated probabilities over the allowed labels rather than free text that has to be parsed.
+[Unit]
+Description=NASA POC - decision server for dgemma (GB10)
+Requires=dgemma.service
+After=dgemma.service
+
+[Container]
+ContainerName=dgemma-decision
+Image=docker.io/vllm/vllm-openai:v0.31.0
+Network=nasa.network
+PublishPort=127.0.0.1:8011:8011
+Volume=/var/lib/nasa/models:/cache:z
+Environment=HOME=/cache HF_HOME=/cache/hf
+PodmanArgs=--entrypoint=python3
+Exec=/vllm-workspace/examples/features/structured_diffusion/structured_server.py --upstream=http://dgemma:8000 --tokenizer=aidendle94/diffusiongemma-26B-A4B-it-INT8-dynamic --model=dgemma --canvas=64 --host=0.0.0.0 --port=8011
+HealthCmd=curl -sf http://127.0.0.1:8011/health
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=3
+HealthStartPeriod=900s
+
+[Service]
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

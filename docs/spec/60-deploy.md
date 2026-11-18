@@ -53,3 +53,9 @@ superseded OpenShift manifests and their acceptance criteria are in `k8s/` (see 
   anything is installed, never with a bare `quadlet -dryrun` (which fails on distro search paths that Ubuntu's
   podman package does not ship). After `daemon-reload`, the installer confirms the generator produced each
   expected unit and reports the remedy if it did not.
+- AC-DEP-19 The inference tier ships a unit variant per hardware profile, selected by
+  `install-inference.sh --profile` and defaulting to the host's GPU count: `gb10` (one Blackwell GPU, FP8/INT8
+  weights, tensor-parallel 1, a memory fraction each, host ports on loopback) and `t4` (four T4s per host,
+  fp32, tensor-parallel 4, whole GPUs, sm75 patches). No unit is hand-edited between hardware targets.
+- AC-DEP-20 On any single host, no two units claim the same host port, and no unit references a GPU index the
+  host does not have.

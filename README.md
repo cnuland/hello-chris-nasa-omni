@@ -67,7 +67,7 @@ model servers. Same manifests as above — this path wraps them in units rather 
 ```bash
 deploy/scripts/host-setup.sh                 # podman, NVIDIA driver + toolkit, CDI spec
 PODMAN="sudo podman" scripts/build-images.sh # service images into the root store Quadlet runs from
-deploy/scripts/install-inference.sh gemma4 dgemma dgemma-decision asr
+deploy/scripts/install-inference.sh gemma4 dgemma dgemma-decision asr   # GB10/T4 profile auto-detected
 deploy/scripts/install-app.sh                # data + app + TLS tiers as systemd units; idempotent
 
 PODMAN="sudo podman" scripts/load-sample-video.sh tour.mp4   # put a feed on the media volume

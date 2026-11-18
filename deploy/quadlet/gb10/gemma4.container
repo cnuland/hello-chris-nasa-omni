@@ -1,0 +1,38 @@
+# GB10 variant of gemma4: one Blackwell GPU, FP8 weights, no tensor parallelism. This server answers BOTH
+# perception and chat on the GB10, which is why agent-llm is not installed there.
+#
+# Differs from the 4x T4 variant in ../gemma4.container:
+#   --tensor-parallel-size=1   there is one GPU; TP 4 cannot start
+#   FP8 weights, bfloat16      Blackwell has bf16 and FP8; the T4 fp32 workaround costs ~35 GB for nothing
+#   --gpu-memory-utilization   0.24 of 128 GB unified (~31 GB), leaving room for dgemma, asr and the app tier
+#   PublishPort on loopback    gemma4 and dgemma both wanted host port 8000 on a single host, which collides;
+#                              nothing outside the host needs these, the app tier reaches them over `nasa`
+[Unit]
+Description=NASA POC - gemma4 (omni perception + chat model, vLLM, GB10)
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+ContainerName=gemma4
+Image=docker.io/vllm/vllm-openai:v0.31.0
+AddDevice=nvidia.com/gpu=all
+Network=nasa.network
+PublishPort=127.0.0.1:8000:8000
+Volume=/var/lib/nasa/models:/cache:z
+Volume=/etc/nasa/vllm-start.sh:/vllm-start.sh:ro,z
+Environment=HOME=/cache HF_HOME=/cache/hf VLLM_CACHE_ROOT=/cache/vllm TRITON_CACHE_DIR=/cache/triton CUDA_MODULE_LOADING=EAGER VLLM_AUDIO_EXTRAS=1
+PodmanArgs=--shm-size=16g --entrypoint=/bin/bash
+Exec=/vllm-start.sh RedHatAI/gemma-4-12B-it-FP8-Dynamic --served-model-name=gemma4 --host=0.0.0.0 --port=8000 --tensor-parallel-size=1 --dtype=bfloat16 --max-model-len=16384 --max-num-seqs=4 --gpu-memory-utilization=0.24 '--limit-mm-per-prompt={"image":8,"audio":1}'
+HealthCmd=curl -sf http://127.0.0.1:8000/health
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=3
+HealthStartPeriod=900s
+
+[Service]
+Restart=on-failure
+RestartSec=30
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target
