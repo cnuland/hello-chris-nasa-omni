@@ -2,6 +2,11 @@
 # Put a sample feed on the perception PVC (RWO): scale the worker down, copy through a helper pod, scale back up.
 # Default clip: NASA "Step Inside the International Space Station" (public domain, 2022, 15 min, with audio):
 #   http://images-assets.nasa.gov/video/Step_Inside_the_Station-4K/Step_Inside_the_Station-4K~medium.mp4
+
+# Ubuntu's /bin/sh is dash, which has no `set -o pipefail`: `sh thisscript.sh` would die with
+# "Illegal option -o pipefail". Re-exec under bash so the script behaves the same however it is invoked
+# (including when the executable bit was lost copying the bundle to a host).
+[ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
 set -euo pipefail
 SRC="${1:?usage: load-sample-video.sh <local.mp4> [deployment]}"; DEP="${2:-perception-cam-handheld}"; NS=nasa-app
 oc scale deploy/"$DEP" -n $NS --replicas=0

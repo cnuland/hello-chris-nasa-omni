@@ -3,7 +3,7 @@
 The POC runs as Podman containers. On a POC host they are managed by systemd through **Quadlet**, so the stack
 comes back after a reboot; nothing replaces the host OS. Target hosts are **Ubuntu 22.04/24.04** (NVIDIA's
 standard GB10 software stack) and **RHEL 9/10**. The same manifests run with plain `podman kube play` on a
-developer machine — see [Local development](#local-development).
+developer machine — see [Local development](#local-development-macos-or-linux-same-command).
 
 | Tier | How it runs | Files |
 |---|---|---|
@@ -36,7 +36,23 @@ under Quadlet on a POC host, and under `sudo podman` for an operator debugging t
    `podman ps` tells you the truth about what is actually serving.
 6. **Scripts take `$PODMAN`,** so one code path covers the rootless store (`podman`) and the root store that
    systemd units run from (`sudo podman`).
-7. **Images are pinned**: the RustFS image by digest, everything else by explicit tag. No `:latest`.
+7. **Runtime images are pinned**: RustFS by digest, the rest by explicit tag. The one gap is the Containerfile
+   base image `ubi9/python-311:latest`, which still floats; pin it to a dated tag before any flight use.
+8. **Every image is multi-arch.** The GB10 is Arm, and so is an Apple Silicon laptop, so an amd64-only image
+   breaks the deployment rather than merely slowing it down. When pinning by digest, pin the **manifest list**,
+   not an architecture's image: a per-arch digest is immutable but unrunnable everywhere else.
+
+Verified with `podman manifest inspect` (2026-11-18):
+
+| Image | Architectures |
+|---|---|
+| `pgvector/pgvector:pg16` | amd64, arm64 |
+| `rustfs/rustfs@sha256:9ca95595…` (1.0.3 list) | amd64, arm64 |
+| `nginxinc/nginx-unprivileged:1.27-alpine` | 386, amd64, arm, arm64, ppc64le, riscv64, s390x |
+| `vllm/vllm-openai:v0.31.0` | amd64, arm64 |
+| `ubi9/python-311` (our service images) | amd64, arm64, ppc64le, s390x |
+| `node:24-alpine` (dashboard build) | amd64, arm64, s390x |
+| `busybox:stable`, `ubuntu:24.04` (helpers) | amd64, arm64, + others |
 
 ## Install on a POC host
 
@@ -131,9 +147,11 @@ Changes to make before installing: in `quadlet/gemma4.container` switch the mode
 `agent-llm`. The full checklist, and the OpenShift/MicroShift variant of the same profile, are in
 [`../k8s/gb10/README.md`](../k8s/gb10/README.md).
 
-## Local development
+## Local development (macOS or Linux, same command)
 
-No systemd, no root, no GPU. The data and application tiers run from the same `kube/*.yaml`:
+No systemd, no root, no GPU. The data and application tiers run from the same `kube/*.yaml` the POC host
+uses. `stack.sh up` runs a preflight that checks the podman version and, on macOS, starts the podman VM,
+so the command is identical on an Apple Silicon laptop, an Intel Mac, Ubuntu and RHEL:
 
 ```bash
 scripts/stack.sh up --build
@@ -161,7 +179,24 @@ Two places where that costs something, both marked in the files:
 - Units do not use `Notify=healthy` (Podman 5.0+) for start-up ordering, so `install-app.sh` polls for
   readiness between tiers instead.
 
-## Issues found on the T4 development hosts (fixed in these files)
+## Issues found on real hardware (fixed in these files)
+
+Found on the GB10 (Ubuntu, Arm):
+
+- **`set: Illegal option -o pipefail`.** Ubuntu's `/bin/sh` is dash, so `sh somescript.sh` ignores the shebang
+  and the strictness line fails immediately. Every script now re-execs itself under bash
+  (`[ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"`), so it behaves the same however it is invoked —
+  including when the executable bit was lost copying the bundle over.
+- **`Error occurred resolving path "/usr/share/containers/systemd"`.** A bare `quadlet -dryrun` scans the
+  distro search paths and exits 1 if any is missing; Ubuntu's podman package ships neither
+  `/usr/share/containers/systemd` nor `/run/containers/systemd`, so the pre-flight check aborted the install
+  on a perfectly good set of units. The installers now run the check hermetically with `QUADLET_UNIT_DIRS`
+  against a staging directory, which skips the distro paths and validates only the units being installed.
+- **Silent "Unit not found" later on.** The installers now call `nasa_quadlet_verify` after `daemon-reload` to
+  confirm the generator really produced the units, with the remedy in the error message.
+- **An amd64-only image on an Arm box.** RustFS was pinned to a per-architecture digest; see conventions 8.
+
+Found on the T4 development hosts:
 
 - `ubuntu-drivers install --gpgpu` installs no `nvidia-smi`: `host-setup.sh` adds `nvidia-utils-<ver>-server`.
 - NVIDIA Container Toolkit 1.20 writes `additionalGids` into the CDI spec, which Podman 4.9 rejects

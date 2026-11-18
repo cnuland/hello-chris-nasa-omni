@@ -7,6 +7,11 @@
 #
 #   scripts/reset-observations.sh            dry run
 #   scripts/reset-observations.sh --yes      truncate
+
+# Ubuntu's /bin/sh is dash, which has no `set -o pipefail`: `sh thisscript.sh` would die with
+# "Illegal option -o pipefail". Re-exec under bash so the script behaves the same however it is invoked
+# (including when the executable bit was lost copying the bundle to a host).
+[ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=../deploy/scripts/lib.sh

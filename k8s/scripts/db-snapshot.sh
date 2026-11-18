@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Save or restore the inventory DB (custom-format pg_dump), e.g. to keep a demo baseline between experiments.
 #   db-snapshot.sh save <file.dump>      |      db-snapshot.sh restore <file.dump>   (restore replaces all data)
+
+# Ubuntu's /bin/sh is dash, which has no `set -o pipefail`: `sh thisscript.sh` would die with
+# "Illegal option -o pipefail". Re-exec under bash so the script behaves the same however it is invoked
+# (including when the executable bit was lost copying the bundle to a host).
+[ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
 set -euo pipefail
 NS=nasa-data; P="$(oc get pod -n $NS -l cnpg.io/cluster=inventory-db,cnpg.io/instanceRole=primary -o name | head -1)"
 case "${1:-}" in

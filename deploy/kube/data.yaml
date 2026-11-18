@@ -67,8 +67,13 @@ spec:
   restartPolicy: Always
   containers:
     - name: s3
-      # Digest-pinned: RustFS publishes moving tags, and the POC's stored keys must survive a restart unchanged.
-      image: docker.io/rustfs/rustfs@sha256:128220dc9382bac81940a1a9616ee8c274a3f3b8f647eedbeb50df5bb8b49922
+      # Digest-pinned (RustFS publishes moving tags) to the *manifest list* of release 1.0.3, not to one
+      # architecture's image. Pinning the amd64 member instead, as this did, makes the pod unrunnable on arm64 -
+      # which is both the GB10 and an Apple Silicon development machine.
+      #   list   sha256:9ca9559533b537d10482fe923288b676ad08f92a7069d9a17327fbae3cab688b  = rustfs 1.0.3
+      #     amd64  sha256:128220dc9382bac81940a1a9616ee8c274a3f3b8f647eedbeb50df5bb8b49922
+      #     arm64  sha256:a3951370f879374cb89cca3b495e05badab38807cc4cd609c54a35f93f6ccd64
+      image: docker.io/rustfs/rustfs@sha256:9ca9559533b537d10482fe923288b676ad08f92a7069d9a17327fbae3cab688b
       args: ["/data"]
       env:
         - {name: RUSTFS_ADDRESS, value: ":9000"}

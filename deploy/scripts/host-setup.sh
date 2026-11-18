@@ -8,6 +8,11 @@
 # On a GB10 the NVIDIA OS already provides the driver and toolkit, so this only adds Podman and the CDI spec.
 # Run it again after the reboot if it installs a driver. Nothing here is needed on a node that runs only the
 # data and application tiers (no GPU): install podman, curl, jq and openssl and stop.
+
+# Ubuntu's /bin/sh is dash, which has no `set -o pipefail`: `sh thisscript.sh` would die with
+# "Illegal option -o pipefail". Re-exec under bash so the script behaves the same however it is invoked
+# (including when the executable bit was lost copying the bundle to a host).
+[ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
 set -euo pipefail
 
 if command -v apt-get >/dev/null; then PKG=apt; elif command -v dnf >/dev/null; then PKG=dnf; else

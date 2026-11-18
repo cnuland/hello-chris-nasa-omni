@@ -8,6 +8,11 @@
 # The GPU model servers (gemma4, dgemma, asr) are not part of this: they need CUDA and 16-100 GB of weights, so
 # they only ever run as Quadlet units on a GPU host. Point this stack at them with --endpoints; without it the
 # inventory, review queue and dashboard all work, and only chat answers fail.
+
+# Ubuntu's /bin/sh is dash, which has no `set -o pipefail`: `sh thisscript.sh` would die with
+# "Illegal option -o pipefail". Re-exec under bash so the script behaves the same however it is invoked
+# (including when the executable bit was lost copying the bundle to a host).
+[ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=../deploy/scripts/lib.sh
@@ -48,7 +53,8 @@ play() { $PODMAN kube play --replace --network "$NETWORK" "$@"; }
 
 case "$cmd" in
 up)
-  command -v jq >/dev/null || die "jq is required (brew install jq / apt-get install jq)"
+  # Checks podman, its version, jq, and on macOS that the podman VM is up. Same command either platform.
+  nasa_preflight
   # `if`, not `&&`: a command run as the right-hand side of && has set -e suppressed, so a failed build
   # would be ignored and the stack would come up on stale images.
   if [ "$BUILD" = 1 ]; then "$ROOT/scripts/build-images.sh"; fi

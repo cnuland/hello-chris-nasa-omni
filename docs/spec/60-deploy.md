@@ -41,3 +41,15 @@ superseded OpenShift manifests and their acceptance criteria are in `k8s/` (see 
   rootless stack and an operator's `sudo podman` host.
 - AC-DEP-14 Images are pinned: RustFS by digest, all others by explicit tag; service images are tagged
   `localhost/nasa/<service>:poc` and built by `scripts/build-images.sh`.
+- AC-DEP-15 Every image runs on both x86_64 and arm64, because the GB10 is Arm. A digest pin names the
+  **manifest list**, never one architecture's image, which would be immutable but unrunnable elsewhere.
+- AC-DEP-16 Scripts behave identically however they are invoked. Each re-execs under bash, so `sh script.sh`
+  on a host whose `/bin/sh` is dash (Ubuntu) does not fail on `set -o pipefail`, and a lost executable bit
+  cannot change the interpreter.
+- AC-DEP-17 One command brings the data and application tiers up on macOS and on Linux: `scripts/stack.sh up`
+  runs a preflight that checks podman's presence and version, checks `jq`, and on macOS starts the podman VM.
+  Scripts that install systemd units refuse on non-Linux with a pointer to the portable path.
+- AC-DEP-18 Quadlet unit files are validated against a staging directory with `QUADLET_UNIT_DIRS` before
+  anything is installed, never with a bare `quadlet -dryrun` (which fails on distro search paths that Ubuntu's
+  podman package does not ship). After `daemon-reload`, the installer confirms the generator produced each
+  expected unit and reports the remedy if it did not.

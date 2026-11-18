@@ -8,6 +8,11 @@
 #
 # perception is not in the default set on purpose: it pulls torch + torchvision and takes far longer than the
 # other three, and it is the one service that cannot run without a GPU and the model servers anyway.
+
+# Ubuntu's /bin/sh is dash, which has no `set -o pipefail`: `sh thisscript.sh` would die with
+# "Illegal option -o pipefail". Re-exec under bash so the script behaves the same however it is invoked
+# (including when the executable bit was lost copying the bundle to a host).
+[ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PODMAN="${PODMAN:-podman}"

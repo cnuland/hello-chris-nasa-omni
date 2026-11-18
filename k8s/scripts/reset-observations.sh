@@ -2,6 +2,11 @@
 # Clear observation-derived data (entities, sightings, windows, events, reviews, stock, decisions, agent memory) while
 # keeping the seed (locations, cameras, catalog) and the audit log. Destructive: prints counts and requires --yes.
 # Object-store frames/crops are left in place (orphaned keys are harmless for the POC).
+
+# Ubuntu's /bin/sh is dash, which has no `set -o pipefail`: `sh thisscript.sh` would die with
+# "Illegal option -o pipefail". Re-exec under bash so the script behaves the same however it is invoked
+# (including when the executable bit was lost copying the bundle to a host).
+[ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
 set -euo pipefail
 NS=nasa-data; POD="$(oc get pod -n $NS -l cnpg.io/cluster=inventory-db,cnpg.io/instanceRole=primary -o name | head -1)"
 TABLES="review_item, event, sighting, entity_exemplar, stock, observation_window, decision_log, agent_memory, entity"

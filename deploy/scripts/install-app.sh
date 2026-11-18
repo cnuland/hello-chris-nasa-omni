@@ -10,6 +10,11 @@
 #
 # Idempotent: re-running updates the manifests and units and restarts the services. Credentials are generated
 # once, on the first run, into podman's root secret store - never into a file, and never into this repo.
+
+# Ubuntu's /bin/sh is dash, which has no `set -o pipefail`: `sh thisscript.sh` would die with
+# "Illegal option -o pipefail". Re-exec under bash so the script behaves the same however it is invoked
+# (including when the executable bit was lost copying the bundle to a host).
+[ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 PODMAN="sudo podman"
@@ -27,11 +32,24 @@ while [ $# -gt 0 ]; do case "$1" in
   *) die "unknown option $1";;
 esac; done
 
-command -v jq >/dev/null || die "jq is required (deploy/scripts/host-setup.sh installs it)"
-[ -d /etc/containers/systemd ] || sudo install -d -m 0755 /etc/containers/systemd
+# This path installs systemd units, so it is Linux only. macOS runs the same manifests through stack.sh.
+[ "$(uname -s)" = Linux ] || die "install-app.sh installs systemd units and only runs on Linux.
+    On macOS, run the same manifests without systemd:  scripts/stack.sh up --build"
+nasa_preflight
 
 # ------------------------------------------------------------------------------------------------ manifests
+# Validate the units in a staging directory first, so a syntax error costs nothing on the host.
+log "checking unit files"
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT
+cp "$HERE"/quadlet/nasa.network "$HERE"/quadlet/nasa-media.volume \
+   "$HERE"/quadlet/nasa-data.kube "$HERE"/quadlet/nasa-app.kube \
+   "$HERE"/quadlet/perception.container "$STAGE/"
+if [ "$TLS" = 1 ]; then cp "$HERE"/quadlet/nasa-tls.kube "$STAGE/"; fi
+nasa_quadlet_check "$STAGE"
+
 log "installing manifests and units"
+sudo install -d -m 0755 /etc/containers/systemd
 sudo install -d -m 0755 /etc/nasa/kube /var/lib/nasa/models/perception
 sudo install -m 0644 "$HERE"/kube/data.yaml "$HERE"/kube/app.yaml "$HERE"/kube/tls.yaml /etc/nasa/kube/
 sudo install -m 0644 "$HERE"/quadlet/nasa.network "$HERE"/quadlet/nasa-media.volume \
@@ -89,10 +107,12 @@ ENV
 sudo chmod 0600 /etc/nasa/perception.env
 
 # ------------------------------------------------------------------------------------------------ start
-# Fail on a unit syntax error before systemd sees it. `if`, not `&&`: on the right of && set -e is
-# suppressed, so a broken unit would sail through.
-if [ -x /usr/libexec/podman/quadlet ]; then sudo /usr/libexec/podman/quadlet -dryrun >/dev/null; fi
 sudo systemctl daemon-reload
+# Confirm the generator produced the units, rather than finding out from `systemctl start`.
+UNITS="nasa-data.service nasa-app.service"
+if [ "$TLS" = 1 ]; then UNITS="$UNITS nasa-tls.service"; fi
+# shellcheck disable=SC2086
+nasa_quadlet_verify $UNITS perception.service
 
 log "data tier"
 sudo systemctl start nasa-data.service

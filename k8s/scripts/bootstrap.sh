@@ -2,6 +2,11 @@
 # End-to-end OpenShift cluster bring-up (the superseded deployment path - see k8s/README.md; Podman is in
 # deploy/). Idempotent. Needs KUBECONFIG pointing at the target cluster (cluster-admin).
 # Secrets are generated here with random values and never written to the repo.
+
+# Ubuntu's /bin/sh is dash, which has no `set -o pipefail`: `sh thisscript.sh` would die with
+# "Illegal option -o pipefail". Re-exec under bash so the script behaves the same however it is invoked
+# (including when the executable bit was lost copying the bundle to a host).
+[ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
 set -euo pipefail
 K8S="$(cd "$(dirname "$0")/.." && pwd)"
 ROOT="$(cd "$K8S/.." && pwd)"

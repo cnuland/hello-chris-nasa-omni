@@ -17,6 +17,46 @@ b64()     { printf %s "$1" | base64 | tr -d '\n'; }
 # Files go through base64 directly: $(cat file) would strip the trailing newline of a PEM.
 b64file() { base64 < "$1" | tr -d '\n'; }
 
+# ------------------------------------------------------------------------------------------------ preflight
+# nasa_preflight - make one command behave the same on macOS and on Linux.
+#
+# The manifests are already platform-neutral; what differs is the plumbing around podman. On Linux podman is
+# native and rootless works out of the box. On macOS podman drives a Linux VM that has to exist and be running
+# first. Everything else is just telling the operator the right package manager.
+nasa_preflight() {
+  local os ver
+  os="$(uname -s)"
+
+  command -v podman >/dev/null || die "podman is not installed.
+    macOS:   brew install podman
+    Ubuntu:  sudo apt-get install -y podman
+    RHEL:    sudo dnf install -y podman"
+
+  # 4.9 is the floor (Ubuntu 24.04's version): the oldest release with kube play ConfigMap volumes,
+  # --replace, and `secret inspect --showsecret`, all of which these scripts depend on.
+  ver="$(podman version --format '{{.Client.Version}}' 2>/dev/null || echo 0)"
+  case "$ver" in
+    0|1.*|2.*|3.*|4.[0-8]|4.[0-8].*) die "podman $ver is too old; this POC needs 4.9 or newer";;
+  esac
+
+  command -v jq >/dev/null || die "jq is not installed.
+    macOS:   brew install jq
+    Ubuntu:  sudo apt-get install -y jq
+    RHEL:    sudo dnf install -y jq"
+
+  if [ "$os" = Darwin ]; then
+    if ! podman machine inspect >/dev/null 2>&1; then
+      die "podman is installed but has no machine. On macOS podman needs a Linux VM:
+      podman machine init --cpus 4 --memory 8192 --disk-size 60
+      podman machine start"
+    fi
+    if [ "$(podman machine inspect --format '{{.State}}' 2>/dev/null | head -1)" != running ]; then
+      log "starting the podman machine"
+      podman machine start
+    fi
+  fi
+}
+
 # ------------------------------------------------------------------------------------------------ secrets
 # Secrets live only in podman's secret store. They are generated here and piped into `podman kube play -` on
 # stdin, so no plaintext or base64 copy is ever written to a file. Reading them back later uses podman itself.
@@ -76,6 +116,54 @@ data:
   tls.key: $(b64file "$dir/tls.key")
 YAML
   rm -rf "$dir"
+}
+
+# ------------------------------------------------------------------------------------------------ quadlet
+# nasa_quadlet_bin - the Quadlet generator, which different distributions put in different places.
+nasa_quadlet_bin() {
+  local p
+  for p in /usr/libexec/podman/quadlet /usr/lib/podman/quadlet /usr/libexec/quadlet; do
+    if [ -x "$p" ]; then printf %s "$p"; return 0; fi
+  done
+  return 1
+}
+
+# nasa_quadlet_check <dir> - parse the unit files in <dir>, failing before anything is installed on the host.
+#
+# QUADLET_UNIT_DIRS is required here, not a tidiness choice. A bare `quadlet -dryrun` also scans
+# /run/containers/systemd and /usr/share/containers/systemd and exits 1 if either is missing or unreadable
+# ("Error occurred resolving path ... no such file or directory"), and it exits 1 again if no units are found
+# in any of them. Ubuntu's podman package ships neither directory, so the bare form fails there even when every
+# unit file is perfect. Pointing the generator at one directory skips those paths and scopes the check to the
+# units we are about to install.
+nasa_quadlet_check() {
+  local bin
+  if ! bin=$(nasa_quadlet_bin); then
+    echo "    no quadlet generator found: skipping the unit pre-flight check"
+    return 0
+  fi
+  if ! QUADLET_UNIT_DIRS="$1" "$bin" -dryrun >/dev/null; then
+    die "Quadlet rejected these unit files. Reproduce with:
+      QUADLET_UNIT_DIRS=$1 $bin -dryrun"
+  fi
+  echo "    quadlet: unit files parse cleanly"
+}
+
+# nasa_quadlet_verify <service>... - confirm the generator really produced the units after daemon-reload.
+# Without this a generator problem shows up much later as a bare "Unit gemma4.service not found".
+nasa_quadlet_verify() {
+  local u missing=""
+  for u in "$@"; do
+    systemctl cat "$u" >/dev/null 2>&1 || missing="$missing $u"
+  done
+  [ -n "$missing" ] || return 0
+  die "systemd has no unit for:$missing
+    Quadlet runs as a systemd generator at daemon-reload. If it aborted on a missing search path, create the
+    ones your podman package omits and reload again:
+      sudo install -d -m 0755 /etc/containers/systemd /run/containers/systemd /usr/share/containers/systemd
+      sudo systemctl daemon-reload
+    Inspect what the generator did with:
+      sudo $(nasa_quadlet_bin 2>/dev/null || echo /usr/libexec/podman/quadlet) -dryrun"
 }
 
 # ------------------------------------------------------------------------------------------------ waiting

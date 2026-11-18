@@ -3,6 +3,11 @@
 # Podman equivalent, and the supported path: scripts/build-images.sh.
 # --from-dir (oc makes the archive) instead of a macOS bsdtar tarball: bsdtar's xattr/AppleDouble entries made the
 # builder's extractor fail ("unable to extract binary build input").
+
+# Ubuntu's /bin/sh is dash, which has no `set -o pipefail`: `sh thisscript.sh` would die with
+# "Illegal option -o pipefail". Re-exec under bash so the script behaves the same however it is invoked
+# (including when the executable bit was lost copying the bundle to a host).
+[ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"   # repo root: the build context is the whole tree
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT

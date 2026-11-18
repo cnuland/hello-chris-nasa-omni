@@ -41,9 +41,28 @@ research behind it is in [`research/`](research/).
 ## Deploying
 
 Everything is in [`deploy/`](deploy/README.md): kube YAML played by `podman kube play`, Quadlet units that put
-the same YAML under systemd, and the GPU model servers as `.container` units with CDI GPUs. Hosts: Ubuntu
-22.04/24.04 or RHEL 9/10, Podman 4.9+. All credentials are generated on the host into podman's secret store;
-none are stored in this repo.
+the same YAML under systemd, and the GPU model servers as `.container` units with CDI GPUs. Needs Podman 4.9 or
+newer. All credentials are generated on the machine into podman's secret store; none are stored in this repo.
+
+### Run it — identical on macOS and Linux
+
+The data and application tiers come up from the manifests with no systemd, no root and no GPU. The same command
+works on macOS (Intel or Apple Silicon), Ubuntu and RHEL; it checks your podman version, and on macOS starts the
+podman VM for you:
+
+```bash
+scripts/stack.sh up --build      # dashboard on http://localhost:8080/
+scripts/stack.sh status
+scripts/stack.sh down --volumes
+```
+
+Inventory, review queue, add/edit and the overview all work there. Only chat needs a model server, which
+`scripts/stack.sh up --endpoints <file>` can point at.
+
+### Install on a POC host (Ubuntu 22.04/24.04 or RHEL 9/10)
+
+Adds systemd (Quadlet) management so the stack returns after a reboot, the TLS front door on :443, and the GPU
+model servers. Same manifests as above — this path wraps them in units rather than replacing them.
 
 ```bash
 deploy/scripts/host-setup.sh                 # podman, NVIDIA driver + toolkit, CDI spec
@@ -55,16 +74,8 @@ PODMAN="sudo podman" scripts/load-sample-video.sh tour.mp4   # put a feed on the
 sudo systemctl start perception                              # start ingest once a feed is attached
 ```
 
-On a laptop, the data and application tiers run from the same manifests without systemd, root or a GPU:
-
-```bash
-scripts/stack.sh up --build      # dashboard on http://localhost:8080/
-scripts/stack.sh status
-scripts/stack.sh down --volumes
-```
-
-Inventory, review queue, add/edit and the overview all work there; only chat needs a model server, which
-`scripts/stack.sh up --endpoints <file>` can point at.
+Both paths read the same `deploy/kube/*.yaml`, so moving between a laptop and the GB10 needs no edits. Every
+image is multi-arch (x86_64 and arm64), so the GB10's Arm CPUs and an Apple Silicon laptop both run native.
 
 The OpenShift / Open Data Hub manifests the prototype originally ran on are kept, superseded, in
 [`k8s/`](k8s/README.md).
