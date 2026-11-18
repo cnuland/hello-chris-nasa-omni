@@ -18,6 +18,10 @@ spec:
   containers:
     - name: api
       image: localhost/nasa/inventory-api:poc
+      # Built on this host; there is no registry to fall back to. Without this, a missing
+      # image makes podman treat "localhost" as a registry hostname and report a
+      # connection-refused error instead of saying the image is not there.
+      imagePullPolicy: Never
       env:
         - {name: DATABASE_URL, valueFrom: {secretKeyRef: {name: nasa-secrets, key: database-url}}}
         - {name: S3_ENDPOINT, value: "http://rustfs:9000"}
@@ -42,6 +46,10 @@ spec:
   containers:
     - name: chat
       image: localhost/nasa/agent:poc
+      # Built on this host; there is no registry to fall back to. Without this, a missing
+      # image makes podman treat "localhost" as a registry hostname and report a
+      # connection-refused error instead of saying the image is not there.
+      imagePullPolicy: Never
       env:
         - {name: AGENT_LLM_URL, valueFrom: {configMapKeyRef: {name: nasa-endpoints, key: AGENT_LLM_URL}}}
         - {name: AGENT_LLM_MODEL, valueFrom: {configMapKeyRef: {name: nasa-endpoints, key: AGENT_LLM_MODEL}}}
@@ -57,6 +65,10 @@ spec:
     # published on the host; reach it from the `nasa` network as agent:8090.
     - name: mcp
       image: localhost/nasa/agent:poc
+      # Built on this host; there is no registry to fall back to. Without this, a missing
+      # image makes podman treat "localhost" as a registry hostname and report a
+      # connection-refused error instead of saying the image is not there.
+      imagePullPolicy: Never
       command: ["python", "mcp_server.py"]
       env:
         - {name: AGENT_LLM_URL, valueFrom: {configMapKeyRef: {name: nasa-endpoints, key: AGENT_LLM_URL}}}
@@ -77,6 +89,10 @@ spec:
   containers:
     - name: web
       image: localhost/nasa/dashboard:poc
+      # Built on this host; there is no registry to fall back to. Without this, a missing
+      # image makes podman treat "localhost" as a registry hostname and report a
+      # connection-refused error instead of saying the image is not there.
+      imagePullPolicy: Never
       env:
         - {name: API_UPSTREAM, value: "http://inventory-api:8080"}
         - {name: AGENT_UPSTREAM, value: "http://agent:8080"}

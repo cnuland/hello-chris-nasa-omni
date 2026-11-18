@@ -59,3 +59,5 @@ superseded OpenShift manifests and their acceptance criteria are in `k8s/` (see 
   fp32, tensor-parallel 4, whole GPUs, sm75 patches). No unit is hand-edited between hardware targets.
 - AC-DEP-20 On any single host, no two units claim the same host port, and no unit references a GPU index the
   host does not have.
+- AC-DEP-21 Locally built images are marked `imagePullPolicy: Never`, since no registry holds them, and the
+  installers check that they are present in the store the containers will run from before starting anything.

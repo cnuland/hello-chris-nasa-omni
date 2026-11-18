@@ -132,6 +132,8 @@ if [ -n "$OBJECTS" ]; then
 fi
 
 log "application tier"
+# Before systemd tries and fails with a misleading registry error.
+nasa_require_images localhost/nasa/inventory-api:poc localhost/nasa/agent:poc localhost/nasa/dashboard:poc
 sudo systemctl start nasa-app.service
 nasa_wait_api 300
 nasa_bucket_ensure

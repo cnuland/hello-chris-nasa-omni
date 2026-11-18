@@ -66,6 +66,8 @@ up)
   nasa_wait_db
 
   log "application tier"
+  # Catches a first run without --build, which would otherwise fail inside podman as a registry error.
+  nasa_require_images localhost/nasa/inventory-api:poc localhost/nasa/agent:poc localhost/nasa/dashboard:poc
   # inventory-api applies contracts/db/*.sql at start-up, so the schema is current once it answers /healthz.
   play --configmap "$ENDPOINTS" "$KUBE/app.yaml"
   nasa_wait_api

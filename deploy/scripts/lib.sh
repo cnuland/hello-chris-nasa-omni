@@ -166,6 +166,30 @@ nasa_quadlet_verify() {
       sudo $(nasa_quadlet_bin 2>/dev/null || echo /usr/libexec/podman/quadlet) -dryrun"
 }
 
+# ------------------------------------------------------------------------------------------------ images
+# nasa_require_images <image>... - fail early if a locally built image is missing from the store these
+# containers will actually run from.
+#
+# Rootless podman and root podman keep entirely separate image stores. Quadlet units run as root, so images
+# built with a plain `scripts/build-images.sh` land in the user's store and are invisible to them. Podman then
+# cannot resolve localhost/nasa/...:poc locally, falls back to treating "localhost" as a registry hostname, and
+# reports "pinging container registry localhost: connection refused" - which looks like a network fault and is
+# not one. Checking here names the real problem.
+nasa_require_images() {
+  local i missing=""
+  for i in "$@"; do
+    $PODMAN image exists "$i" || missing="$missing      $i\n"
+  done
+  [ -n "$missing" ] || return 0
+  die "these images are missing from the $( [ "$PODMAN" = podman ] && echo "rootless" || echo "root" ) image store:
+
+$(printf "%b" "$missing")
+    Quadlet units run as root, so the images have to be in root's store, not your user's. Build them there:
+      PODMAN=\"sudo podman\" scripts/build-images.sh
+    Or copy one you have already built rootless:
+      podman save localhost/nasa/inventory-api:poc | sudo podman load"
+}
+
 # ------------------------------------------------------------------------------------------------ waiting
 # nasa_wait <seconds> <description> <command...> - poll until the command succeeds.
 nasa_wait() {

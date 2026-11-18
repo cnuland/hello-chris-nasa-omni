@@ -187,6 +187,13 @@ Two places where that costs something, both marked in the files:
 
 Found on the GB10 (Ubuntu, Arm):
 
+- **`pinging container registry localhost: connection refused`** when starting `nasa-app`. Rootless podman and
+  root podman have separate image stores. Quadlet units run as root, so images built with a plain
+  `scripts/build-images.sh` are invisible to them; podman then treats `localhost` as a registry hostname and
+  reports what looks like a network fault. The locally built images now carry `imagePullPolicy: Never`, so the
+  error at least says "image not known", and `install-app.sh` checks the root store up front and tells you to
+  build with `PODMAN="sudo podman"`.
+
 - **`set: Illegal option -o pipefail`.** Ubuntu's `/bin/sh` is dash, so `sh somescript.sh` ignores the shebang
   and the strictness line fails immediately. Every script now re-execs itself under bash
   (`[ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"`), so it behaves the same however it is invoked —
