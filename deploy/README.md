@@ -111,6 +111,21 @@ PODMAN="sudo podman" scripts/db-snapshot.sh save baseline.dump
 PODMAN="sudo podman" scripts/reset-observations.sh --yes
 ```
 
+### When a unit crash-loops
+
+Quadlet runs containers with `--rm`, so a container that fails on start deletes itself and
+`podman logs gemma4` answers "no such container" - it looks as though nothing was logged. It was: podman's
+journald log driver already sent stdout and stderr to the journal under the unit.
+
+```bash
+scripts/collect-logs.sh --stop gemma4        # one shareable file: journal, generated unit, GPU and image state
+sudo journalctl -u gemma4.service --boot     # or read it directly
+```
+
+`--stop` stops the unit first so the restart loop stops churning while you read. The report includes the
+generated unit, which is the exact `podman run` command systemd issued - usually enough to see a wrong
+`--tensor-parallel-size`, a device that does not exist, or a memory fraction that cannot be satisfied.
+
 ### TLS
 
 `install-app.sh` generates a self-signed certificate into the `nasa-tls` podman secret. Replace it with a real

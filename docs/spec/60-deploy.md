@@ -64,3 +64,7 @@ superseded OpenShift manifests and their acceptance criteria are in `k8s/` (see 
 - AC-DEP-22 A POC host is installed with three scripts and no separate build step: `host-setup.sh`,
   `install-inference.sh`, `install-app.sh`. The last builds any missing service image into the store the
   Quadlet units read (root), and `--no-build` / `--build` / `--with-perception` override that.
+- AC-DEP-23 `scripts/collect-logs.sh` gathers one shareable diagnostic file per host: the journal for each POC
+  unit (where container stdout and stderr actually land, since Quadlet's `--rm` makes `podman logs` useless
+  for a crash-looping container), the generated unit showing the exact `podman run` command, and GPU, image
+  and container state. `--stop` halts the restart loop first.
