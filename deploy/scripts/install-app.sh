@@ -24,13 +24,17 @@ PODMAN="sudo podman"
 OMNI=http://gemma4:8000 DECISION=http://dgemma-decision:8011 ASR=http://asr:8000
 CHAT=http://gemma4:8000/v1 CHAT_MODEL=gemma4
 HOSTNAME_CN="$(hostname -f 2>/dev/null || hostname)" TLS=1 DB_DUMP="" OBJECTS=""
+BUILD=auto PERCEPTION=0
 while [ $# -gt 0 ]; do case "$1" in
   --omni) OMNI=$2; shift 2;; --decision) DECISION=$2; shift 2;; --asr) ASR=$2; shift 2;;
   --chat) CHAT=$2; shift 2;; --chat-model) CHAT_MODEL=$2; shift 2;;
   --hostname) HOSTNAME_CN=$2; shift 2;; --no-tls) TLS=0; shift;;
   --restore-db) DB_DUMP=$2; shift 2;; --restore-objects) OBJECTS=$2; shift 2;;
+  --build) BUILD=always; shift;; --no-build) BUILD=never; shift;;
+  --with-perception) PERCEPTION=1; shift;;
   *) die "unknown option $1";;
 esac; done
+APP_IMAGES="localhost/nasa/inventory-api:poc localhost/nasa/agent:poc localhost/nasa/dashboard:poc"
 
 # This path installs systemd units, so it is Linux only. macOS runs the same manifests through stack.sh.
 [ "$(uname -s)" = Linux ] || die "install-app.sh installs systemd units and only runs on Linux.
@@ -47,6 +51,29 @@ cp "$HERE"/quadlet/nasa.network "$HERE"/quadlet/nasa-media.volume \
    "$HERE"/quadlet/perception.container "$STAGE/"
 if [ "$TLS" = 1 ]; then cp "$HERE"/quadlet/nasa-tls.kube "$STAGE/"; fi
 nasa_quadlet_check "$STAGE"
+
+# ------------------------------------------------------------------------------------------------ images
+# Build into the ROOT store, which is the one the Quadlet units read. Done here, after the cheap unit check
+# and before anything is written to the host, so a build failure costs nothing. Needs the repository, not just
+# this bundle; if only deploy/ was copied to the host, nasa_require_images below says what to do instead.
+REPO="$(cd "$HERE/.." && pwd)"
+BUILDER="$REPO/scripts/build-images.sh"
+need_build=0
+for i in $APP_IMAGES; do $PODMAN image exists "$i" || need_build=1; done
+if [ "$BUILD" = always ] || { [ "$BUILD" = auto ] && [ "$need_build" = 1 ]; }; then
+  if [ -x "$BUILDER" ] && [ -d "$REPO/services" ]; then
+    log "building service images (first run takes several minutes)"
+    PODMAN="sudo podman" "$BUILDER"
+    if [ "$PERCEPTION" = 1 ]; then
+      log "building perception (slow: a CUDA torch wheel)"
+      PODMAN="sudo podman" TORCH_INDEX="${TORCH_INDEX:-cu128}" "$BUILDER" perception
+    fi
+  else
+    log "no repository here to build from; expecting the images to exist already"
+  fi
+fi
+# shellcheck disable=SC2086
+nasa_require_images $APP_IMAGES
 
 log "installing manifests and units"
 sudo install -d -m 0755 /etc/containers/systemd
@@ -132,8 +159,6 @@ if [ -n "$OBJECTS" ]; then
 fi
 
 log "application tier"
-# Before systemd tries and fails with a misleading registry error.
-nasa_require_images localhost/nasa/inventory-api:poc localhost/nasa/agent:poc localhost/nasa/dashboard:poc
 sudo systemctl start nasa-app.service
 nasa_wait_api 300
 nasa_bucket_ensure
@@ -151,4 +176,10 @@ if [ "$TLS" = 1 ]; then
 else
   echo "    dashboard: http://127.0.0.1:8080/   (loopback only; --no-tls published no public port)"
 fi
-echo "    perception is installed but not started: attach a feed, then 'sudo systemctl start perception'"
+if $PODMAN image exists localhost/nasa/perception:poc; then
+  echo "    perception is installed but not started: attach a feed, then 'sudo systemctl start perception'"
+else
+  echo "    perception is installed but has no image yet. Before starting it:"
+  echo "      PODMAN=\"sudo podman\" TORCH_INDEX=cu128 scripts/build-images.sh perception"
+  echo "      (or re-run this script with --with-perception; it pulls a CUDA torch wheel and is slow)"
+fi

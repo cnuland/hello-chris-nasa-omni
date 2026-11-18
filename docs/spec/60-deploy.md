@@ -61,3 +61,6 @@ superseded OpenShift manifests and their acceptance criteria are in `k8s/` (see 
   host does not have.
 - AC-DEP-21 Locally built images are marked `imagePullPolicy: Never`, since no registry holds them, and the
   installers check that they are present in the store the containers will run from before starting anything.
+- AC-DEP-22 A POC host is installed with three scripts and no separate build step: `host-setup.sh`,
+  `install-inference.sh`, `install-app.sh`. The last builds any missing service image into the store the
+  Quadlet units read (root), and `--no-build` / `--build` / `--with-perception` override that.

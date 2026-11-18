@@ -58,19 +58,23 @@ Verified with `podman manifest inspect` (2026-11-18):
 
 All commands are run from the repository root.
 
+Three scripts, in order:
+
 ```bash
-# podman, NVIDIA driver + toolkit, CDI spec. Reboot and re-run if it installs the driver.
+# 1. podman, NVIDIA driver + toolkit, CDI spec. Reboot and re-run if it installs the driver.
 deploy/scripts/host-setup.sh
 
-# Service images. PODMAN="sudo podman" because the Quadlet units run as root and read the root image store.
-PODMAN="sudo podman" scripts/build-images.sh
-PODMAN="sudo podman" TORCH_INDEX=cu128 scripts/build-images.sh perception    # GPU hosts only
-
-# Single host (GB10): every model server here. The profile is detected from the GPU count;
-# --profile gb10|t4 overrides it.
+# 2. Model servers. The hardware profile comes from the GPU count; --profile gb10|t4 overrides it.
 deploy/scripts/install-inference.sh gemma4 dgemma dgemma-decision asr
+
+# 3. Data + application + TLS tiers. Builds any missing service images into the root store first.
 deploy/scripts/install-app.sh
 ```
+
+`install-app.sh` builds `inventory-api`, `agent` and `dashboard` itself if they are not already in root's image
+store, so there is no separate build step. `--no-build` skips it, `--build` forces a rebuild, and
+`--with-perception` also builds the perception image (slow: a CUDA torch wheel). Perception is installed but
+not started either way, so its image can wait until a camera feed is attached.
 
 `install-app.sh` is idempotent and takes `--restore-db inventory.dump --restore-objects objects.tgz` to come up
 on an existing demo baseline. On the GB10 the chat endpoint defaults to the `gemma4` server (one Gemma 4 server

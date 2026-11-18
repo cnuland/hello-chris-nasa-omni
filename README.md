@@ -65,10 +65,9 @@ Adds systemd (Quadlet) management so the stack returns after a reboot, the TLS f
 model servers. Same manifests as above — this path wraps them in units rather than replacing them.
 
 ```bash
-deploy/scripts/host-setup.sh                 # podman, NVIDIA driver + toolkit, CDI spec
-PODMAN="sudo podman" scripts/build-images.sh # service images into the root store Quadlet runs from
+deploy/scripts/host-setup.sh         # podman, NVIDIA driver + toolkit, CDI spec
 deploy/scripts/install-inference.sh gemma4 dgemma dgemma-decision asr   # GB10/T4 profile auto-detected
-deploy/scripts/install-app.sh                # data + app + TLS tiers as systemd units; idempotent
+deploy/scripts/install-app.sh        # builds the service images, then data + app + TLS as systemd units
 
 PODMAN="sudo podman" scripts/load-sample-video.sh tour.mp4   # put a feed on the media volume
 sudo systemctl start perception                              # start ingest once a feed is attached
